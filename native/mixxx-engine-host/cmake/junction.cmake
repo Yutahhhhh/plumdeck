@@ -19,6 +19,7 @@ set(JUNCTION_CORE_SOURCES
   "${JUNCTION_DIR}/validation_capture.cpp"
   "${JUNCTION_DIR}/media_transport.cpp"
   "${JUNCTION_DIR}/asset_cache.cpp"
+  "${JUNCTION_DIR}/shared_tracks.cpp"
   "${JUNCTION_DIR}/program_output.cpp"
   "${JUNCTION_DIR}/producer_tap.cpp"
   "${JUNCTION_DIR}/audio_bridge.cpp"

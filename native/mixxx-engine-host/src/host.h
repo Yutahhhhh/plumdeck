@@ -34,6 +34,7 @@ private:
     QJsonObject recordingState();
     void sampleRecordingTimeline();
     void completed(int index, quint64 generation, QJsonObject metadata, QString error);
+    void beginLoad(const QJsonObject& cmd, int index, const QJsonObject& descriptor);
     std::unique_ptr<PlaybackBackend> backend_;
     std::unique_ptr<junction::Runtime> junction_;
     std::unique_ptr<PerformanceInput> performanceInput_;

@@ -10,6 +10,7 @@ from mcp_server.tools import genres  # noqa: F401
 from mcp_server.tools import lyrics  # noqa: F401
 from mcp_server.tools import analysis  # noqa: F401
 from mcp_server.tools import wordplay  # noqa: F401
+from mcp_server.tools import junction  # noqa: F401
 
 MCP_HTTP_PATH = "/mcp"
 

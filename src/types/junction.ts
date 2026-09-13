@@ -93,6 +93,37 @@ export interface JunctionSnapshot {
   /** Legacy single server invite. Manual mode uses per-participant exchange.inviteText. */
   invite?: string;
   exchange?: SnapshotExchange;
+  /** Local-only: tracks received from the remote performer. Never on the wire. */
+  junctionTracks?: JunctionTrack[];
+}
+export type JunctionTrackState = 'pending' | 'receiving' | 'verifying' | 'ready' | 'failed';
+export type JunctionTrackRole = 'current' | 'next';
+/** Current/next presentation metadata from the remote performer. */
+export interface JunctionTrack {
+  role: JunctionTrackRole;
+  assetId: string;
+  title: string;
+  artist: string;
+  musicalKey: string;
+  durationMs: number;
+  bpm: number;
+  sizeBytes: number;
+  sourcePeerId: string;
+  sourceDjName: string;
+  /** Deck on the performer's computer, or '' once it left every deck. */
+  sourceDeck: '' | 'A' | 'B' | 'C' | 'D';
+  onDeck: boolean;
+  playing: boolean;
+  positionMs: number;
+  rate: number;
+  audibility: number;
+  state: JunctionTrackState;
+  ready: boolean;
+  order: number;
+  progress: number;
+  detail?: string;
+  /** This computer's verified cache file; present only when ready. */
+  path?: string;
 }
 export type JunctionOp =
   | 'snapshot'
@@ -121,6 +152,9 @@ export type JunctionOp =
   | 'private.play'
   | 'private.pause'
   | 'private.seek'
+  | 'private.gain'
+  | 'private.unload'
+  | 'private.state'
   | 'network.get'
   | 'network.configure'
   | 'network.clear'

@@ -236,7 +236,7 @@ std::optional<ExchangePacket> decodeExchangePacket(const QString& text, qint64 n
         return std::nullopt;
     }
     if(object["engineVersion"]!="mixxx-3ebac449e7e5fe2a0186596657696e87ce8b0e56-junction-5"){
-        bad(error,errorCode,"アプリのエンジンバージョンが一致しません。両方のplumdeckを同じバージョンに更新してください","unsupported_version");return std::nullopt;
+        bad(error,errorCode,"Junctionの基礎プロトコルに互換性がありません","unsupported_version");return std::nullopt;
     }
     const auto kind = kindFromName(object["kind"].toString());
     if (!kind) {

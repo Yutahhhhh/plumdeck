@@ -3,6 +3,7 @@ import { localTrackId } from '@/services/junction/asset-resolver';
 import { deckRealtimeStore } from '@/services/dj-engine/deck-realtime-store';
 import { junctionLeaseKey } from '@/services/junction/state';
 import { junctionState } from '@/services/junction/state';
+import { useJunctionTracks } from '@/hooks/useJunctionTracks';
 import { BeatFxPanel } from "./BeatFxPanel";
 import { memoryAction } from "@/services/dj-engine/memory-cues";
 import { sampler } from "@/services/dj-engine/sampler";
@@ -38,6 +39,8 @@ import type { PerformanceBeatGrid, PerformanceMetadata } from "@/types/performan
 import { PlayDragDropProvider, usePlayDeckDrop } from "./PlayDragDrop";
 import { ApiError } from "@/services/api-client";
 import { KeyedTaskQueue } from "@/services/dj-engine/keyed-task-queue";
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 type GridEditSession = { deck: DeckId; trackId: number; metadata: PerformanceMetadata; initialGrid: PerformanceBeatGrid };
 /** 助走の上限。これ以上は曲頭を見失うので、つまみ出せる長さを切る。 */
 
@@ -74,6 +77,40 @@ export function PlayWorkspace() {
   useEffect(()=>{deckRealtimeStore.setPresentationDelay(waveDelay);},[waveDelay]);
   useEffect(()=>{const escape=(event:KeyboardEvent)=>{if(event.key==='Escape')setExpandedPair(null);};window.addEventListener('keydown',escape);return()=>window.removeEventListener('keydown',escape);},[]);
   const [activeDeck, setActiveDeck] = useState<DeckId>("A");
+  const [junctionMonitorDeck, setJunctionMonitorDeck] = useState<DeckId | null>(null);
+  const junction = useJunctionTracks();
+  const updateJunctionMonitorDeck = useCallback((deck: DeckId | null) => {
+    setJunctionMonitorDeck(deck);
+    void invoke<DeckId | null>('junction_live_monitor_set', {deck}).catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: UnlistenFn | undefined;
+    void listen<{deck?: unknown}>('junction://live-monitor', (event) => {
+      const deck = event.payload?.deck;
+      if (deck === null || deck === undefined) setJunctionMonitorDeck(null);
+      else if (typeof deck === 'string' && DECK_IDS.includes(deck as DeckId)) setJunctionMonitorDeck(deck as DeckId);
+    }).then((stop) => {
+      if (disposed) {
+        stop();
+        return;
+      }
+      unlisten = stop;
+      // Subscribe before reading so an MCP assignment cannot land between the
+      // initial getter and event-listener registration.
+      void invoke<DeckId | null>('junction_live_monitor_deck').then((deck) => {
+        if (!disposed && (deck === null || DECK_IDS.includes(deck))) setJunctionMonitorDeck(deck);
+      }).catch(() => undefined);
+    }).catch(() => undefined);
+    return () => { disposed = true; unlisten?.(); };
+  }, []);
+  useEffect(() => {
+    if (junction.visible || !junctionMonitorDeck) return;
+    // Junction state is polled. Give a just-arrived MCP attach one poll cycle
+    // before treating a non-visible snapshot as authoritative.
+    const timer = window.setTimeout(() => updateJunctionMonitorDeck(null), 1_500);
+    return () => window.clearTimeout(timer);
+  }, [junction.visible, junctionMonitorDeck, updateJunctionMonitorDeck]);
   const [outputDevice, setOutputDevice] = useState(() => localStorage.getItem("plumdeck.djOutputDevice") ?? "");
   const [recordingDir, setRecordingDir] = useState<string>("");
   const [recordingFormat, setRecordingFormat] = useState<string>("");
@@ -304,6 +341,18 @@ export function PlayWorkspace() {
       setActiveDeck(deck);
     })));
   }, [client, connect, finalizeHistory, outputDevice, persist, run, saveRuntime, start, status?.running]);
+
+  /** Bind the remote performer's presentation to a deck display only. The real
+   * deck and the Junction Program output stay completely untouched. */
+  const monitorJunction = useCallback((deck: DeckId) => {
+    if (!junction.current) {
+      setCommandError("Junction Liveの再生中トラックを受信してから再試行してください。");
+      return;
+    }
+    setCommandError(null);
+    updateJunctionMonitorDeck(deck);
+    setActiveDeck(deck);
+  }, [junction.current, updateJunctionMonitorDeck]);
 
   const editHotCue = (deck: DeckId, slot: number, clear: boolean) => run(async () => {
     const trackId = client.getState().snapshot?.decks[deck].track?.trackId;
@@ -652,6 +701,37 @@ export function PlayWorkspace() {
 
   const displayedDeck = (id: DeckId) => {
     const deck = snapshot?.decks[id];
+    const remote = junctionMonitorDeck === id ? junction.current : null;
+    if (deck && remote) {
+      const positionMs = Math.max(0, Math.min(remote.duration * 1000, remote.positionMs));
+      return {
+        ...deck,
+        status: remote.playing ? "playing" as const : "paused" as const,
+        positionMs,
+        positionFrames: Math.round(positionMs * 44.1),
+        rate: remote.rate,
+        keylock: false,
+        syncEnabled: false,
+        syncLeader: null,
+        effectiveBpm: remote.bpm ? remote.bpm * remote.rate : null,
+        scratching: false,
+        hotCues: Array.from({ length: 16 }, () => null),
+        loopRegion: null,
+        lastError: remote.state === "failed" ? remote.detail ?? "Junction Liveの音源を受信できませんでした" : null,
+        track: {
+          assetId: remote.assetId,
+          localTrackId: null,
+          trackId: `junction-live:${remote.assetId}`,
+          path: remote.filepath,
+          title: remote.title,
+          artist: remote.artist || null,
+          durationMs: remote.duration * 1000,
+          bpm: remote.bpm,
+          sampleRateHz: 44_100,
+          channels: 2,
+        },
+      };
+    }
     if (!deck?.track || !gridPreview || gridEdit?.trackId !== Number(deck.track.trackId)) return deck;
     return { ...deck, track: { ...deck.track, bpm: gridPreview.bpm, beatgridOffsetMs: gridPreview.first_beat_ms, beatsPerBar: gridPreview.beats_per_bar, beatTimesMs: gridPreview.beat_times_ms ?? undefined, beatNumbers: gridPreview.beat_numbers ?? undefined } };
   };
@@ -670,15 +750,17 @@ export function PlayWorkspace() {
   }, [client]);
   const waveform = (id: DeckId, layout: WaveformLayout) => {
     const deck = displayedDeck(id);
+    const monitorAssetId = junctionMonitorDeck === id && junction.current?.state === "ready" ? junction.current.assetId : undefined;
     return <DeckWaveform key={id} label={id} assetId={deck?.track?.assetId} remoteWaveform={deck?.track?.waveform} trackId={localTrackId(deck?.track)}
+      monitorAssetId={monitorAssetId}
       positionMs={deck?.positionMs ?? 0} durationMs={deck?.track?.durationMs ?? 0} layout={layout} side={id === "A" || id === "C" ? "left" : "right"}
       color={id === "A" || id === "C" ? "cyan" : "fuchsia"} mode={expandedPair&&!expandedPair.includes(id)?"overview":"scroll"} playing={deck?.status === "playing"} rate={deck?.rate ?? 1} bpm={deck?.track?.bpm} beatgridOffsetMs={deck?.track?.beatgridOffsetMs} beatsPerBar={deck?.track?.beatsPerBar}
       beatTimesMs={deck?.track?.beatTimesMs} beatNumbers={deck?.track?.beatNumbers}
       gridAvailable={Boolean(deck?.track?.beatgridOffsetMs !== undefined || deck?.track?.beatTimesMs?.length)}
-      onGridShift={gridEdit?.deck === id && !gridSaving.current ? (deltaMs) => setGridShift(old => ({ sequence: (old?.sequence ?? 0) + 1, deltaMs })) : undefined}
+      onGridShift={!monitorAssetId && gridEdit?.deck === id && !gridSaving.current ? (deltaMs) => setGridShift(old => ({ sequence: (old?.sequence ?? 0) + 1, deltaMs })) : undefined}
       hotCues={deck?.hotCues} scratching={deck?.scratching} loopRegion={deck?.loopRegion}
-      onSeek={connected ? (ms) => seekAbsolute(id, ms) : undefined}
-      onScratch={connected ? (command) => scratch(id, command) : undefined}
+      onSeek={connected && !monitorAssetId ? (ms) => seekAbsolute(id, ms) : undefined}
+      onScratch={connected && !monitorAssetId ? (command) => scratch(id, command) : undefined}
       onScratchError={(cause) => setCommandError(cause instanceof Error ? cause.message : String(cause))} />;
   };
   // Lanes accept the same drag payload as the decks, so a row can be dropped on
@@ -722,10 +804,12 @@ export function PlayWorkspace() {
   };
 
   const cueColorsFor = (id:DeckId) => Array.from({length:16},(_,slot)=>trackMetadata[(localTrackId(snapshot?.decks[id]?.track) ?? -1)]?.cue_points.find(cue=>cue.slot===slot)?.color??null);
-  const softwareDeck = (id: DeckId) => <SoftwareDeck key={id} id={id} deck={displayedDeck(id)} active={activeDeck === id} connected={connected} cueColors={cueColorsFor(id)}
+  const softwareDeck = (id: DeckId) => <SoftwareDeck key={id} id={id} deck={displayedDeck(id)} active={activeDeck === id} connected={connected}
+    monitorOnly={junctionMonitorDeck === id && Boolean(junction.current)} monitorAssetId={junctionMonitorDeck === id && junction.current?.state === "ready" ? junction.current.assetId : undefined}
+    cueColors={junctionMonitorDeck === id ? undefined : cueColorsFor(id)}
     onGridEdit={() => openGridEditor(id)}
     onGridClose={closeGridEditor}
-    gridEditor={gridEdit?.deck === id && snapshot?.decks[id]?.track?.trackId === String(gridEdit.trackId) ? <BeatGridEditor key={`${id}:${gridEdit.trackId}`} trackId={gridEdit.trackId} durationMs={snapshot.decks[id].track!.durationMs} positionMs={snapshot.decks[id].positionMs} initialGrid={gridEdit.initialGrid} hasGrid={Boolean(gridEdit.metadata.beat_grid)} shiftRequest={gridShift} playing={snapshot.decks[id].status === "playing"} onTogglePlay={() => togglePlay(id)} onAnalyze={(force) => performanceMetadataService.analyzeGrid(gridEdit.trackId, force)} onRekordbox={() => performanceMetadataService.rekordboxGrid(gridEdit.trackId)} disabled={!connected} onPreview={setGridPreview} onSave={saveGrid} onClose={closeGridEditor} /> : undefined}
+    gridEditor={junctionMonitorDeck !== id && gridEdit?.deck === id && snapshot?.decks[id]?.track?.trackId === String(gridEdit.trackId) ? <BeatGridEditor key={`${id}:${gridEdit.trackId}`} trackId={gridEdit.trackId} durationMs={snapshot.decks[id].track!.durationMs} positionMs={snapshot.decks[id].positionMs} initialGrid={gridEdit.initialGrid} hasGrid={Boolean(gridEdit.metadata.beat_grid)} shiftRequest={gridShift} playing={snapshot.decks[id].status === "playing"} onTogglePlay={() => togglePlay(id)} onAnalyze={(force) => performanceMetadataService.analyzeGrid(gridEdit.trackId, force)} onRekordbox={() => performanceMetadataService.rekordboxGrid(gridEdit.trackId)} disabled={!connected} onPreview={setGridPreview} onSave={saveGrid} onClose={closeGridEditor} /> : undefined}
     capability={Boolean(snapshot?.engine.decks.includes(id))} capabilities={capabilities}
     channel={snapshot?.mixer.channels[id]}
     onBeatJump={(beats) => void run(() => client.beatJump(id, beats))}
@@ -735,7 +819,7 @@ export function PlayWorkspace() {
     onFx={(effect, enabled, mix, depth) => void run(() => client.setFx(id, effect, enabled, mix, depth))}
     onSaveLoop={() => void saveCurrentLoop(id)}
     savedLoops={trackMetadata[(localTrackId(snapshot?.decks[id]?.track) ?? -1)]?.loops}
-    trackKey={trackKeys[(localTrackId(snapshot?.decks[id]?.track) ?? -1)]}
+    trackKey={junctionMonitorDeck === id ? junction.current?.key : trackKeys[(localTrackId(snapshot?.decks[id]?.track) ?? -1)]}
     onRecallLoop={(loopId) => void recallLoop(id, loopId)}
     onActivate={() => setActiveDeck(id)} onToggle={() => togglePlay(id)}
     onCue={() => void run(async () => {
@@ -756,7 +840,7 @@ export function PlayWorkspace() {
       }
       await client.setSync(id, false);
     })}
-    onUnload={() => void run(async () => { ++deckLoadRequests.current[id]; cuePoints.current[id] = 0; manualLoopIn.current[id] = null; await client.unload(id); await finalizeHistory(id, "ejected"); })}
+    onUnload={() => junctionMonitorDeck === id ? updateJunctionMonitorDeck(null) : void run(async () => { ++deckLoadRequests.current[id]; cuePoints.current[id] = 0; manualLoopIn.current[id] = null; await client.unload(id); await finalizeHistory(id, "ejected"); })}
     onHotCue={(index, clear) => void editHotCue(id, index, clear)}
     onLoopIn={() => void run(async () => {
       const deck = client.getState().snapshot?.decks[id];
@@ -782,7 +866,12 @@ export function PlayWorkspace() {
     error: setCommandError,
   });
 
-  return <PlayDragDropProvider onLoad={loadTrack}><main style={{'--wave-contrast':waveContrast,'--wave-grayscale':waveMonochrome?1:0} as CSSProperties} className={cn("dj-workspace", expandedPair&&"dj-workspace--wave-expanded", compactDecks && "dj-workspace--compact", deckCount === 4 && "dj-workspace--four", waveformLayout === "vertical" && "dj-workspace--vertical")}>
+  const loadLocalTrack = (deck: DeckId, track: Track) => {
+    if (junctionMonitorDeck === deck) updateJunctionMonitorDeck(null);
+    loadTrack(deck, track);
+  };
+
+  return <PlayDragDropProvider onLoad={loadLocalTrack} onMonitorJunction={monitorJunction}><main style={{'--wave-contrast':waveContrast,'--wave-grayscale':waveMonochrome?1:0} as CSSProperties} className={cn("dj-workspace", expandedPair&&"dj-workspace--wave-expanded", compactDecks && "dj-workspace--compact", deckCount === 4 && "dj-workspace--four", waveformLayout === "vertical" && "dj-workspace--vertical")}>
     <header className="dj-global-bar">
       <div className="dj-performance-label"><Disc3 /><strong>PERFORMANCE</strong></div>
       <PanelToolbar visible={panels} onToggle={togglePanel} />
@@ -875,7 +964,7 @@ export function PlayWorkspace() {
       <div className="dj-crossfader"><span>A{deckCount === 4 ? "/C" : ""}</span><Fader label="クロスフェーダー" min={-1} max={1} value={snapshot?.mixer.crossfader ?? 0} disabled={!connected || !capabilities.includes("mixer.basic") && !capabilities.includes("mixer.crossfader")} onChange={(value) => void run(() => client.setCrossfader(value))} /><span>B{deckCount === 4 ? "/D" : ""}</span></div>
       <span className={cn("dj-master-note", snapshot?.recording?.active && "is-recording")}>{snapshot?.recording?.active ? `● REC ${formatTime(snapshot.recording.elapsedMs)}` : `DECK ${activeDeck} SELECTED`}</span>
     </div>
-    <PlayLibrary activeDeck={activeDeck} seedTrackId={Number.isFinite(seed) && seed > 0 ? seed : null} onLoad={loadTrack} cueOverrides={listCueOverrides} cueRevision={cueRevision} cueImportControl={<RekordboxCueImportButton onImport={importRekordboxCues} />} />
+    <PlayLibrary activeDeck={activeDeck} seedTrackId={Number.isFinite(seed) && seed > 0 ? seed : null} onLoad={loadLocalTrack} cueOverrides={listCueOverrides} cueRevision={cueRevision} cueImportControl={<RekordboxCueImportButton onImport={importRekordboxCues} />} />
     {audioSettingsOpen && <AudioSettings onClose={() => setAudioSettingsOpen(false)} onApply={applyAudioOutput} />}
     <RecordingSaveDialog recording={savingRecording} onClose={() => setSavingRecording(null)}
       onBeforePreview={prepareRecordingPreview}

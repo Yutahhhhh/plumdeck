@@ -82,6 +82,10 @@ public:
     }
     QJsonObject privatePreviewState() const override { auto state=preview_.state();state["available"]=available_&&pflAvailable_;return state; }
     bool validateDspAsset(const QString& path) const override {return junction::ddj::read(path,nullptr)||junction::keylock::read(path,nullptr)||junction::fx::read(path,nullptr);}
+    bool validateAudioAsset(const QString& path) const override {
+        const auto binding=waveform::ensureSourceBinding(path);
+        return binding.provider&&binding.fingerprint==waveform::sourceFingerprint(path);
+    }
     QJsonObject junctionGraph() const override {
         auto* self=const_cast<MixxxBackend*>(this);
         if(!self->capturedGraph_.isEmpty()){const auto graph=self->capturedGraph_;self->capturedGraph_={};return graph;}
@@ -602,11 +606,17 @@ public:
     QJsonObject waveformCommand(const QString& op,const QJsonObject& p) override {
         if (!waveforms_) waveforms_=std::make_unique<waveform::Manager>();
         if(op=="waveform.ensure") {
+            if(p["sourcePath"].isString())return waveforms_->ensure(p["sourcePath"].toString(),p["sourceGeneration"].toDouble());
             const auto index=QString("ABCD").indexOf(p["deck"].toString());
             if(p["deck"].toString().size()!=1 || index<0 || index>3 || !tracks_[index] || p["loadGeneration"].toDouble()!=double(generations_[index])) return {{"error","STALE_ASSET"}};
             return waveforms_->ensure(tracks_[index]->getLocation(),generations_[index]);
         }
         if(op=="waveform.requestRange") {
+            if(p["sourcePath"].isString()){
+                const auto binding=waveforms_->ensure(p["sourcePath"].toString(),p["sourceGeneration"].toDouble());
+                if(binding["assetKey"]!=p["assetKey"])return {{"error","STALE_ASSET"}};
+                return waveforms_->requestRange(p);
+            }
             const auto index=QString("ABCD").indexOf(p["deck"].toString());
             if(p["deck"].toString().size()!=1||index<0||!tracks_[index]||p["loadGeneration"].toDouble()!=double(generations_[index]))return {{"error","STALE_ASSET"}};
             const auto binding=waveforms_->ensure(tracks_[index]->getLocation(),generations_[index]);

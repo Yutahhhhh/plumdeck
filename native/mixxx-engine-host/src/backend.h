@@ -19,6 +19,7 @@ public:
     virtual void attachJunction(junction::Runtime*) {}
     virtual QJsonObject junctionGraph() const { return {}; }
     virtual bool validateDspAsset(const QString&) const { return false; }
+    virtual bool validateAudioAsset(const QString&) const { return false; }
     virtual QString restoreJunctionGraph(const QJsonObject&) { return "Graph restore unavailable"; }
     virtual bool junctionGraphReady() const { return false; }
     virtual QString alignJunctionGraph(quint64) { return "Graph alignment unavailable"; }

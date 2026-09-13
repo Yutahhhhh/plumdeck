@@ -120,6 +120,30 @@ Host::Host(std::unique_ptr<PlaybackBackend> backend) : backend_(std::move(backen
     performanceInput_=std::make_unique<PerformanceInput>(backend_.get(),[this](int i){return slots_[i].state;},[this]{return backend_->available()&&!junction_->active()&&!sessionId_.isEmpty();},this);
     clock_.start();
     for (int index = 0; index < 4; ++index) resetDeck(index);
+    // Junction performer: candidate tracks for the current/next monitor pair.
+    // The runtime chooses at most two and hashes paths off the audio thread.
+    junction_->localDeckTracks = [this] {
+        QJsonArray rows;
+        const auto mixer = backend_->mixer();
+        const auto channels = mixer["channels"].toObject();
+        const double crossfader = mixer["crossfader"].toDouble();
+        for (int index = 0; index < 4; ++index) {
+            const auto& slot = slots_[index];
+            const auto track = slot.state["track"].toObject();
+            const auto path = slot.descriptor["path"].toString();
+            if (track.isEmpty() || path.isEmpty() || slot.state["status"] == "loading") continue;
+            const auto channel = channels[deckNames[index]].toObject();
+            const double orientation = channel["orientation"].toDouble();
+            const double crossGain = orientation < -0.5 ? (1.0 - crossfader) * 0.5
+                    : orientation > 0.5 ? (1.0 + crossfader) * 0.5 : 1.0;
+            const double audibility = qMax(0.0, channel["gain"].toDouble() * channel["trim"].toDouble(1.0) * crossGain);
+            rows.append(QJsonObject{{"deck", deckNames[index]}, {"path", path}, {"title", track["title"].toString()}, {"artist", track["artist"].toString()},
+                {"durationMs", track["durationMs"].toDouble()}, {"bpm", track["bpm"].toDouble()}, {"musicalKey", track["musicalKey"].toString()},
+                {"positionMs", backend_->positionMs(index)}, {"rate", backend_->playbackRate(index)}, {"audibility", audibility},
+                {"loadGeneration", double(slot.generation)}, {"playing", backend_->playing(index)}});
+        }
+        return rows;
+    };
     backend_->junctionTrackPresentation = [this](int index) {
         const auto& descriptor=slots_[index].descriptor;
         return QJsonObject{{"title",descriptor["title"]},{"artist",descriptor["artist"]}};
@@ -316,7 +340,17 @@ void Host::line(const QByteArray& bytes) {
         if (!failure.isEmpty()) { error(cmd,"junction_rejected",failure); return; }
         params.remove("_junction"); cmd["params"] = params;
     }
-    if (op.startsWith("waveform.")) { result(cmd, backend_->waveformCommand(op, cmd["params"].toObject())); return; }
+    if (op.startsWith("waveform.")) {
+        auto params=cmd["params"].toObject();
+        if(params["junctionAssetId"].isString()){
+            QString failure;const auto monitor=junction_->monitorTrack(params.take("junctionAssetId").toString(),&failure);
+            if(!failure.isEmpty()){error(cmd,"junction_rejected",failure);return;}
+            const auto assetId=monitor["assetId"].toString();
+            params["sourcePath"]=monitor["path"];
+            params["sourceGeneration"]=double(assetId.left(13).toULongLong(nullptr,16));
+        }
+        result(cmd, backend_->waveformCommand(op, params)); return;
+    }
     if (op == "performance.endpoint") { result(cmd,performanceInput_->endpoint());return; }
     if (op == "engine.audioHealth") {
         QJsonArray durations;double value;while(deckclock::callbackDurations.pop(value))durations.append(value);
@@ -479,9 +513,7 @@ void Host::line(const QByteArray& bytes) {
             error(cmd, "invalid_params", "Invalid beat grid: beatTimesMs must contain 2..100000 finite, strictly increasing non-negative timestamps; beatNumbers must match it and contain integers 1..beatsPerBar"); return;
         }
         if (deck_["status"] == "loading") { error(cmd, "track_not_ready", "Wait for the current load to finish or unload first"); return; }
-        descriptor_ = descriptor; slot.generation = ++generation_; ++rev_; resetDeck(index); deck_["status"] = "loading"; deck_["loadId"] = static_cast<qint64>(slot.generation);
-        result(cmd, {{"accepted", true}, {"deck", name}, {"loadId", static_cast<qint64>(slot.generation)}}); event("deck.state", deck_);
-        backend_->load(index, descriptor["path"].toString(), slot.generation); event("mixer.state", backend_->mixer()); return;
+        beginLoad(cmd, index, descriptor); return;
     }
     if (op == "deck.unload") {
         slot.generation = ++generation_; backend_->unload(index); resetDeck(index); descriptor_ = {}; ++rev_; result(cmd, {{"deck", name}}); event("deck.state", deck_); event("mixer.state", backend_->mixer()); return;
@@ -683,6 +715,12 @@ void Host::line(const QByteArray& bytes) {
     // Command acceptance is not an invented applied state. The poll below emits
     // the audio engine's observed position / play state on the next Qt tick.
     result(cmd, {{"deck", name}, {"accepted", true}});
+}
+void Host::beginLoad(const QJsonObject& cmd, int index, const QJsonObject& descriptor) {
+    auto& slot = slots_[index];
+    slot.descriptor = descriptor; slot.generation = ++generation_; ++rev_; resetDeck(index); slot.state["status"] = "loading"; slot.state["loadId"] = static_cast<qint64>(slot.generation);
+    result(cmd, {{"accepted", true}, {"deck", deckNames[index]}, {"loadId", static_cast<qint64>(slot.generation)}}); event("deck.state", slot.state);
+    backend_->load(index, descriptor["path"].toString(), slot.generation); event("mixer.state", backend_->mixer());
 }
 void Host::completed(int index, quint64 generation, QJsonObject metadata, QString failure) {
     auto& slot = slots_[index]; auto& deck_ = slot.state; auto& descriptor_ = slot.descriptor;

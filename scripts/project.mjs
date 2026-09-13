@@ -1,8 +1,10 @@
 // OS-aware commands. Paths are passed as arguments, including spaces and Unicode.
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, copyFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { createServer } from 'node:net';
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const win = process.platform === 'win32';
 const python = process.env.PLUMDECK_PYTHON || (win ? 'python' : 'python3');
@@ -16,6 +18,50 @@ function run(command, args, options = {}) {
         const child = spawn(command, args, { cwd: root, stdio: 'inherit', ...options });
         child.on('error', reject);
         child.on('exit', (code, signal) => code === 0 ? resolve() : reject(new Error(`${command} exited (${signal || code})`)));
+    });
+}
+function availableLoopbackPort() {
+    return new Promise((resolve, reject) => {
+        const server = createServer();
+        server.once('error', reject);
+        server.listen(0, '127.0.0.1', () => {
+            const address = server.address();
+            const port = typeof address === 'object' && address ? address.port : 0;
+            server.close((error) => error ? reject(error) : resolve(port));
+        });
+    });
+}
+async function tauriStackDev() {
+    requireVenv();
+    const bridgePort = await availableLoopbackPort();
+    const bridgeToken = randomBytes(32).toString('hex');
+    const env = {
+        ...process.env,
+        PLUMDECK_JUNCTION_BRIDGE_URL: `http://127.0.0.1:${bridgePort}`,
+        PLUMDECK_JUNCTION_BRIDGE_TOKEN: bridgeToken,
+    };
+    const children = [
+        spawn(process.execPath, [fileURLToPath(import.meta.url), 'backend-dev'], {cwd: root, stdio: 'inherit', env}),
+        spawn(process.execPath, [fileURLToPath(import.meta.url), 'tauri-dev'], {cwd: root, stdio: 'inherit', env}),
+    ];
+    const stop = (signal = 'SIGTERM') => {
+        for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill(signal);
+    };
+    for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => stop(signal));
+    await new Promise((resolve, reject) => {
+        let settled = false;
+        for (const child of children) {
+            child.once('error', (error) => {
+                if (settled) return;
+                settled = true; stop(); reject(error);
+            });
+            child.once('exit', (code, signal) => {
+                if (settled) return;
+                settled = true; stop();
+                if (code === 0 || signal === 'SIGINT' || signal === 'SIGTERM') resolve();
+                else reject(new Error(`development process exited (${signal || code})`));
+            });
+        }
     });
 }
 function requireVenv() {
@@ -69,6 +115,7 @@ try {
         case 'tauri-dev':
             await run(process.execPath, [tauri, 'dev'], { env: { ...process.env, TAURI_SKIP_SIDECAR: '1', TAURI_CONFIG: JSON.stringify({ bundle: { resources: [] } }) } });
             break;
+        case 'tauri-stack-dev': await tauriStackDev(); break;
         case 'engine-build': await engineBuild(); break;
         case 'engine-stage': await engineStage(); break;
         case 'app-build': await appBuild(); break;

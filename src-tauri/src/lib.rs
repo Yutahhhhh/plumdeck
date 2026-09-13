@@ -58,6 +58,7 @@ use tauri_plugin_deep_link::DeepLinkExt;
 
 mod assist;
 mod dj_engine;
+mod junction_mcp_bridge;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -172,6 +173,8 @@ pub fn run() {
             waveform::dj_waveform_pcm,
             waveform::dj_waveform_manifest,
             dj_engine::commands::junction_command,
+            junction_mcp_bridge::junction_live_monitor_deck,
+            junction_mcp_bridge::junction_live_monitor_set,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -181,6 +184,22 @@ pub fn run() {
             for arg in env::args().skip(1) { if valid_junction_invite(&arg) { if let Ok(mut pending) = app.state::<JunctionInvite>().0.lock() { *pending = Some(arg); } } }
             app.manage(dj_engine::midi::controller(app.handle().clone()));
             app.manage(dj_engine::jog_display::JogDisplay::new());
+
+            // The Python MCP sidecar never owns an audio engine. It reaches the
+            // Tauri-owned engine only through this per-launch authenticated,
+            // loopback-only Junction bridge.
+            let supervisor = app
+                .state::<Arc<dj_engine::EngineSupervisor>>()
+                .inner()
+                .clone();
+            let junction_bridge = junction_mcp_bridge::JunctionMcpBridge::start(
+                app.handle().clone(),
+                supervisor,
+            )
+            .map_err(std::io::Error::other)?;
+            let junction_bridge_url = junction_bridge.url().to_string();
+            let junction_bridge_token = junction_bridge.token().to_string();
+            app.manage(junction_bridge);
             // ネイティブ DJ エンジン（Phase 0 シミュレータ）はオプトイン起動。
             // 既定では起動せず、フロントは「未起動」を受け取って素直に劣化する。
             // Python サイドカーとは独立なので、CI 判定より前に置く。
@@ -224,7 +243,9 @@ pub fn run() {
             };
             let sidecar_command = sidecar
                 .env("PLUMDECK_PORT", port)
-                .env("PLUMDECK_MANAGED_SIDECAR", "1");
+                .env("PLUMDECK_MANAGED_SIDECAR", "1")
+                .env("PLUMDECK_JUNCTION_BRIDGE_URL", junction_bridge_url)
+                .env("PLUMDECK_JUNCTION_BRIDGE_TOKEN", junction_bridge_token);
 
             // コマンドの実行結果を詳細にログ出力
             println!("Attempting to spawn sidecar with port: {}", port);

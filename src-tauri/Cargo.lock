@@ -3555,9 +3555,10 @@ dependencies = [
 
 [[package]]
 name = "plumdeck"
-version = "0.5.13"
+version = "0.5.14"
 dependencies = [
  "core-foundation 0.10.1",
+ "getrandom 0.3.4",
  "hidapi",
  "midir",
  "serde",

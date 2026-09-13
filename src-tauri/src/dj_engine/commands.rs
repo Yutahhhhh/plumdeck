@@ -104,6 +104,9 @@ pub enum JunctionOperation {
     #[serde(rename = "private.play")] PrivatePlay,
     #[serde(rename = "private.pause")] PrivatePause,
     #[serde(rename = "private.seek")] PrivateSeek,
+    #[serde(rename = "private.gain")] PrivateGain,
+    #[serde(rename = "private.unload")] PrivateUnload,
+    #[serde(rename = "private.state")] PrivateState,
 }
 impl JunctionOperation {
     fn wire(&self) -> &'static str {
@@ -122,6 +125,7 @@ impl JunctionOperation {
             Self::ProgramConfigure => "program.configure", Self::RecordStart => "program.record.start",
             Self::RecordStop => "program.record.stop", Self::PrivateLoad => "private.load",
             Self::PrivatePlay => "private.play", Self::PrivatePause => "private.pause", Self::PrivateSeek => "private.seek",
+            Self::PrivateGain => "private.gain", Self::PrivateUnload => "private.unload", Self::PrivateState => "private.state",
         }
     }
 }
