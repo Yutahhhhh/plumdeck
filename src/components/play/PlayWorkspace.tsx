@@ -39,6 +39,8 @@ import type { PerformanceBeatGrid, PerformanceMetadata } from "@/types/performan
 import { PlayDragDropProvider, usePlayDeckDrop } from "./PlayDragDrop";
 import { ApiError } from "@/services/api-client";
 import { KeyedTaskQueue } from "@/services/dj-engine/keyed-task-queue";
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 type GridEditSession = { deck: DeckId; trackId: number; metadata: PerformanceMetadata; initialGrid: PerformanceBeatGrid };
 /** 助走の上限。これ以上は曲頭を見失うので、つまみ出せる長さを切る。 */
 
@@ -77,7 +79,38 @@ export function PlayWorkspace() {
   const [activeDeck, setActiveDeck] = useState<DeckId>("A");
   const [junctionMonitorDeck, setJunctionMonitorDeck] = useState<DeckId | null>(null);
   const junction = useJunctionTracks();
-  useEffect(() => { if (!junction.visible) setJunctionMonitorDeck(null); }, [junction.visible]);
+  const updateJunctionMonitorDeck = useCallback((deck: DeckId | null) => {
+    setJunctionMonitorDeck(deck);
+    void invoke<DeckId | null>('junction_live_monitor_set', {deck}).catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: UnlistenFn | undefined;
+    void listen<{deck?: unknown}>('junction://live-monitor', (event) => {
+      const deck = event.payload?.deck;
+      if (deck === null || deck === undefined) setJunctionMonitorDeck(null);
+      else if (typeof deck === 'string' && DECK_IDS.includes(deck as DeckId)) setJunctionMonitorDeck(deck as DeckId);
+    }).then((stop) => {
+      if (disposed) {
+        stop();
+        return;
+      }
+      unlisten = stop;
+      // Subscribe before reading so an MCP assignment cannot land between the
+      // initial getter and event-listener registration.
+      void invoke<DeckId | null>('junction_live_monitor_deck').then((deck) => {
+        if (!disposed && (deck === null || DECK_IDS.includes(deck))) setJunctionMonitorDeck(deck);
+      }).catch(() => undefined);
+    }).catch(() => undefined);
+    return () => { disposed = true; unlisten?.(); };
+  }, []);
+  useEffect(() => {
+    if (junction.visible || !junctionMonitorDeck) return;
+    // Junction state is polled. Give a just-arrived MCP attach one poll cycle
+    // before treating a non-visible snapshot as authoritative.
+    const timer = window.setTimeout(() => updateJunctionMonitorDeck(null), 1_500);
+    return () => window.clearTimeout(timer);
+  }, [junction.visible, junctionMonitorDeck, updateJunctionMonitorDeck]);
   const [outputDevice, setOutputDevice] = useState(() => localStorage.getItem("plumdeck.djOutputDevice") ?? "");
   const [recordingDir, setRecordingDir] = useState<string>("");
   const [recordingFormat, setRecordingFormat] = useState<string>("");
@@ -317,9 +350,9 @@ export function PlayWorkspace() {
       return;
     }
     setCommandError(null);
-    setJunctionMonitorDeck(deck);
+    updateJunctionMonitorDeck(deck);
     setActiveDeck(deck);
-  }, [junction.current]);
+  }, [junction.current, updateJunctionMonitorDeck]);
 
   const editHotCue = (deck: DeckId, slot: number, clear: boolean) => run(async () => {
     const trackId = client.getState().snapshot?.decks[deck].track?.trackId;
@@ -807,7 +840,7 @@ export function PlayWorkspace() {
       }
       await client.setSync(id, false);
     })}
-    onUnload={() => junctionMonitorDeck === id ? setJunctionMonitorDeck(null) : void run(async () => { ++deckLoadRequests.current[id]; cuePoints.current[id] = 0; manualLoopIn.current[id] = null; await client.unload(id); await finalizeHistory(id, "ejected"); })}
+    onUnload={() => junctionMonitorDeck === id ? updateJunctionMonitorDeck(null) : void run(async () => { ++deckLoadRequests.current[id]; cuePoints.current[id] = 0; manualLoopIn.current[id] = null; await client.unload(id); await finalizeHistory(id, "ejected"); })}
     onHotCue={(index, clear) => void editHotCue(id, index, clear)}
     onLoopIn={() => void run(async () => {
       const deck = client.getState().snapshot?.decks[id];
@@ -834,7 +867,7 @@ export function PlayWorkspace() {
   });
 
   const loadLocalTrack = (deck: DeckId, track: Track) => {
-    if (junctionMonitorDeck === deck) setJunctionMonitorDeck(null);
+    if (junctionMonitorDeck === deck) updateJunctionMonitorDeck(null);
     loadTrack(deck, track);
   };
 

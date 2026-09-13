@@ -14,7 +14,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "concurrently -k -n backend,tauri \"pnpm backend:dev\" \"node scripts/project.mjs tauri-dev\"",
+    "tauri": "node scripts/project.mjs tauri-stack-dev",
     "dj-engine:build": "node scripts/project.mjs engine-build",
     "dj-engine:stage": "node scripts/project.mjs engine-stage",
     "tauri:build:performance": "node scripts/project.mjs app-build",

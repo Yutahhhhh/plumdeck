@@ -519,6 +519,26 @@ impl EngineSupervisor {
         }
     }
 
+    /// Send through the engine session currently owned by this supervisor.
+    ///
+    /// This is intentionally crate-local: the authenticated Junction MCP bridge
+    /// must share the same long-lived engine as the webview instead of starting a
+    /// second audio engine. A session rotation racing this call is still rejected
+    /// by `send`, exactly like a stale webview command.
+    pub(crate) fn send_current(&self, op: &str, params: Value) -> Result<EngineReply, String> {
+        let session_id = {
+            let guard = lock(&self.state);
+            let running = guard
+                .as_ref()
+                .ok_or_else(|| "音声エンジンが起動していません".to_string())?;
+            running
+                .session_id
+                .clone()
+                .ok_or_else(|| "音声エンジンのセッションが確立していません".to_string())?
+        };
+        self.send(&session_id, op, params)
+    }
+
     // ------------------------------------------------------------------ 内部
 
     fn handshake(&self) -> Result<(), String> {

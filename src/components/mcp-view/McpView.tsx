@@ -80,9 +80,8 @@ export function McpView() {
             MCP
           </h1>
           <p className="text-muted-foreground text-sm mt-1">
-            plumdeck の楽曲検索・セットリスト操作などを、Claude Desktop / Claude Code など外部の
-            MCP クライアントから直接呼び出せるようにします。検索やセットリスト編集は基本的に
-            チャット経由で行い、このアプリの画面では結果を確認します。
+            plumdeck の楽曲管理と Junction を、Claude Desktop / Claude Code など外部の
+            MCP クライアントから操作できます。チャットで依頼し、結果と現在の状態をこのアプリでも確認します。
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -143,10 +142,13 @@ export function McpView() {
             利用可能なツール {info && <Badge variant="secondary">{info.tool_count}</Badge>}
           </CardTitle>
           <CardDescription>
-            AI クライアントからはこれらのツールを通じて楽曲検索・セットリスト操作・ジャンル分類・歌詞検索などを実行できます。
+            楽曲検索、セットリスト、分類、歌詞に加え、Junction の接続・DJ順・引き継ぎ・Program・試聴・Liveモニターを操作できます。
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-muted-foreground">
+            Junction操作では、最初にAIから音声エンジンの準備と状態取得を実行できます。参加承認、開始、引き継ぎ、録音、退出、終了は実際のセッションへ反映されるため、AIへ対象と意図を明示してください。Junction Liveのデッキ割り当ては表示専用で、会場音声はProgram出力から流れます。
+          </div>
           <div className="grid gap-2">
             {info?.tools.map((tool, i) => (
               <div key={tool.name}>
