@@ -6,8 +6,10 @@ operation escape hatch, so an MCP client cannot reach unrelated engine APIs.
 
 from __future__ import annotations
 
+import json
 import math
 import re
+import time
 from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from mcp.server.mcpserver.exceptions import ToolError
@@ -25,6 +27,15 @@ from mcp_server.junction_bridge import (
 Deck = Literal["A", "B", "C", "D"]
 TurnMode = Literal["rest", "temporary"]
 ExchangeKind = Literal["invite", "response", "notice"]
+UnixEpochMilliseconds = Annotated[
+    int,
+    Field(
+        description=(
+            "TURN temporary credential expiry as Unix epoch milliseconds; "
+            "it must be in the future and no more than 24 hours away"
+        )
+    ),
+]
 ExchangeText = Annotated[
     str, Field(min_length=1, max_length=MAX_EXCHANGE_TEXT_BYTES)
 ]
@@ -48,6 +59,36 @@ def _text(value: str, field: str, maximum: int, *, empty: bool = False) -> str:
     if len(cleaned) > maximum:
         raise ToolError(f"{field} must be at most {maximum} characters")
     return cleaned
+
+
+def _network_text(
+    value: str,
+    field: str,
+    maximum_bytes: int,
+    *,
+    minimum_bytes: int = 1,
+) -> str:
+    """Match NetworkSettings::boundedText (UTF-8 bytes and no controls)."""
+    if not isinstance(value, str):
+        raise ToolError(f"{field} must be a string")
+    size = len(value.encode("utf-8"))
+    if size < minimum_bytes or size > maximum_bytes:
+        raise ToolError(
+            f"{field} must be {minimum_bytes}..{maximum_bytes} UTF-8 bytes"
+        )
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ToolError(f"{field} must not contain control characters")
+    return value
+
+
+def _network_urls(values: List[str], field: str, *, required: bool) -> List[str]:
+    if not isinstance(values, list) or len(values) > 8 or (required and not values):
+        count = "1..8" if required else "at most 8"
+        raise ToolError(f"{field} must contain {count} URLs")
+    return [
+        _network_text(value, f"{field} item", 1024)
+        for value in values
+    ]
 
 
 def _profile(dj_name: str, avatar_data_url: Optional[str], theme_color: Optional[str]) -> Dict[str, Any]:
@@ -125,34 +166,72 @@ def junction_configure_network(
     turn_secret: Optional[str] = None,
     turn_username: Optional[str] = None,
     turn_credential: Optional[str] = None,
-    turn_expires_at: Optional[int] = None,
+    turn_expires_at: Optional[UnixEpochMilliseconds] = None,
 ) -> Dict[str, Any]:
-    """JunctionのSTUNと任意のTURNを設定する。TURNなしはturn_modeを省略する。秘密は応答に含まれない。"""
-    if len(stun_urls) > 16 or any(not isinstance(url, str) or not url.strip() or len(url) > 2048 for url in stun_urls):
-        raise ToolError("stun_urls must contain at most 16 non-empty URLs")
-    arguments: Dict[str, Any] = {"stunUrls": [url.strip() for url in stun_urls], "save": save}
+    """JunctionのSTUNと任意のTURNを設定する。TURNなしはturn_modeを省略する。turn_expires_atはUnix epochミリ秒で、現在より後かつ24時間以内を指定する。秘密は応答に含まれない。"""
+    arguments: Dict[str, Any] = {
+        "stunUrls": _network_urls(stun_urls, "stun_urls", required=False),
+        "save": save,
+    }
     supplied_turn = any(value is not None for value in (turn_urls, turn_secret, turn_username, turn_credential, turn_expires_at))
     if turn_mode is None:
         if supplied_turn:
             raise ToolError("turn_mode is required when TURN fields are supplied")
         arguments["turn"] = {}
     else:
-        urls = turn_urls or []
-        if not urls or len(urls) > 16 or any(not isinstance(url, str) or not url.strip() or len(url) > 2048 for url in urls):
-            raise ToolError("turn_urls must contain 1..16 non-empty URLs")
-        turn: Dict[str, Any] = {"mode": turn_mode, "urls": [url.strip() for url in urls]}
-        for key, value, maximum in (
-            ("secret", turn_secret, 4096),
-            ("username", turn_username, 512),
-            ("credential", turn_credential, 4096),
-        ):
-            if value is not None:
-                turn[key] = _text(value, f"turn_{key}", maximum)
-        if turn_expires_at is not None:
-            if turn_expires_at < 0:
-                raise ToolError("turn_expires_at must be non-negative")
+        urls = _network_urls(turn_urls or [], "turn_urls", required=True)
+        turn: Dict[str, Any] = {"mode": turn_mode, "urls": urls}
+        if turn_mode == "rest":
+            if any(value is not None for value in (turn_username, turn_credential, turn_expires_at)):
+                raise ToolError(
+                    "REST TURN accepts turn_secret only; temporary credential fields must be omitted"
+                )
+            if turn_secret is None:
+                raise ToolError("turn_secret is required for REST TURN")
+            turn["secret"] = _network_text(
+                turn_secret, "turn_secret", 512, minimum_bytes=32
+            )
+        else:
+            if turn_secret is not None:
+                raise ToolError("turn_secret must be omitted for temporary TURN")
+            if turn_username is None or turn_credential is None or turn_expires_at is None:
+                raise ToolError(
+                    "temporary TURN requires turn_username, turn_credential, and turn_expires_at"
+                )
+            turn["username"] = _network_text(
+                turn_username, "turn_username", 256
+            )
+            turn["credential"] = _network_text(
+                turn_credential, "turn_credential", 1024
+            )
+            now_ms = int(time.time() * 1000)
+            if turn_expires_at <= now_ms or turn_expires_at > now_ms + 86_400_000:
+                raise ToolError(
+                    "turn_expires_at must be a future Unix epoch millisecond value within 24 hours"
+                )
+            try:
+                username_expiry_seconds = int(turn_username.split(":", 1)[0])
+            except ValueError:
+                raise ToolError(
+                    "turn_username must begin with its Unix expiry in seconds"
+                ) from None
+            if (
+                username_expiry_seconds < 1
+                or username_expiry_seconds > (now_ms + 86_400_000) // 1000
+                or username_expiry_seconds * 1000 < turn_expires_at - 1000
+            ):
+                raise ToolError(
+                    "turn_username expiry must match turn_expires_at"
+                )
             turn["expiresAt"] = turn_expires_at
         arguments["turn"] = turn
+    config_bytes = json.dumps(
+        {"stunUrls": arguments["stunUrls"], "turn": arguments["turn"]},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    if len(config_bytes) > 16_384:
+        raise ToolError("network configuration must be at most 16384 UTF-8 bytes")
     return _call("network.configure", arguments)
 
 

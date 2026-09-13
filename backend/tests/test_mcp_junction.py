@@ -95,6 +95,7 @@ def test_prepare_engine_uses_dedicated_safe_action(monkeypatch):
 
 
 def test_tools_translate_typed_arguments(monkeypatch):
+    monkeypatch.setattr(junction.time, "time", lambda: 1_700_000_000)
     with _fake_bridge() as (url, calls):
         monkeypatch.setenv(BRIDGE_URL_ENV, url)
         monkeypatch.setenv(BRIDGE_TOKEN_ENV, "token")
@@ -103,9 +104,9 @@ def test_tools_translate_typed_arguments(monkeypatch):
             save=False,
             turn_mode="temporary",
             turn_urls=["turn:relay.example.test"],
-            turn_username="dj",
+            turn_username="1700000060:dj",
             turn_credential="credential",
-            turn_expires_at=123456,
+            turn_expires_at=1_700_000_060_000,
         )
         junction.junction_reject_participant("peer-456")
         junction.junction_attach_live_monitor("C", "a" * 64)
@@ -123,9 +124,9 @@ def test_tools_translate_typed_arguments(monkeypatch):
         "turn": {
             "mode": "temporary",
             "urls": ["turn:relay.example.test"],
-            "username": "dj",
+            "username": "1700000060:dj",
             "credential": "credential",
-            "expiresAt": 123456,
+            "expiresAt": 1_700_000_060_000,
         },
     }
     assert calls[1]["body"]["arguments"] == {"peerId": "peer-456"}
@@ -142,6 +143,51 @@ def test_guest_response_exchange_export_may_omit_peer_id(monkeypatch):
         "action": "exchange.export",
         "arguments": {"kind": "response"},
     }
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"stun_urls": ["stun:example.test"] * 9}, "at most 8"),
+        ({
+            "stun_urls": [], "turn_mode": "rest",
+            "turn_urls": ["turn:example.test"] * 9, "turn_secret": "s" * 32,
+        }, "1..8"),
+        ({"stun_urls": ["stun:" + "界" * 340 + ".test"]}, "1024 UTF-8 bytes"),
+        ({
+            "stun_urls": [], "turn_mode": "rest",
+            "turn_urls": ["turn:example.test"], "turn_secret": "s" * 31,
+        }, "32..512 UTF-8 bytes"),
+        ({
+            "stun_urls": [], "turn_mode": "rest",
+            "turn_urls": ["turn:example.test"], "turn_secret": "s" * 513,
+        }, "32..512 UTF-8 bytes"),
+        ({
+            "stun_urls": [], "turn_mode": "temporary",
+            "turn_urls": ["turn:example.test"], "turn_username": "u" * 257,
+            "turn_credential": "credential", "turn_expires_at": 1_700_000_060_000,
+        }, "256 UTF-8 bytes"),
+        ({
+            "stun_urls": [], "turn_mode": "temporary",
+            "turn_urls": ["turn:example.test"], "turn_username": "1700000060:dj",
+            "turn_credential": "c" * 1025, "turn_expires_at": 1_700_000_060_000,
+        }, "1024 UTF-8 bytes"),
+        ({
+            "stun_urls": [], "turn_mode": "temporary",
+            "turn_urls": ["turn:example.test"], "turn_username": "1700000060:dj",
+            "turn_credential": "credential", "turn_expires_at": 1_700_086_400_001,
+        }, "within 24 hours"),
+        ({
+            "stun_urls": [], "turn_mode": "temporary",
+            "turn_urls": ["turn:example.test"], "turn_username": "not-an-expiry:dj",
+            "turn_credential": "credential", "turn_expires_at": 1_700_000_060_000,
+        }, "Unix expiry in seconds"),
+    ],
+)
+def test_network_configuration_matches_native_bounds(monkeypatch, kwargs, message):
+    monkeypatch.setattr(junction.time, "time", lambda: 1_700_000_000)
+    with pytest.raises(ToolError, match=message):
+        junction.junction_configure_network(**kwargs)
 
 
 @pytest.mark.parametrize("missing", [BRIDGE_URL_ENV, BRIDGE_TOKEN_ENV])
@@ -209,5 +255,7 @@ def test_junction_tool_schemas_are_specific_and_bounded():
     export = tools["junction_get_exchange_text"].parameters
     assert export["properties"]["kind"]["enum"] == ["invite", "response", "notice"]
     assert export["required"] == ["kind"]
+    expires = tools["junction_configure_network"].parameters["properties"]["turn_expires_at"]
+    assert "Unix epoch milliseconds" in expires["anyOf"][0]["description"]
     assert tools["junction_prepare_engine"].parameters.get("properties") == {}
     assert "action" not in tools["junction_get_state"].parameters.get("properties", {})
