@@ -7,10 +7,11 @@ import {createInterface} from 'node:readline';
 import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises';
 import path from 'node:path';
 const binary=process.env.PLUMDECK_TEST_HOST||path.resolve(import.meta.dirname,'../../build-upstream/plumdeck-mixxx-engine-host');
+const previousBinary=process.env.PLUMDECK_PREVIOUS_HOST;
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(read,predicate,label,timeout=40000){const end=Date.now()+timeout;let last;while(Date.now()<end){last=await read();if(predicate(last))return last;await pause(60);}throw Error(`${label}: timed out; phase=${last?.handoffState}, connection=${last?.connection?.state}`);}
-function native(directory){
- const child=spawn(binary,[],{env:{...process.env,PLUMDECK_JUNCTION_EPHEMERAL_NETWORK:'1',PLUMDECK_MIXXX_OUTPUT_DEVICE:process.env.PLUMDECK_MIXXX_OUTPUT_DEVICE||'BlackHole 2ch',PLUMDECK_MIXXX_RECORDING_DIR:directory}});
+function native(directory,executable=binary){
+ const child=spawn(executable,[],{env:{...process.env,PLUMDECK_JUNCTION_EPHEMERAL_NETWORK:'1',PLUMDECK_MIXXX_OUTPUT_DEVICE:process.env.PLUMDECK_MIXXX_OUTPUT_DEVICE||'BlackHole 2ch',PLUMDECK_MIXXX_RECORDING_DIR:directory}});
  let hello,id=0,stderr='';const pending=new Map();child.stderr.on('data',b=>{stderr=(stderr+b).slice(-3000);});
  const reject=reason=>{for(const p of pending.values()){clearTimeout(p.timer);p.reject(reason);}pending.clear();};child.on('error',reject);child.on('exit',code=>reject(Error(`Native exited: ${code}`)));
  createInterface({input:child.stdout}).on('line',line=>{let reply;try{reply=JSON.parse(line);}catch{return;}const p=pending.get(reply.id);if(p){clearTimeout(p.timer);pending.delete(reply.id);p.resolve(reply);}});
@@ -19,6 +20,9 @@ function native(directory){
  return {command,raw,snapshot:()=>command('junction.snapshot'),suspend:()=>child.kill('SIGSTOP'),resume:()=>child.kill('SIGCONT'),async start(){hello=await command('session.hello');await until(()=>command('state.snapshot'),s=>s.audio.applied,'audio configuration');await command('junction.network.configure',{stunUrls:[],turn:{},save:false});},async close(){child.kill('SIGCONT');child.stdin.end();if(child.exitCode===null&&child.signalCode===null)await Promise.race([new Promise(r=>child.once('exit',r)),pause(4000)]);if(child.exitCode===null&&child.signalCode===null){child.kill('SIGKILL');await new Promise(r=>child.once('exit',r));}assert.equal(child.exitCode,0,`clean native exit (${child.signalCode}); ${stderr}`);}};
 }
 function tone(){const rate=48000,n=rate*240,b=Buffer.alloc(44+n*4);b.write('RIFF');b.writeUInt32LE(b.length-8,4);b.write('WAVEfmt ',8);b.writeUInt32LE(16,16);b.writeUInt16LE(1,20);b.writeUInt16LE(2,22);b.writeUInt32LE(rate,24);b.writeUInt32LE(rate*4,28);b.writeUInt16LE(4,32);b.writeUInt16LE(16,34);b.write('data',36);b.writeUInt32LE(n*4,40);for(let i=0;i<n;i++){const x=Math.round(7500*Math.sin(i*2*Math.PI*440/rate)+1700*Math.sin(i*2*Math.PI*733.37/rate));b.writeInt16LE(x,44+i*4);b.writeInt16LE(x,46+i*4);}return b;}
+// A small stereo file (the waveform generator requires stereo) with unique content per run, so the coordinator really
+// transfers and verifies it instead of finding a cached copy of the same hash.
+function remoteTone(seconds,seed){const rate=22050,n=rate*seconds,b=Buffer.alloc(44+n*4);b.write('RIFF');b.writeUInt32LE(b.length-8,4);b.write('WAVEfmt ',8);b.writeUInt32LE(16,16);b.writeUInt16LE(1,20);b.writeUInt16LE(2,22);b.writeUInt32LE(rate,24);b.writeUInt32LE(rate*4,28);b.writeUInt16LE(4,32);b.writeUInt16LE(16,34);b.write('data',36);b.writeUInt32LE(n*4,40);const f=330+(seed%97);for(let i=0;i<n;i++){const x=Math.round(9000*Math.sin(i*2*Math.PI*f/rate));b.writeInt16LE(x,44+i*4);b.writeInt16LE(x,46+i*4);}b.writeUInt32LE(seed>>>0,44);return b;}
 function recordedPcm(bytes){assert.equal(bytes.toString('ascii',0,4),'RIFF');assert.equal(bytes.readUInt32LE(4)+8,bytes.length);let pcm,bits,channels;for(let p=12;p+8<=bytes.length;){const n=bytes.readUInt32LE(p+4),tag=bytes.toString('ascii',p,p+4);if(tag==='fmt '){channels=bytes.readUInt16LE(p+10);bits=bytes.readUInt16LE(p+22);}if(tag==='data')pcm=bytes.subarray(p+8,p+8+n);p+=8+n+(n%2);}assert.equal(bits,24);assert.equal(channels,2);assert(pcm.length>48000);let energy=0;for(let p=0;p+3<=pcm.length;p+=3){const x=pcm.readIntLE(p,3)/8388608;energy+=x*x;}assert(Math.sqrt(energy/(pcm.length/3))>.005,'real Program audio is non-silent');// Exclude only the recorder's opening half-second; admission/handoff/re-exchange happen later.
 let silence=0,longest=0,longestAt=0;for(let p=48000*6/2;p+6<=pcm.length;p+=6){silence=Math.abs(pcm.readIntLE(p,3)/8388608)<.0001?silence+1:0;if(silence>longest){longest=silence;longestAt=p/6-silence;}}assert(longest<=240,`handoff/re-exchange Program silence ${longest/48}ms at ${longestAt/48000}s exceeds 5ms`);}
 const participant=(s,id)=>s.participants.find(p=>p.peerId===id);
@@ -26,6 +30,45 @@ async function readyInvite(host,id){return until(host.snapshot,s=>participant(s,
 async function newInvite(host,peerId){const before=await host.snapshot();await host.command('junction.invite.create',peerId?{peerId}:{});const created=await host.snapshot();const peer=peerId?participant(created,peerId):created.participants.find(p=>p.peerId!==created.localPeerId&&!before.participants.some(old=>old.peerId===p.peerId));assert(peer,'individual invitation card exists');if(peer.exchange.state==='collecting')assert(!peer.exchange.inviteText,'unfinished gathering is not exportable');const ready=await readyInvite(host,peer.peerId);return {peerId:peer.peerId,text:participant(ready,peer.peerId).exchange.inviteText};}
 async function response(guest,text,name,profile={}){await guest.command('junction.exchange.inspect',{text});await guest.command('junction.join',{displayName:name,djName:name,text,...profile});const s=await until(guest.snapshot,s=>s.exchange?.responseText?.length>0,'both answers complete');return s.exchange.responseText;}
 const denied=r=>r.kind==='error'||r.ok===false;
+const lease=async peer=>{const s=await peer.snapshot();return {sessionId:s.sessionId,epoch:s.epoch,actorPeerId:s.localPeerId};};
+test('Junction Live stays local display state: wire announcements never carry paths or load a deck',async()=>{
+ const runtime=await readFile(path.resolve(import.meta.dirname,'../../src/junction/runtime.cpp'),'utf8');
+ const tracks=await readFile(path.resolve(import.meta.dirname,'../../src/junction/shared_tracks.cpp'),'utf8');
+ const host=await readFile(path.resolve(import.meta.dirname,'../../src/host.cpp'),'utf8');
+ assert.match(runtime,/if\(!wire\)state\["junctionTracks"\]=\(hosting&&auth\.owner!=auth\.local\)/);
+ assert.match(runtime,/auto s=publicState\(true\);[^\n]*s\.remove\("junctionTracks"\)/);
+ const announcement=tracks.slice(tracks.indexOf('QJsonObject trackAnnouncement('),tracks.indexOf('std::optional<std::vector<AnnouncedTrack>> parseTrackAnnouncement('));
+ assert(announcement.length>0);assert.doesNotMatch(announcement,/"path"/);
+ assert.doesNotMatch(runtime,/importJunctionTrack|tryMirror|junction\.tracks\.load/,'remote tracks are never auto-loaded into coordinator decks');
+ assert.doesNotMatch(host,/loadJunctionTrack|junction\.tracks\.load/,'the monitor has no native deck-load command');
+});
+test('additive Junction Live negotiation is independent from the compatible baseline',async()=>{
+ const runtime=await readFile(path.resolve(import.meta.dirname,'../../src/junction/runtime.cpp'),'utf8');
+ const exchange=await readFile(path.resolve(import.meta.dirname,'../../src/junction/manual_exchange.cpp'),'utf8');
+ assert.match(runtime,/junction-5/,'new releases retain the compatible baseline');
+ assert.doesNotMatch(runtime,/junction-6/);
+ assert.match(exchange,/junction-5/,'manual exchange remains compatible with the previous release');
+ assert.doesNotMatch(exchange,/junction-6/);
+ assert.match(runtime,/junction-live-monitor-v1/);
+ assert.match(runtime,/"junctionCapabilities",QJsonArray\{kJunctionTracksCapability\}/);
+ assert.match(runtime,/!host->second->junctionTracksV1/,'an old host is never sent an unknown track message');
+ assert.match(runtime,/MessageType::TrackAnnounce && p\.junctionTracksV1/,'an announcement is accepted only after negotiation');
+});
+test('current and previous engines connect in both host/guest directions',{skip:!previousBinary,timeout:180000},async()=>{
+ const directory=await mkdtemp('/tmp/plumdeck-mixed-runtime-');
+ const connect=async(hostBinary,guestBinary)=>{
+  const host=native(directory,hostBinary),guest=native(directory,guestBinary);
+  try{
+   await host.start();await guest.start();
+   await host.command('junction.create',{djName:'Compatible host',sessionName:'Mixed release',programDevice:'-1',adoptCurrent:false,startInLobby:true,exchangeMode:'manual'});
+   const invite=await newInvite(host);const answer=await response(guest,invite.text,'Compatible guest');
+   await host.command('junction.exchange.import',{text:answer});await host.command('junction.peer.approve',{peerId:invite.peerId,accept:true});
+   await until(host.snapshot,s=>s.connection.state==='connected'&&participant(s,invite.peerId),'host sees compatible peer');
+   await until(guest.snapshot,s=>s.connection.state==='connected','guest sees compatible host');
+  }finally{await Promise.allSettled([host.close(),guest.close()]);}
+ };
+ try{await connect(binary,previousBinary);await connect(previousBinary,binary);}finally{await rm(directory,{recursive:true,force:true});}
+});
 test('periodic roster snapshots keep avatar blobs off the heartbeat control path',async()=>{
  const source=await readFile(path.resolve(import.meta.dirname,'../../src/junction/runtime.cpp'),'utf8');
  assert.match(source,/kSnapshotIntervalTicks=100/);
@@ -61,7 +104,8 @@ test('manual multi-DJ admission, cancellation, handoff and same-peer re-exchange
     const tested=await until(()=>host.command('junction.network.test',{poll:true}),s=>s.state!=='checking','actual TURN allocation',35000);assert.equal(tested.state,'success',tested.detail);
   }
   const source=path.join(directory,'tone.wav');await writeFile(source,tone());await host.command('deck.load',{deck:'A',track:{trackId:'manual-tone',path:source,title:'Manual session tone'}});await until(()=>host.command('state.snapshot'),s=>['ready','paused'].includes(s.decks.A.status),'tone decode');await host.command('deck.play',{deck:'A'});
-  await first.command('deck.load',{deck:'A',track:{trackId:'bootstrap-tone',path:source,title:'Remote-first tone'}});await until(()=>first.command('state.snapshot'),s=>['ready','paused'].includes(s.decks.A.status),'remote-first tone decode');await first.command('deck.play',{deck:'A'});
+  const runSeed=Date.now()%1000000007,remoteSource=path.join(directory,'remote-first.wav'),nextSource=path.join(directory,'remote-next.wav');await writeFile(remoteSource,remoteTone(120,runSeed));await writeFile(nextSource,remoteTone(20,runSeed+1));
+  await first.command('deck.load',{deck:'A',track:{trackId:'bootstrap-tone',path:remoteSource,title:'Remote-first tone',artist:'Junction DJ'}});await until(()=>first.command('state.snapshot'),s=>['ready','paused'].includes(s.decks.A.status),'remote-first tone decode');await first.command('deck.play',{deck:'A'});
   const devices=await host.command('audio.devices.list');const output=devices.devices.find(d=>d.name.includes('BlackHole')&&d.outputChannels>=2);assert(output,'loopback device required, not skipped');
   const outputId=output.id.replace(/^coreaudio:/,'');const hostAvatar='data:image/png;base64,AA==',guestAvatar='data:image/webp;base64,AQ==';
   await host.command('junction.create',{djName:'セッション管理 DJ',avatarDataUrl:hostAvatar,sessionName:'リモートDJから開始',programDevice:outputId,adoptCurrent:false,startInLobby:true,exchangeMode:'manual'});
@@ -70,8 +114,36 @@ test('manual multi-DJ admission, cancellation, handoff and same-peer re-exchange
   assert(denied(await first.raw('junction.session.start',{performerPeerId:firstSlot.peerId})),'guest cannot start the session');assert(denied(await first.raw('junction.roster.reorder',{peerIds:[]})),'guest cannot reorder the lobby');
   await pause(700);lobby=await first.snapshot();assert.equal(participant(lobby,lobby.hostPeerId).avatarDataUrl,hostAvatar,'cached profile survives lightweight heartbeats');assert.equal(participant(await host.snapshot(),firstSlot.peerId).avatarDataUrl,guestAvatar);
   const starting=await host.command('junction.session.start',{performerPeerId:firstSlot.peerId});assert.equal(starting.lifecycle,'starting');assert.equal(starting.performerPeerId,'');assert.equal(starting.program.state,'running');assert.equal(starting.program.captureActive,false,'coordinator capture stays off during remote bootstrap');
-  const firstLive=await until(first.snapshot,s=>s.lifecycle==='live'&&s.performerPeerId===s.localPeerId,'remote DJ becomes first performer',80000);assert(BigInt(firstLive.epoch)>1n);await until(host.snapshot,s=>s.lifecycle==='live'&&s.performerPeerId===firstSlot.peerId,'coordinator observes remote-first live',80000);const retained=await first.command('state.snapshot');assert.equal(retained.decks.A.track.title,'Remote-first tone','bootstrap keeps the selected DJ deck instead of restoring the coordinator graph');const liveRoster=await host.snapshot();assert.notEqual(participant(liveRoster,liveRoster.localPeerId).rosterStatus,'finished','never-playing coordinator is not marked finished');
-  await host.command('junction.end');await until(host.snapshot,s=>!s.active,'remote-first host end');await until(first.snapshot,s=>!s.active,'remote-first guest end');
+  const firstLive=await until(first.snapshot,s=>s.lifecycle==='live'&&s.performerPeerId===s.localPeerId,'remote DJ becomes first performer',80000);assert(BigInt(firstLive.epoch)>1n);await until(host.snapshot,s=>s.lifecycle==='live'&&s.performerPeerId===firstSlot.peerId,'coordinator observes remote-first live',80000);const retained=await first.command('state.snapshot');assert.equal(retained.decks.A.track.title,'Remote-first tone','bootstrap keeps the selected DJ deck instead of restoring the coordinator graph');
+  // Junction Live: current/next metadata and bytes arrive independently from
+  // Program audio, and the coordinator's real decks are never loaded.
+  const listed=await until(host.snapshot,s=>s.junctionTracks?.some(t=>t.title==='Remote-first tone'&&t.role==='current'&&t.state==='ready'),'remote-first track received and verified for Junction Live',120000);
+  const shared=listed.junctionTracks.find(t=>t.title==='Remote-first tone');
+  assert.match(shared.assetId,/^[0-9a-f]{64}$/);assert.equal(shared.role,'current');assert.equal(shared.playing,true);assert.equal(shared.sourcePeerId,firstSlot.peerId);assert.equal(shared.sourceDeck,'A');assert.equal(shared.artist,'Junction DJ');assert.equal(shared.sourceDjName,'最初のリモート DJ');
+  assert(path.isAbsolute(shared.path)&&path.basename(shared.path)===shared.assetId,'ready track is this computer\'s content-addressed cache file');assert.notEqual(shared.path,remoteSource,'the sender path is never used');
+  assert((await readFile(shared.path)).equals(await readFile(remoteSource)),'verified bytes match the performer file');
+  assert.deepEqual((await first.snapshot()).junctionTracks,[],'the performer does not receive its own tracks');assert(!JSON.stringify(await first.snapshot()).includes(shared.path),'coordinator cache paths never reach a peer');
+  let hostDecks=await host.command('state.snapshot');assert.equal(hostDecks.decks.A.track.title,'Manual session tone','existing coordinator deck is not replaced');assert.equal(hostDecks.decks.A.status,'playing');assert.equal(hostDecks.decks.B.track,null,'no automatic deck load');
+  assert(denied(await host.raw('deck.load',{deck:'B',track:{trackId:'junction',path:shared.path,title:'x'}})),'a non-performing coordinator still cannot issue shared deck.load');
+  assert(denied(await host.raw('junction.tracks.load',{assetId:shared.assetId,deck:'B'})),'there is deliberately no monitor deck-load operation');
+  const remoteWaveform=await host.command('waveform.ensure',{junctionAssetId:shared.assetId});assert(remoteWaveform.assetKey,'the waveform API reads the received cache without a deck load');
+  hostDecks=await host.command('state.snapshot');assert.equal(hostDecks.decks.B.track,null);assert.equal(hostDecks.decks.A.track.title,'Manual session tone');assert.equal(hostDecks.decks.A.status,'playing');
+  // Read the published waveform exactly as the desktop UI does (read lease + cache file) while not performing.
+  const waveformRoot=path.join(process.env.HOME,'Library/Caches/plumdeck/waveform-v2',remoteWaveform.assetKey);
+  const waveformFile=async resource=>{const lease=await host.command('waveform.acquireReadLease',{assetKey:remoteWaveform.assetKey,resourceKey:resource});assert(lease.leaseId,'a non-performing coordinator can lease its own waveform files');try{return await readFile(path.join(waveformRoot,resource));}finally{await host.command('waveform.releaseReadLease',{leaseId:lease.leaseId});}};
+  const waveformManifest=await until(async()=>{try{return JSON.parse(await waveformFile('manifest.json'));}catch{return null;}},m=>m?.state==='ready'&&m.levels?.some(l=>l.readyTileRanges?.length),'received track waveform published',60000);
+  const waveformLevel=waveformManifest.levels.find(l=>l.readyTileRanges?.length);const waveformTile=await waveformFile(`${waveformLevel.lod}-${waveformLevel.readyTileRanges[0][0]}-bands.bin`);assert(waveformTile.length>64&&waveformTile.subarray(64).some(b=>b!==0),'real waveform data for the received track');
+  let monitoredSession=await host.snapshot();assert.equal(monitoredSession.performerPeerId,firstSlot.peerId,'waveform monitoring never changes the performer');assert.equal(monitoredSession.epoch,firstLive.epoch);assert.equal(monitoredSession.handoffState,'playing');
+  await until(host.snapshot,s=>Number(s.program.rms)>.001,'Program keeps carrying the remote performer',10000);
+  const beforePosition=shared.positionMs;const moved=await until(host.snapshot,s=>s.junctionTracks?.find(t=>t.role==='current')?.positionMs>beforePosition+200,'dynamic position metadata follows without a deck seek');assert.equal(moved.junctionTracks.find(t=>t.role==='current').assetId,shared.assetId);
+  // The performer sets the next track: the pair follows, the coordinator decks do not.
+  await first.command('deck.load',{deck:'B',track:{trackId:'remote-next',path:nextSource,title:'Remote next tone',artist:'Junction DJ'},_junction:await lease(first)});await until(()=>first.command('state.snapshot'),s=>['ready','paused'].includes(s.decks.B.status),'performer loads a next track');
+  const paired=await until(host.snapshot,s=>s.junctionTracks?.some(t=>t.title==='Remote next tone'&&t.role==='next'&&t.sourceDeck==='B'&&t.state==='ready'),'performer next track is prefetched',120000);assert(paired.junctionTracks.length<=2);assert.equal(paired.junctionTracks.find(t=>t.role==='current').assetId,shared.assetId);
+  await first.command('deck.unload',{deck:'B',_junction:await lease(first)});
+  const unloaded=await until(host.snapshot,s=>!s.junctionTracks?.some(t=>t.title==='Remote next tone'),'performer deck.unload removes the stale next card');assert.equal(unloaded.junctionTracks.filter(t=>t.assetId===shared.assetId).length,1,'the current card remains singular');
+  assert.equal((await host.command('state.snapshot')).decks.B.track,null,'performer changes never load coordinator decks');
+  const liveRoster=await host.snapshot();assert.notEqual(participant(liveRoster,liveRoster.localPeerId).rosterStatus,'finished','never-playing coordinator is not marked finished');
+  await host.command('junction.end');const ended=await until(host.snapshot,s=>!s.active,'remote-first host end');assert.deepEqual(ended.junctionTracks,[],'Junction Live disappears with the session');await until(first.snapshot,s=>!s.active,'remote-first guest end');
   await host.command('junction.create',{displayName:'ホスト DJ',sessionName:'手動でつなぐセッション',programDevice:output.id.replace(/^coreaudio:/,''),adoptCurrent:true,exchangeMode:'manual'});
   const created=await until(host.snapshot,s=>s.active&&s.program.state==='running','server-free host and Program');assert.equal(created.exchange.mode,'manual');assert.equal(created.lifecycle,'live','legacy create remains immediately live');assert.equal(created.coordinatorPeerId,created.hostPeerId);assert.equal(created.performerPeerId,created.localPeerId);const epoch=created.epoch;
   console.info('manual host ready');const one=await newInvite(host),two=await newInvite(host);console.info('two invitations collected');assert.notEqual(one.peerId,two.peerId);let invited=await host.snapshot();for(const id of [one.peerId,two.peerId]){const row=participant(invited,id);assert.equal(row.slotId,id);assert(row.invitationId);assert.equal(row.isPlaceholder,true);assert.equal(row.rosterStatus,'invited');assert(Number.isInteger(row.orderIndex));}

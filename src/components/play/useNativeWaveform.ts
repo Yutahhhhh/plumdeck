@@ -6,8 +6,9 @@ import { chooseLod, type WaveformTile } from '@/services/waveform/protocol';
 import { normalizeWaveformManifest, waveformRepository, type WaveformManifest } from '@/services/waveform/repository';
 import type { DeckId } from '@/types/dj-engine';
 const EMPTY_TILES:WaveformTile[]=[];
-export function useNativeWaveform(deck:string|undefined,positionMs:number,spanMs:number,overview:boolean,physicalPixels=2000){
-  const [binding,setBinding]=useState<{session:string;generation:number}|null>(null);
+type WaveformBinding = {session:string;generation:number;junctionAssetId?:string};
+export function useNativeWaveform(deck:string|undefined,positionMs:number,spanMs:number,overview:boolean,physicalPixels=2000,junctionAssetId?:string){
+  const [binding,setBinding]=useState<WaveformBinding|null>(null);
   const [manifest,setManifest]=useState<WaveformManifest|null>(null);
   const [pcm,setPcm]=useState<{asset:string;session:string;generation:number;tile:WaveformTile}|null>(null);
   const asset=useRef<string|null>(null);
@@ -19,16 +20,19 @@ export function useNativeWaveform(deck:string|undefined,positionMs:number,spanMs
     const update=()=>{
       const state=djEngineClient.getState().snapshot;
       const slot=deck&&['A','B','C','D'].includes(deck)?state?.decks[deck as DeckId]:null;
-      const next=state?.engine.capabilities.includes('waveform.tiles.v2')&&slot?.loadGeneration&&slot.track&&state.sessionId?{session:state.sessionId,generation:slot.loadGeneration}:null;
-      setBinding(old=>old?.session===next?.session&&old?.generation===next?.generation?old:next);
+      const session=state?.engine.capabilities.includes('waveform.tiles.v2') ? state.sessionId : null;
+      const next:WaveformBinding|null=session&&junctionAssetId?{session,generation:0,junctionAssetId}
+        :session&&slot?.loadGeneration&&slot.track?{session,generation:slot.loadGeneration}:null;
+      setBinding(old=>old?.session===next?.session&&old?.generation===next?.generation&&old?.junctionAssetId===next?.junctionAssetId?old:next);
     };update();return djEngineClient.subscribe(update);
-  },[deck]);
+  },[deck,junctionAssetId]);
   useEffect(()=>{
     setError(null);setManifest(null);setLoaded(null);if(!binding||!deck)return;
     let live=true,timer:ReturnType<typeof setTimeout>;
     const read=async()=>{
       try{
-        const result=await djEngineClient.send('waveform.ensure',{deck,loadGeneration:binding.generation}) as {assetKey?:string;state?:string};
+        const source=binding.junctionAssetId?{junctionAssetId:binding.junctionAssetId}:{deck,loadGeneration:binding.generation};
+        const result=await djEngineClient.send('waveform.ensure',source) as {assetKey?:string;state?:string};
         if(result.assetKey){
           asset.current=result.assetKey;
           if(result.state==='error'){if(live)setError('波形を読み込めませんでした');return;}
@@ -67,10 +71,11 @@ export function useNativeWaveform(deck:string|undefined,positionMs:number,spanMs
   useEffect(()=>{
     if(!binding||!manifest||!deck||overview||framesPerPixel>=64||pcmSpan>262144)return;
     let live=true,timer:ReturnType<typeof setTimeout>;
-    const requestId=`${deck}:${binding.generation}:${pcmStart}:${pcmSpan}`;
+    const requestId=`${binding.junctionAssetId??deck}:${binding.generation}:${pcmStart}:${pcmSpan}`;
     const read=async()=>{
       try{
-        const reply=await djEngineClient.send('waveform.requestRange',{deck,assetKey:manifest.assetKey,loadGeneration:binding.generation,requestId,startSourceFrame:pcmStart,endSourceFrame:pcmStart+pcmSpan,detail:'pcm',priority:0}) as {state?:string;windowId?:string};
+        const source=binding.junctionAssetId?{junctionAssetId:binding.junctionAssetId}:{deck,loadGeneration:binding.generation};
+        const reply=await djEngineClient.send('waveform.requestRange',{...source,assetKey:manifest.assetKey,requestId,startSourceFrame:pcmStart,endSourceFrame:pcmStart+pcmSpan,detail:'pcm',priority:0}) as {state?:string;windowId?:string};
         if(reply.state==='ready'&&reply.windowId){
           const bytes=await invoke<ArrayBuffer>('dj_waveform_pcm',{sessionId:binding.session,assetKey:manifest.assetKey,windowId:reply.windowId});
           const tile=await tileWorker.parse(bytes,pcmBin);

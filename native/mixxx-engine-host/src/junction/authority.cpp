@@ -5,7 +5,9 @@ bool Authority::localOnly(const QString& op) {
     return allowed.contains(op);
 }
 bool Authority::readOnlyQuery(const QString& op) {
-    static const QSet<QString> allowed={"engine.clock.probe","waveform.ensure","waveform.manifest","meters.subscribe","deck.timing.trace","state.snapshot"};
+    // Waveform leases/ranges read this computer's analysis cache for the deck
+    // it already has loaded; they never touch playback or the shared graph.
+    static const QSet<QString> allowed={"engine.clock.probe","waveform.ensure","waveform.manifest","waveform.acquireReadLease","waveform.releaseReadLease","waveform.requestRange","waveform.cancelRequest","waveform.invalidate","meters.subscribe","deck.timing.trace","state.snapshot"};
     return allowed.contains(op);
 }
 QString Authority::authorize(const QString& op,const QJsonObject& ticket,quint64 frame) const {

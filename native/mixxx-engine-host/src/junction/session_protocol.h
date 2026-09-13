@@ -49,6 +49,7 @@ enum class MessageType {
     PeerLeave,
     SessionEnd,
     MonitorRequest,
+    TrackAnnounce,
 };
 
 QString messageTypeName(MessageType type);

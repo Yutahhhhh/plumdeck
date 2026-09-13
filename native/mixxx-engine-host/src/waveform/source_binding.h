@@ -1,5 +1,6 @@
 #pragma once
 #include "sources/soundsourceproxy.h"
+#include "track/track.h"
 #include <QFileInfo>
 #include <QFile>
 #include <QDateTime>
@@ -36,5 +37,15 @@ inline void bindSource(const QString& path, const SoundSourceProxy& proxy, const
 }
 inline SourceBinding sourceBinding(const QString& path) {
     std::lock_guard<std::mutex> lock(bindingsMutex);const auto it=bindings.find(path);return it==bindings.end()?SourceBinding{}:it->second;
+}
+/// Junction monitor assets have never been loaded into a Mixxx deck. Probe the
+/// decoder once so waveform analysis can use the same provider selection as a
+/// normal track without mutating any deck or audio route.
+inline SourceBinding ensureSourceBinding(const QString& path) {
+    auto binding=sourceBinding(path);if(binding.provider)return binding;
+    auto track=Track::newTemporary(path);SoundSourceProxy proxy(track);
+    mixxx::AudioSource::OpenParams params;params.setChannelCount(mixxx::audio::ChannelCount(2));
+    const auto source=proxy.openAudioSource(params);if(!source)return {};
+    bindSource(path,proxy,source);source->close();return sourceBinding(path);
 }
 }

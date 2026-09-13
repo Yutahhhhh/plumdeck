@@ -8,7 +8,7 @@ namespace junction {
 namespace {
 
 struct TypeName { MessageType type; const char* name; };
-constexpr std::array<TypeName, 26> kTypeNames{{
+constexpr std::array<TypeName, 27> kTypeNames{{
     {MessageType::PeerHello, "peer.hello"},
     {MessageType::SessionSnapshot, "session.snapshot"},
     {MessageType::ClockProbeRequest, "clock.probe"},
@@ -35,6 +35,7 @@ constexpr std::array<TypeName, 26> kTypeNames{{
     {MessageType::PeerLeave, "peer.leave"},
     {MessageType::SessionEnd, "session.end"},
     {MessageType::MonitorRequest, "monitor.request"},
+    {MessageType::TrackAnnounce, "tracks.announce"},
 }};
 
 /// Reads a required decimal-string counter into `out`.

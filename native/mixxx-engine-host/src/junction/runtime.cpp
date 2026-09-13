@@ -8,6 +8,7 @@
 #include "manual_exchange.h"
 #include "ice_servers.h"
 #include "network_settings.h"
+#include "shared_tracks.h"
 #include <samplerate.h>
 #include "../backend.h"
 #include <QJsonDocument>
@@ -18,6 +19,7 @@
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QDateTime>
+#include <QCryptographicHash>
 #include <QFile>
 #include <QFileInfo>
 #include <QSaveFile>
@@ -46,8 +48,18 @@ namespace {
 // not permission to destroy a connection which WebRTC may still recover.
 constexpr qint64 kControlSilenceNanos=10000000000LL;
 constexpr quint64 kSnapshotIntervalTicks=100; // 500 ms at the 5 ms session tick.
+// A Junction Live asset copy is background work: one 32 KiB chunk per ~50 ms keeps
+// the performer uplink free for Program audio, and verification hashes the
+// received file in slices so the coordinator tick (Program routing) never stalls.
+constexpr quint64 kBackgroundChunkTicks=10;
+constexpr qint64 kTrackDigestSliceBytes=512*1024;
+constexpr qint64 kTrackTransferStallNanos=30000000000LL;
 QByteArray json(const QJsonObject& v) {return QJsonDocument(v).toJson(QJsonDocument::Compact);}
+// This identifies the minimum wire-compatible Junction protocol, not the app
+// release. Additive features are negotiated independently in peer.hello so a
+// newer plumdeck can still connect to an older compatible release.
 QString fingerprint() {return QStringLiteral("mixxx-3ebac449e7e5fe2a0186596657696e87ce8b0e56-junction-5");}
+constexpr auto kJunctionTracksCapability="junction-live-monitor-v1";
 bool exchangeAwaitingConnection(ExchangeState state) {
     // The answerer has no signalling channel on which the offerer can announce
     // approval. Its first reliable approval signal is both WebRTC links being
@@ -114,7 +126,7 @@ struct Runtime::Impl {
     // is still carrying audio. It is promoted only once it actually connects,
     // so a manual re-exchange never interrupts an established peer.
     struct PendingControl {QString type;QByteArray bytes;};
-    struct Peer {QString id,name,fp,avatarDataUrl,themeColor;bool approved=false,hello=false,producing=false,remoteStreamReady=false,endingAck=false;std::unique_ptr<MediaTransport> transport;QQueue<PendingControl> pending;
+    struct Peer {QString id,name,fp,avatarDataUrl,themeColor;bool approved=false,hello=false,junctionTracksV1=false,producing=false,remoteStreamReady=false,endingAck=false;std::unique_ptr<MediaTransport> transport;QQueue<PendingControl> pending;
         qint64 lastControlAt=0,healthAt=0,bulkDisconnectedAt=0;quint64 serial=0,candidateSerial=0;std::unique_ptr<MediaTransport> candidate,retiring; qint64 retireAt=0;ManualAttempt manual;HealthReportMessage health;bool hasHealth=false;
         MediaTransport::Statistics healthStats;bool healthStatsReady=false,probeReady=false;double lastProbeRttMs=0,smoothedRttMs=0,smoothedJitterMs=0;};
     std::map<QString,std::unique_ptr<Peer>> peers;
@@ -155,11 +167,23 @@ struct Runtime::Impl {
     QString pendingGraphAsset;bool preserveWarmGraph=false;QString exportHandoff;
     QSet<QString> requestedAssets,pinnedAssets;
     QString validationAwaitingAck;
-    struct Outgoing {QString peer,hash,path;quint64 offset=0;};
+    struct Outgoing {QString peer,hash,path;quint64 offset=0;bool background=false;};
     QQueue<Outgoing> outgoing;
     std::future<std::pair<QJsonObject,std::map<QString,QString>>> exportJob;
     quint64 exportRevision=0;
     QJsonObject privateState;
+    // --- Junction Live -----------------------------------------------------
+    // Coordinator: tracks the remote performer has loaded. One asset is fetched
+    // at a time and is listed as loadable only after local verification.
+    SharedTrackList sharedTracks;QSet<QString> trackPins,droppedTransfers;QString trackTransfer,trackTransferSource;qint64 trackTransferAt=0;
+    std::map<QString,std::pair<QString,quint64>> announceSeen;
+    struct TrackDigest {QString hash,path;bool partial=false;QFile file;QCryptographicHash sha{QCryptographicHash::Sha256};quint64 size=0,done=0;};
+    std::unique_ptr<TrackDigest> trackDigest;
+    // Performer: deck files hashed off the main thread. Paths never leave here.
+    struct HashedFile {qint64 size=0,modified=0;QString hash;};
+    std::map<QString,HashedFile> deckHashes;
+    std::future<std::vector<std::pair<QString,HashedFile>>> deckHashJob;
+    QString announceStream,announcedTracks;qint64 announcedAt=0;quint64 announceRevision=0,backgroundPumpTick=0;
     // --- manual (signalling-free) exchange -------------------------------
     bool manual=false;QByteArray hostCertificatePem;QString pinnedHostFingerprint;
     quint64 serialCounter=0;
@@ -203,7 +227,7 @@ struct Runtime::Impl {
         if(hosting){program.close();programOpened=false;programState="idle";}
     }
     QJsonObject localProfile() const {
-        return {{"fingerprint",fingerprint()},{"displayName",displayName},{"djName",displayName},{"avatarDataUrl",avatarDataUrl},{"themeColor",themeColor}};
+        return {{"fingerprint",fingerprint()},{"displayName",displayName},{"djName",displayName},{"avatarDataUrl",avatarDataUrl},{"themeColor",themeColor},{"junctionCapabilities",QJsonArray{kJunctionTracksCapability}}};
     }
     QJsonObject rosterMetadata(const QString& id) const {
         for(const auto& value:participantRoster){const auto row=value.toObject();if(row["peerId"].toString()==id)return row;}
@@ -288,7 +312,13 @@ struct Runtime::Impl {
         std::stable_sort(rows.begin(),rows.end(),[](const QJsonObject& a,const QJsonObject& b){return a["orderIndex"].toInt(999)<b["orderIndex"].toInt(999);});
         QJsonArray participants;for(const auto& row:rows)participants.append(row);
         QJsonArray why;for(const auto& r:reasons)why.append(r);
-        return {{"active",!auth.sessionId.isEmpty()},{"sessionId",auth.sessionId},{"localPeerId",auth.local},{"hostPeerId",auth.host},{"coordinatorPeerId",auth.host},{"performerPeerId",isLive?auth.owner:QString{}},{"nextPeerId",auth.next},{"epoch",u64(auth.epoch)},{"revision",double(auth.revision)},{"sessionName",name},{"lifecycle",lifecycle},{"handoffState",auth.phase},{"handoffId",auth.handoffId},{"participants",participants},{"readiness",QJsonObject{{"ready",ready},{"reasons",why}}},{"connection",QJsonObject{{"state",connection},{"detail",problem}}},{"program",QJsonObject{{"state",programState},{"captureActive",captureEnabled.load()},{"localMonitor",separateLocalMaster.load()?"direct":"program-delayed"},{"outputDevice",QString::number(programDevice)},{"recording",program.recording()},{"underruns",u64(program.underruns())},{"meter",double(program.peak())},{"rms",double(program.rms())},{"sampleRateHz",int(program.sampleRate())},{"deviceLatencySeconds",program.deviceLatencySeconds()}}},{"invite",hosting?invite:QString{}},{"privatePreview",backend->privatePreviewState()},{"exchange",wire?QJsonObject{{"mode",manual?QStringLiteral("manual"):QStringLiteral("server")}}:exchangeState()}};
+        QJsonObject state{{"active",!auth.sessionId.isEmpty()},{"sessionId",auth.sessionId},{"localPeerId",auth.local},{"hostPeerId",auth.host},{"coordinatorPeerId",auth.host},{"performerPeerId",isLive?auth.owner:QString{}},{"nextPeerId",auth.next},{"epoch",u64(auth.epoch)},{"revision",double(auth.revision)},{"sessionName",name},{"lifecycle",lifecycle},{"handoffState",auth.phase},{"handoffId",auth.handoffId},{"participants",participants},{"readiness",QJsonObject{{"ready",ready},{"reasons",why}}},{"connection",QJsonObject{{"state",connection},{"detail",problem}}},{"program",QJsonObject{{"state",programState},{"captureActive",captureEnabled.load()},{"localMonitor",separateLocalMaster.load()?"direct":"program-delayed"},{"outputDevice",QString::number(programDevice)},{"recording",program.recording()},{"underruns",u64(program.underruns())},{"meter",double(program.peak())},{"rms",double(program.rms())},{"sampleRateHz",int(program.sampleRate())},{"deviceLatencySeconds",program.deviceLatencySeconds()}}},{"invite",hosting?invite:QString{}},{"privatePreview",backend->privatePreviewState()},{"exchange",wire?QJsonObject{{"mode",manual?QStringLiteral("manual"):QStringLiteral("server")}}:exchangeState()}};
+        // Junction Live cache paths are local-only. Only the coordinator while
+        // another peer performs needs the presentation pair.
+        if(!wire)state["junctionTracks"]=(hosting&&auth.owner!=auth.local)
+            ?sharedTracks.toJson([this](const SharedTrackList::Entry& entry){return trackProgress(entry);})
+            :QJsonArray{};
+        return state;
     }
     /// Session-level exchange summary. For a guest it mirrors the attempt with
     /// the host, which is the only one it has.
@@ -738,7 +768,7 @@ struct Runtime::Impl {
         }
     }
     QJsonObject wireState(bool includeAvatars=false) const {
-        auto s=publicState(true);s.remove("invite");s.remove("privatePreview");s.remove("program");
+        auto s=publicState(true);s.remove("invite");s.remove("privatePreview");s.remove("program");s.remove("junctionTracks");
         s["timelineOriginNanos"]=QString::number(timeline.originNanos());s["timelineOriginFrame"]=u64(timeline.originFrame());s["programDelayFrames"]=int(delay);s["engineFingerprint"]=fingerprint();if(auth.committed)s["commit"]=auth.committed->toJson();
         // The 100 ms heartbeat must stay lightweight. Full profile snapshots
         // are sent only on connection/profile/roster changes, and even those
@@ -763,9 +793,9 @@ struct Runtime::Impl {
         p.lastControlAt=monotonicNanos();
         if(manual&&p.manual.state==ExchangeState::Interrupted&&p.transport&&p.transport->linkState(false)==LinkState::Connected){p.manual.connectDeadline=0;manualSetState(p,ExchangeState::Connected,"通信が復旧しました");}
         const auto payload=envelope.payload;
-        if(envelope.type==MessageType::SessionSnapshot && payload["engineFingerprint"]!=fingerprint()){fail("エンジンのバージョンが一致しません");return;}
+        if(envelope.type==MessageType::SessionSnapshot && payload["engineFingerprint"]!=fingerprint()){fail("Junctionの基礎プロトコルに互換性がありません");return;}
         if(!p.hello && envelope.type!=MessageType::PeerHello && envelope.type!=MessageType::SessionSnapshot)return;
-        if(envelope.type==MessageType::PeerHello){if(payload["fingerprint"]!=fingerprint()){p.hello=false;if(manual){discardAttempt(p);manualSetState(p,ExchangeState::Failed,"エンジンのバージョンが一致しません。両方のアプリを更新してください","version_mismatch");}else fail("エンジンのバージョンが一致しません");return;}const bool firstHello=!p.hello;p.hello=true;if(firstHello)queue(p,"peer.hello",localProfile());if(payload.contains("djName")||payload.contains("displayName"))p.name=sanitizeDisplayName(payload["djName"].toString(payload["displayName"].toString(p.name)));if(payload.contains("avatarDataUrl"))p.avatarDataUrl=profileAvatar(payload["avatarDataUrl"].toString());if(payload.contains("themeColor"))p.themeColor=profileColor(payload["themeColor"].toString(),id);if(!manual||p.transport->aggregateLinkState()==LinkState::Connected)connection="connected";
+        if(envelope.type==MessageType::PeerHello){if(payload["fingerprint"]!=fingerprint()){p.hello=false;if(manual){discardAttempt(p);manualSetState(p,ExchangeState::Failed,"Junctionの基礎プロトコルに互換性がありません","version_mismatch");}else fail("Junctionの基礎プロトコルに互換性がありません");return;}const bool firstHello=!p.hello;p.hello=true;const auto capabilities=payload["junctionCapabilities"].toArray();if(capabilities.size()<=32&&capabilities.contains(kJunctionTracksCapability))p.junctionTracksV1=true;if(firstHello)queue(p,"peer.hello",localProfile());if(payload.contains("djName")||payload.contains("displayName"))p.name=sanitizeDisplayName(payload["djName"].toString(payload["displayName"].toString(p.name)));if(payload.contains("avatarDataUrl"))p.avatarDataUrl=profileAvatar(payload["avatarDataUrl"].toString());if(payload.contains("themeColor"))p.themeColor=profileColor(payload["themeColor"].toString(),id);if(!manual||p.transport->aggregateLinkState()==LinkState::Connected)connection="connected";
             if(payload["stream"].isObject()){auto m=readStream(payload["stream"].toObject());if(m && m->producerPeerId==id && (id==auth.owner || id==auth.next) && (m->epoch==auth.epoch || (auth.committed&&m->epoch==auth.committed->newEpoch))){p.transport->setReceiveManifest(*m);p.remoteStreamReady=true;queue(p,"peer.hello",{{"fingerprint",fingerprint()},{"streamAck",m->streamId}});}}
             else if(payload["streamAck"].isString())p.transport->acknowledgeSendManifest(payload["streamAck"].toString());
             else if(!hosting && (auth.owner==auth.local || auth.next==auth.local))sendManifest(p);
@@ -808,9 +838,23 @@ struct Runtime::Impl {
                     assetWaiters[hash].insert(id);auto owner=peers.find(auth.owner);
                     if(owner!=peers.end()&&!requestedAssets.contains(hash)){requestedAssets.insert(hash);queue(*owner->second,"asset.request",{{"assetId",hash}});}
                 }return;
-            }if(payload["receiverReady"].toBool()){bool queued=false;for(const auto& job:outgoing)if(job.peer==id&&job.hash==hash){queued=true;break;}if(!queued&&outgoing.size()<256)outgoing.enqueue({id,hash,asset->second,0});}else queue(p,"asset.manifest",{{"assetId",hash},{"sizeBytes",u64(quint64(QFileInfo(asset->second).size()))}});}
-        else if(envelope.type==MessageType::AssetManifest && (id==auth.owner||id==auth.host)){const auto hash=payload["assetId"].toString();const auto size=parseU64(payload["sizeBytes"]);QString error;if(size&&requestedAssets.contains(hash)){if(!cache.begin(hash,*size,&error))fail(error);else queue(p,"asset.request",{{"assetId",hash},{"receiverReady",true}});}}
-        else if(envelope.type==MessageType::AssetComplete && (id==auth.owner||id==auth.host)){finishAsset(payload["assetId"].toString());}
+            }if(payload["receiverReady"].toBool()){const bool background=payload["background"].toBool();bool queued=false;for(auto& job:outgoing)if(job.peer==id&&job.hash==hash){queued=true;if(!background)job.background=false;break;}if(!queued&&outgoing.size()<256)outgoing.enqueue({id,hash,asset->second,0,background});}else queue(p,"asset.manifest",{{"assetId",hash},{"sizeBytes",u64(quint64(QFileInfo(asset->second).size()))}});}
+        else if(envelope.type==MessageType::AssetManifest && (id==auth.owner||id==auth.host||trackSender(id,payload["assetId"].toString()))){const auto hash=payload["assetId"].toString();const auto size=parseU64(payload["sizeBytes"]);QString error;if(size&&requestedAssets.contains(hash)){if(trackOnly(hash)&&*size>kMaxAnnouncedAssetBytes)trackFailed(hash,QStringLiteral("音源が大きすぎます"),false);else if(!cache.begin(hash,*size,&error)){if(trackOnly(hash))trackFailed(hash,error,false);else fail(error);}else{QJsonObject request{{"assetId",hash},{"receiverReady",true}};if(trackOnly(hash)){request["background"]=true;trackTransferAt=monotonicNanos();}queue(p,"asset.request",request);}}}
+        else if(envelope.type==MessageType::AssetComplete && (id==auth.owner||id==auth.host||trackSender(id,payload["assetId"].toString()))){finishAsset(payload["assetId"].toString());}
+        else if(envelope.type==MessageType::TrackAnnounce && p.junctionTracksV1 && trackSource(id)){
+            QString stream;quint64 revision=0;const auto rows=parseTrackAnnouncement(payload,&stream,&revision);if(!rows)return;
+            auto& seen=announceSeen[id];if(seen.first==stream&&revision<=seen.second)return;seen={stream,revision};
+            const auto before=sharedTracks.assetIds();sharedTracks.apply(id,p.name,*rows);const auto after=sharedTracks.assetIds();
+            for(const auto& hash:before-after){
+                if(!neededByHandoff(hash)){
+                    if(trackDigest&&trackDigest->hash==hash)trackDigest.reset();
+                    if(trackTransfer==hash){trackTransfer.clear();trackTransferSource.clear();}
+                    requestedAssets.remove(hash);droppedTransfers.insert(hash);cache.discard(hash);
+                }
+                releaseTrackPin(hash);
+            }
+            ++auth.revision;pumpSharedTracks();
+        }
         else if(envelope.type==MessageType::HandoffCancel && id==auth.host && payload["handoffId"].toString()==auth.handoffId){if(auth.cancel().isEmpty()){if(lifecycle=="starting")restoreLobby();prepared=false;ready=false;audible.store(auth.owner==auth.local);}}
         else if(envelope.type==MessageType::HandoffReady && hosting && id==auth.next && payload["handoffId"]==auth.handoffId){
             if(payload["requestFence"].toBool()){QString failure;q->command("handoff.accept",{},&failure);if(!failure.isEmpty())fail(failure);return;}
@@ -851,6 +895,9 @@ struct Runtime::Impl {
             const auto object=QJsonDocument::fromJson(file.readAll()).object();return object["schema"]==1&&object["decks"].toArray().size()==4;
         }
         if(kind!=assetKinds.end()&&(kind->second=="plumdeck-ddj-dsp-v1"||kind->second=="plumdeck-keylock-v1"||kind->second=="plumdeck-fx-v1"))return backend->validateDspAsset(path);
+        // Use Mixxx's real decoder registry first (AAC/M4A included on macOS),
+        // then retain libsndfile as a conservative fallback for test backends.
+        if(backend->validateAudioAsset(path))return true;
         SF_INFO info{};auto* f=openSoundFile(path,SFM_READ,&info);if(f)sf_close(f);return f!=nullptr;
     }
     void sendGraph(Peer& peer,const QJsonObject& value) {
@@ -921,31 +968,40 @@ struct Runtime::Impl {
         });
     }
     void requestAssets(Peer& source) {
-        std::function<void(QJsonValue)> walk=[&](QJsonValue v){if(v.isArray()){for(const auto& x:v.toArray())walk(x);return;}if(!v.isObject())return;auto o=v.toObject();auto hash=o["assetId"].toString();if(o["format"]=="plumdeck-ddj-dsp-v1"||o["format"]=="plumdeck-keylock-v1"||o["format"]=="plumdeck-fx-v1")assetKinds[hash]=o["format"].toString();if(!hash.isEmpty() && assets.find(hash)==assets.end()){auto path=cache.resolve(hash);if(path.isEmpty()){if(!requestedAssets.contains(hash)){requestedAssets.insert(hash);queue(source,"asset.request",{{"assetId",hash}});}}else assets[hash]=path;}for(auto it=o.begin();it!=o.end();++it)walk(it.value());};walk(preparedGraph);tryPrepare();
+        std::function<void(QJsonValue)> walk=[&](QJsonValue v){if(v.isArray()){for(const auto& x:v.toArray())walk(x);return;}if(!v.isObject())return;auto o=v.toObject();auto hash=o["assetId"].toString();if(o["format"]=="plumdeck-ddj-dsp-v1"||o["format"]=="plumdeck-keylock-v1"||o["format"]=="plumdeck-fx-v1")assetKinds[hash]=o["format"].toString();if(!hash.isEmpty() && assets.find(hash)==assets.end()){auto path=cache.resolve(hash);if(path.isEmpty()){if(!requestedAssets.contains(hash)){requestedAssets.insert(hash);queue(source,"asset.request",{{"assetId",hash}});}else if(hash==trackTransfer&&source.id==trackTransferSource&&!cache.receivedBitmap(hash).isEmpty())queue(source,"asset.request",{{"assetId",hash},{"receiverReady",true}});}else assets[hash]=path;}for(auto it=o.begin();it!=o.end();++it)walk(it.value());};walk(preparedGraph);tryPrepare();
     }
     void tryPrepare() {
         if(preparedGraph.isEmpty() || prepared || auth.next!=auth.local || (bootstrapStart&&lifecycle=="starting"))return;
         bool missing=false;std::function<QJsonValue(QJsonValue)> visit=[&](QJsonValue v)->QJsonValue{if(v.isArray()){QJsonArray a;for(const auto& x:v.toArray())a.append(visit(x));return a;}if(!v.isObject())return v;auto o=v.toObject();o.remove("path");auto hash=o["assetId"].toString();if(!hash.isEmpty()){auto it=assets.find(hash);if(it==assets.end())missing=true;else{o["path"]=it->second;}}for(auto it=o.begin();it!=o.end();++it)if(it.key()!="path")it.value()=visit(it.value());return o;};
         auto local=visit(preparedGraph).toObject();if(missing){reasons={"音源を受信しています"};return;}
         const auto nextPins=references(preparedGraph);for(const auto& hash:nextPins)cache.pin(hash,true);
-        const auto error=backend->restoreJunctionGraph(local);if(!error.isEmpty()){for(const auto& hash:nextPins-pinnedAssets)cache.pin(hash,false);fail(error);return;}
-        for(const auto& hash:pinnedAssets-nextPins)cache.pin(hash,false);pinnedAssets=nextPins;
+        const auto error=backend->restoreJunctionGraph(local);if(!error.isEmpty()){for(const auto& hash:nextPins-pinnedAssets)if(!trackPins.contains(hash))cache.pin(hash,false);fail(error);return;}
+        for(const auto& hash:pinnedAssets-nextPins)if(!trackPins.contains(hash))cache.pin(hash,false);pinnedAssets=nextPins;
         prepared=true;aligned=false;reasons={"音声の位置と状態を確認しています"};
     }
     void bulk(const QString& id,const QByteArray& bytes) {
-        if(bytes.size()<72 || bytes.size()>72+32768 || (id!=auth.owner && id!=auth.host))return;
-        auto hash=QString::fromLatin1(bytes.constData(),64);quint64 offset=0;for(int n=64;n<72;++n)offset=(offset<<8)|quint8(bytes[n]);QString error;
-        if(!cache.put(hash,offset,bytes.mid(72),&error)){fail(error);return;}
+        if(bytes.size()<72 || bytes.size()>72+32768)return;
+        auto hash=QString::fromLatin1(bytes.constData(),64);
+        if(id!=auth.owner && id!=auth.host && !trackSender(id,hash))return;
+        // A dropped Junction Live asset may still be draining from its sender.
+        if(droppedTransfers.contains(hash)&&!requestedAssets.contains(hash))return;
+        quint64 offset=0;for(int n=64;n<72;++n)offset=(offset<<8)|quint8(bytes[n]);QString error;
+        if(!cache.put(hash,offset,bytes.mid(72),&error)){if(trackOnly(hash))trackFailed(hash,error,false);else fail(error);return;}
+        if(hash==trackTransfer)trackTransferAt=monotonicNanos();
         // Completion is tested after each chunk: bulk and reliable control are
         // separate connections, so their arrival order is deliberately free.
         finishAsset(hash);
     }
-    void finishAsset(const QString& hash){
+    void finishAsset(const QString hash){
         const auto bitmap=cache.receivedBitmap(hash);if(bitmap.isEmpty()||bitmap.contains(char(0)))return;
-        QString failure;if(cache.finalize(hash,[this,hash](const QString& path){return validateAsset(hash,path);},&failure))assetReceived(hash);else fail(failure);
+        // A Junction Live asset is verified in tick slices. Anything a handoff
+        // also waits for keeps the original synchronous publication.
+        if(trackOnly(hash)){startTrackDigest(hash,true);return;}
+        QString failure;if(cache.finalize(hash,[this,hash](const QString& path){return validateAsset(hash,path);},&failure))assetReceived(hash);else{if(sharedTracks.find(hash))trackFailed(hash,QStringLiteral("音源の検証に失敗しました"),false);fail(failure);}
     }
-    void assetReceived(const QString& hash) {
-        assets[hash]=cache.resolve(hash);requestedAssets.remove(hash);
+    void assetReceived(const QString hash,const QString& verifiedPath={}) {
+        assets[hash]=verifiedPath.isEmpty()?cache.resolve(hash):verifiedPath;requestedAssets.remove(hash);
+        trackReady(hash,assets[hash]);
         auto waiters=assetWaiters.find(hash);if(waiters!=assetWaiters.end()){
             for(const auto& id:waiters->second){auto p=peers.find(id);if(p!=peers.end())queue(*p->second,"asset.manifest",{{"assetId",hash},{"sizeBytes",u64(quint64(QFileInfo(assets[hash]).size()))}});}
             assetWaiters.erase(waiters);
@@ -960,16 +1016,157 @@ struct Runtime::Impl {
     }
     void pumpAssets() {
         if(outgoing.isEmpty())return;
-        auto& job=outgoing.head();auto peer=peers.find(job.peer);if(peer==peers.end()||!peer->second->transport){outgoing.dequeue();return;}
+        // Handoff transfers go first. Background Junction Live copies are paced.
+        qsizetype index=0;while(index<outgoing.size()&&outgoing[index].background)++index;
+        if(index==outgoing.size()){if(ticks<backgroundPumpTick)return;index=0;backgroundPumpTick=ticks+kBackgroundChunkTicks;}
+        auto& job=outgoing[index];auto peer=peers.find(job.peer);if(peer==peers.end()||!peer->second->transport){outgoing.removeAt(index);return;}
         // A failed bulk connection does not tear down audio/control while DJs
         // are gathering. Only when an actual asset transfer needs it do we ask
         // for a replacement exchange, keeping the queued transfer resumable.
         if(manual&&peer->second->transport->linkState(true)==LinkState::Failed){if(peer->second->manual.state!=ExchangeState::NeedsExchange)manualSetState(*peer->second,ExchangeState::NeedsExchange,"楽曲転送用の接続を復旧できませんでした。再接続の招待を作ってください","bulk_failed");return;}
-        QFile f(job.path);if(!f.open(QIODevice::ReadOnly)){outgoing.dequeue();fail("転送元の音源を開けません");return;}
+        QFile f(job.path);if(!f.open(QIODevice::ReadOnly)){const bool background=job.background;outgoing.removeAt(index);if(!background)fail("転送元の音源を開けません");return;}
         f.seek(qint64(job.offset));auto bytes=f.read(32768);
-        if(bytes.isEmpty()){queue(*peer->second,"asset.complete",{{"assetId",job.hash}});outgoing.dequeue();return;}
+        if(bytes.isEmpty()){queue(*peer->second,"asset.complete",{{"assetId",job.hash}});outgoing.removeAt(index);return;}
         QByteArray packet=job.hash.toLatin1();for(int n=7;n>=0;--n)packet.append(char(job.offset>>(n*8)));packet+=bytes;
         if(peer->second->transport->sendBulk(packet))job.offset+=quint64(bytes.size());
+    }
+    // --- Junction Live -----------------------------------------------------
+    bool neededByHandoff(const QString& hash) const {return hash==pendingGraphAsset||assetWaiters.count(hash)>0||references(preparedGraph).contains(hash);}
+    /// Used only by Junction Live: verified in slices, failures stay on the entry.
+    bool trackOnly(const QString& hash) const {return sharedTracks.find(hash)&&!neededByHandoff(hash);}
+    bool trackSender(const QString& id,const QString& hash) const {return !trackTransfer.isEmpty()&&hash==trackTransfer&&id==trackTransferSource;}
+    /// Only the audible performer (or the remote first DJ being started) may describe what is playing.
+    bool trackSource(const QString& id) const {return hosting&&id!=auth.local&&(id==auth.owner||(auth.committed&&id==auth.committed->newOwner)||(bootstrapStart&&lifecycle=="starting"&&id==auth.next));}
+    double trackProgress(const SharedTrackList::Entry& entry) const {
+        if(entry.state==SharedTrackList::State::Verifying&&trackDigest&&trackDigest->hash==entry.track.assetId)return trackDigest->size?double(trackDigest->done)/double(trackDigest->size):0;
+        const auto bitmap=cache.receivedBitmap(entry.track.assetId);return bitmap.isEmpty()?0:double(bitmap.count(char(1)))/double(bitmap.size());
+    }
+    void holdTrackPin(const QString& hash){if(!trackPins.contains(hash)){trackPins.insert(hash);cache.pin(hash,true);}}
+    void releaseTrackPin(const QString& hash){if(trackPins.remove(hash)&&!pinnedAssets.contains(hash))cache.pin(hash,false);}
+    void trackReady(const QString hash,const QString path){
+        auto* entry=sharedTracks.find(hash);if(!entry||path.isEmpty())return;
+        entry->state=SharedTrackList::State::Ready;entry->path=path;entry->detail.clear();holdTrackPin(hash);droppedTransfers.remove(hash);
+        if(trackTransfer==hash)trackTransfer.clear();++auth.revision;
+    }
+    /// Scoped to the list entry: a Junction Live copy never marks the session failed.
+    void trackFailed(const QString hash,const QString& detail,bool retryable){
+        if(trackDigest&&trackDigest->hash==hash)trackDigest.reset();
+        if(trackTransfer==hash)trackTransfer.clear();
+        if(!neededByHandoff(hash)){requestedAssets.remove(hash);if(!retryable){cache.discard(hash);droppedTransfers.insert(hash);}}
+        if(auto* entry=sharedTracks.find(hash)){entry->state=retryable&&++entry->attempts<3?SharedTrackList::State::Pending:SharedTrackList::State::Failed;entry->detail=detail;}
+        releaseTrackPin(hash);++auth.revision;
+    }
+    /// A copy this computer already holds: the Junction cache, or an audio file
+    /// it exported itself (e.g. its own decks after handing off). Verified before use.
+    QString heldTrackCopy(const QString& hash) const {
+        const auto cached=cache.existing(hash);if(!cached.isEmpty())return cached;
+        const auto held=assets.find(hash);if(held==assets.end()||assetKinds.count(hash))return {};
+        const QFileInfo info(held->second);
+        return info.isAbsolute()&&info.isFile()&&!info.absoluteFilePath().startsWith(QDir(identityDir.path()).absolutePath()+"/")?held->second:QString{};
+    }
+    void startTrackDigest(const QString hash,bool partial){
+        if(trackDigest)return;
+        auto job=std::make_unique<TrackDigest>();job->hash=hash;job->partial=partial;job->path=partial?cache.partialPath(hash):heldTrackCopy(hash);
+        job->file.setFileName(job->path);
+        if(job->path.isEmpty()||!job->file.open(QIODevice::ReadOnly)){trackFailed(hash,partial?QStringLiteral("受信した音源を開けません"):QStringLiteral("キャッシュの音源を開けません"),!partial);return;}
+        job->size=quint64(job->file.size());holdTrackPin(hash);
+        if(auto* entry=sharedTracks.find(hash)){entry->state=SharedTrackList::State::Verifying;entry->detail.clear();}
+        trackDigest=std::move(job);
+    }
+    void pumpTrackDigest(){
+        if(!trackDigest)return;auto& job=*trackDigest;
+        const auto bytes=job.file.read(kTrackDigestSliceBytes);
+        if(bytes.isEmpty()&&!job.file.atEnd()){const auto hash=job.hash;const bool partial=job.partial;trackFailed(hash,QStringLiteral("音源を読み込めません"),partial);return;}
+        job.sha.addData(bytes);job.done+=quint64(bytes.size());if(!job.file.atEnd())return;
+        const auto hash=job.hash,path=job.path;const bool partial=job.partial;const auto digest=QString::fromLatin1(job.sha.result().toHex());
+        job.file.close();trackDigest.reset();
+        if(!partial){
+            if(digest==hash){assets[hash]=path;trackReady(hash,path);}
+            else if(path==cache.existing(hash))trackFailed(hash,QStringLiteral("キャッシュの音源が破損しています"),false);
+            else{assets.erase(hash);trackFailed(hash,QStringLiteral("手元のファイルが変更されていたため再受信します"),true);}
+            return;
+        }
+        QString failure;
+        if(cache.finalizeVerified(hash,digest,[this,hash](const QString& candidate){return validateAsset(hash,candidate);},&failure)){assetReceived(hash,cache.existing(hash));return;}
+        const bool handoff=neededByHandoff(hash);trackFailed(hash,digest==hash?QStringLiteral("この音源形式は検証できません"):QStringLiteral("音源が破損しています"),false);if(handoff)fail(failure);
+    }
+    /// Coordinator: fetch the next missing track, playing decks first, one at a
+    /// time and only while no handoff transfer needs the channel.
+    void pumpSharedTracks(){
+        if(!hosting||sharedTracks.empty()||trackDigest)return;
+        if(!trackTransfer.isEmpty()){
+            auto* entry=sharedTracks.find(trackTransfer);
+            if(!entry||entry->state!=SharedTrackList::State::Receiving)trackTransfer.clear();
+            else{
+                const auto bitmap=cache.receivedBitmap(trackTransfer);
+                if(!bitmap.isEmpty()&&!bitmap.contains(char(0)))finishAsset(trackTransfer);
+                else if(monotonicNanos()-trackTransferAt>kTrackTransferStallNanos)trackFailed(trackTransfer,QStringLiteral("受信が止まりました。再試行します"),true);
+                return;
+            }
+        }
+        // Nothing is fetched while a start or handoff is being prepared: the
+        // stream, clock and graph gates get the link to themselves. Tracks
+        // announced during a remote first start are fetched once it is live.
+        if(auth.phase!="playing"&&auth.phase!="switching")return;
+        QSet<QString> sources;if(auth.owner!=auth.local)sources.insert(auth.owner);if(auth.committed&&auth.committed->newOwner!=auth.local)sources.insert(auth.committed->newOwner);if(bootstrapStart&&lifecycle=="starting"&&!auth.next.isEmpty())sources.insert(auth.next);
+        sharedTracks.retainPendingFrom(sources);
+        const auto* next=sharedTracks.next();if(!next)return;const auto hash=next->track.assetId;
+        if(!heldTrackCopy(hash).isEmpty()){startTrackDigest(hash,false);return;}
+        const auto received=cache.receivedBitmap(hash);if(!received.isEmpty()&&!received.contains(char(0))){startTrackDigest(hash,true);return;}
+        auto peer=peers.find(next->sourcePeerId);if(peer==peers.end()||!peer->second->hello||!peer->second->transport)return;
+        trackTransfer=hash;trackTransferSource=peer->first;trackTransferAt=monotonicNanos();droppedTransfers.remove(hash);
+        if(auto* entry=sharedTracks.find(hash)){entry->state=SharedTrackList::State::Receiving;entry->detail.clear();}
+        ++auth.revision;
+        if(requestedAssets.contains(hash))return;
+        requestedAssets.insert(hash);queue(*peer->second,"asset.request",{{"assetId",hash},{"background",true}});
+    }
+    /// Performer: send only the current and next tracks. Position/rate updates
+    /// replace this small presentation snapshot; they never restore or seek a
+    /// deck, and file copies continue independently on the bulk channel.
+    void announceTracks(){
+        if(hosting||!q->localDeckTracks||auth.phase=="recovery")return;
+        if(auth.owner!=auth.local&&!(bootstrapStart&&lifecycle=="starting"&&auth.next==auth.local))return;
+        auto host=peers.find(auth.host);if(host==peers.end()||!host->second->hello||!host->second->junctionTracksV1||!host->second->transport)return;
+        if(deckHashJob.valid()){if(deckHashJob.wait_for(std::chrono::seconds(0))!=std::future_status::ready)return;for(const auto& [path,file]:deckHashJob.get())if(!file.hash.isEmpty())deckHashes[path]=file;}
+        struct Candidate {QJsonObject deck;QString path;QFileInfo info;HashedFile file;};
+        std::vector<Candidate> candidates;QStringList missing;
+        for(const auto& value:q->localDeckTracks()){
+            const auto deck=value.toObject();const auto path=deck["path"].toString();const QFileInfo info(path);
+            if(!info.isAbsolute()||!info.isFile())continue;
+            const auto known=deckHashes.find(path);
+            if(known==deckHashes.end()||known->second.size!=info.size()||known->second.modified!=info.lastModified().toMSecsSinceEpoch()){missing.append(path);continue;}
+            candidates.push_back({deck,path,info,known->second});
+        }
+        const auto rank=[](const Candidate& a,const Candidate& b){
+            const bool ap=a.deck["playing"].toBool(),bp=b.deck["playing"].toBool();if(ap!=bp)return ap>bp;
+            const double aa=a.deck["audibility"].toDouble(),ba=b.deck["audibility"].toDouble();if(std::abs(aa-ba)>.000001)return aa>ba;
+            return a.deck["loadGeneration"].toDouble()>b.deck["loadGeneration"].toDouble();
+        };
+        std::stable_sort(candidates.begin(),candidates.end(),rank);
+        std::vector<AnnouncedTrack> rows;
+        for(size_t index=0;index<candidates.size()&&rows.size()<2;++index){
+            // No current track exists while Program is silent. A loaded track
+            // is still useful as `next`, ready for the next play transition.
+            const auto& candidate=candidates[index];const auto& deck=candidate.deck;
+            if(std::any_of(rows.begin(),rows.end(),[&](const AnnouncedTrack& value){return value.assetId==candidate.file.hash;}))continue;
+            AnnouncedTrack row;row.role=rows.empty()&&deck["playing"].toBool()?QStringLiteral("current"):QStringLiteral("next");
+            if(row.role=="next"&&std::any_of(rows.begin(),rows.end(),[](const AnnouncedTrack& value){return value.role=="next";}))continue;
+            row.deck=deck["deck"].toString();row.assetId=candidate.file.hash;row.sizeBytes=quint64(candidate.info.size());
+            row.title=deck["title"].toString().trimmed().left(200);if(row.title.isEmpty())row.title=candidate.info.completeBaseName().left(200);
+            row.artist=deck["artist"].toString().left(200);row.musicalKey=deck["musicalKey"].toString().left(16);
+            row.durationMs=std::clamp(deck["durationMs"].toDouble(),0.0,86400000.0);row.bpm=std::clamp(deck["bpm"].toDouble(),0.0,1000.0);
+            row.positionMs=std::clamp(deck["positionMs"].toDouble(),-60000.0,86400000.0);row.rate=std::clamp(deck["rate"].toDouble(1),.25,4.0);
+            row.audibility=std::clamp(deck["audibility"].toDouble(),0.0,16.0);row.playing=deck["playing"].toBool();
+            assets[row.assetId]=candidate.path;rows.push_back(row);
+        }
+        if(!missing.isEmpty()){
+            if(deckHashes.size()>256)deckHashes.clear();
+            deckHashJob=std::async(std::launch::async,[missing]{std::vector<std::pair<QString,HashedFile>> result;for(const auto& path:missing){const QFileInfo info(path);result.emplace_back(path,HashedFile{info.size(),info.lastModified().toMSecsSinceEpoch(),AssetCache::hashFile(path)});}return result;});
+        }
+        const auto signature=json(trackAnnouncement(rows,{},0));
+        if(signature==announcedTracks&&monotonicNanos()-announcedAt<5000000000LL)return;
+        announcedTracks=signature;announcedAt=monotonicNanos();if(announceStream.isEmpty())announceStream=secureRandomHex(12);
+        queue(*host->second,"tracks.announce",trackAnnouncement(rows,announceStream,++announceRevision));
     }
     void openProgram() {
         if(!hosting || programOpened)return;
@@ -1164,6 +1361,11 @@ struct Runtime::Impl {
         if(auth.phase=="switching"&&now()>auth.cutoverFrame+delay+48000){const auto previousOwner=auth.committed?auth.committed->oldOwner:QString{};const bool wasBootstrap=bootstrapStart;auth.phase="playing";if(lifecycle=="starting")lifecycle="live";startDeadline=0;bootstrapStart=false;if(hosting){if(!wasBootstrap&&!previousOwner.isEmpty()&&previousOwner!=auth.owner){finishedOrder.removeAll(previousOwner);finishedOrder.append(previousOwner);}finishedOrder.removeAll(auth.owner);QStringList ordered{auth.owner};for(const auto& id:rosterOrder)if(id!=auth.owner&&!finishedOrder.contains(id))ordered.append(id);for(const auto& id:finishedOrder)if(id==auth.local||peers.count(id))ordered.append(id);rosterOrder=ordered;}backupPending.clear();backupOwner.clear();scheduledFrame.store(UINT64_MAX);scheduledEpoch.store(0);if(auth.local!=auth.owner){for(auto& [id,p]:peers)if(p->producing){p->transport->startProducer(nullptr);p->producing=false;}tap.enable(false,hosting);if(!hosting)captureEnabled.store(false);}auth.committed.reset();auth.next.clear();auth.handoffId.clear();validationStart=0;finalCheckpoint=false;ready=false;prepared=false;reasons.clear();++auth.revision;}
 
         if(ticks%4==0)pumpAssets();
+        // Lightweight current-position deltas at 10 Hz. The signature guard
+        // reduces an unchanged/paused pair to a five-second heartbeat.
+        if(ticks%20==0)announceTracks();
+        if(ticks%20==0)pumpSharedTracks();
+        pumpTrackDigest();
         if(ticks%2000==0)pruneCapsules();
     }
     void stop() {
@@ -1174,6 +1376,10 @@ struct Runtime::Impl {
         SetThreadExecutionState(ES_CONTINUOUS);
 #endif
         captureEnabled.store(false);tap.enable(false,false);audible.store(true);separateLocalMaster.store(true);
+        // The list disappears with the session. Cached files stay under the
+        // cache's own quota/eviction once no longer pinned by a listed track.
+        for(const auto& hash:trackPins)if(!pinnedAssets.contains(hash))cache.pin(hash,false);
+        trackPins.clear();droppedTransfers.clear();sharedTracks.clear();trackTransfer.clear();trackTransferSource.clear();trackTransferAt=0;trackDigest.reset();announceSeen.clear();announcedTracks.clear();announcedAt=0;announceStream.clear();
         peers.clear();program.close();programOpened=false;programState="stopped";
 #if defined(PLUMDECK_JUNCTION_WITH_LIBDATACHANNEL)
         if(signal){signal->resetCallbacks();signal->forceClose();signal.reset();}
@@ -1197,6 +1403,19 @@ quint64 Runtime::mediaFrameForSource(quint64 source,unsigned rate)const{
     const auto back=mediaFrameAdvance(anchor-source,rate);return media>back?media-back:0;
 }
 bool Runtime::active()const{return !d->auth.sessionId.isEmpty();}
+QJsonObject Runtime::monitorTrack(const QString& assetId,QString* error)const{
+    auto reject=[&](const QString& reason){if(error)*error=reason;return QJsonObject{};};
+    if(!active())return reject("Junctionセッションに参加していません");
+    // The performer changes the shared graph through ordinary, sequenced
+    // deck.load; a DJ being prepared must not have its restored decks replaced.
+    if(d->auth.owner==d->auth.local)return reject("プレイ担当中は通常のデッキロードを使ってください");
+    if(d->auth.next==d->auth.local||d->recoveryResumeFrame)return reject("引き継ぎの準備中は確認用のロードを利用できません");
+    const auto* entry=d->sharedTracks.find(assetId);
+    if(!entry)return reject("Junction Liveに該当する曲がありません");
+    if(entry->state!=SharedTrackList::State::Ready||entry->path.isEmpty()||!QFileInfo(entry->path).isFile())return reject("この曲はまだ受信・検証中です");
+    return {{"assetId",assetId},{"path",entry->path},{"title",entry->track.title},{"artist",entry->track.artist},{"musicalKey",entry->track.musicalKey},{"bpm",entry->track.bpm},{"durationMs",entry->track.durationMs}};
+}
+
 QJsonObject Runtime::snapshot()const{return d->publicState();}
 bool Runtime::localMasterAudible()const noexcept{return d->separateLocalMaster.load(std::memory_order_relaxed);}
 bool Runtime::sharedAudible()const noexcept{return d->audible.load(std::memory_order_relaxed);}

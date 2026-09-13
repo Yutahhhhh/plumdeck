@@ -30,6 +30,8 @@ export function Fader({ label, value, min, max, step = .01, vertical, disabled, 
 
 type Props = {
   id: DeckId; deck?: DeckState; channel?: ChannelState; active: boolean; connected: boolean; capability: boolean; capabilities: readonly string[];
+  /** Presentation-only Junction binding. No control may reach the real deck. */
+  monitorOnly?: boolean; monitorAssetId?: string;
   onActivate: () => void; onToggle: () => void; onCue: () => void;
   onSeek: (delta: number) => void; onSeekAbsolute: (ms: number) => void; onTempo: (rate: number) => void;
   onKeylock: (enabled: boolean) => void; onSync: (enabled: boolean) => void; onMaster?: () => void; onUnload: () => void;
@@ -44,7 +46,7 @@ type Props = {
   onGridEdit: () => void; onGridClose?: () => void; gridEditor?: ReactNode;
 };
 
-export function SoftwareDeck({ id, deck, channel, active, connected, capability, capabilities, onActivate, onToggle, onCue, onSeekAbsolute, onTempo, onKeylock, onSync, onMaster, onUnload, onHotCue, onLoop, onBeatJump, onBeatLoop, onLoopEnable, onQuantize, onFx, onSaveLoop, onLoopIn, onLoopOut, savedLoops, onRecallLoop, trackKey, cueColors, onGridEdit, onGridClose, gridEditor }: Props) {
+export function SoftwareDeck({ id, deck, channel, active, connected, capability, capabilities, monitorOnly = false, monitorAssetId, onActivate, onToggle, onCue, onSeekAbsolute, onTempo, onKeylock, onSync, onMaster, onUnload, onHotCue, onLoop, onBeatJump, onBeatLoop, onLoopEnable, onQuantize, onFx, onSaveLoop, onLoopIn, onLoopOut, savedLoops, onRecallLoop, trackKey, cueColors, onGridEdit, onGridClose, gridEditor }: Props) {
   const deckDrop = usePlayDeckDrop(`play-deck-controls-${id}`, id);
   const left = id === "A" || id === "C";
   const [loopBeats, setLoopBeats] = useState(4);
@@ -87,11 +89,11 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
   const rate = deck?.rate ?? 1;
   const trackBpm = deck?.track?.bpm ?? null;
   const bpm = trackBpm !== null && trackBpm > 0 ? trackBpm * rate : deck?.effectiveBpm ?? null;
-  const disabled = !connected || !capability || !deck?.track;
+  const disabled = monitorOnly || !connected || !capability || !deck?.track;
   const supported = (name: string) => !disabled && capabilities.includes(name);
   const quantize = (deck as (DeckState & { quantize?: boolean }) | undefined)?.quantize ?? false;
   const unavailable = (capabilityName: string, feature: string, controller = true, needsTrack = true) =>
-    !connected ? "未接続" : !capability ? `Deck ${id} 未実装` : needsTrack && !deck?.track ? "曲が未ロード"
+    monitorOnly ? "Junction Liveは表示専用です" : !connected ? "未接続" : !capability ? `Deck ${id} 未実装` : needsTrack && !deck?.track ? "曲が未ロード"
       : !capabilities.includes(capabilityName) ? `${feature} 未実装` : !controller ? `${feature} コントローラー未接続` : undefined;
   const hotCueReason = unavailable("deck.hotcue", "HOT CUE", Boolean(onHotCue));
   const loopReason = unavailable("deck.loop", "LOOP", Boolean(onBeatLoop || onLoop));
@@ -129,14 +131,14 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
     return `BAR ${Math.floor(Math.round(beat) / beatsPerBar) + 1} · ${Math.round(beat) % beatsPerBar + 1}/${beatsPerBar}`;
   };
 
-  const status = !capability ? "N/A" : !connected ? "OFFLINE" : deck?.status === "error" ? "ERROR"
+  const status = monitorOnly ? "JUNCTION LIVE" : !capability ? "N/A" : !connected ? "OFFLINE" : deck?.status === "error" ? "ERROR"
     : deck?.status === "playing" ? "PLAYING" : deck?.status === "loading" ? "LOADING"
     : deck?.track ? deck.status === "paused" ? "PAUSED" : "READY" : "EMPTY";
-  const leading = deck?.syncLeader === id && deck.syncEnabled;
+  const leading = !monitorOnly && deck?.syncLeader === id && deck.syncEnabled;
   const stateKind = leading ? "master" : deck?.status === "error" ? "error" : deck?.status === "playing" ? "playing" : "idle";
 
   return <article ref={deckDrop.setNodeRef} aria-label={`Deck ${id}`} data-deck={id} data-track-drop-deck={id} data-track-drop-label={`DECK ${id} へロード`} data-track-drop-active={deckDrop.isOver ? "true" : undefined} onClick={onActivate}
-    className={cn("dj-deck", left ? "dj-deck--left" : "dj-deck--right", active && "dj-deck--active", !deck?.track && "dj-deck--empty")}>
+    className={cn("dj-deck", left ? "dj-deck--left" : "dj-deck--right", active && "dj-deck--active", !deck?.track && "dj-deck--empty", monitorOnly && "dj-deck--junction-monitor")}>
     <div className="dj-track-info">
       <button className="dj-deck-number" aria-label={`Select deck ${id}`} aria-pressed={active} onClick={onActivate}>{id}</button>
       <div className="dj-cover">{data?.artwork ? <img src={artworkUrl(data.artwork)} alt="" /> : <Disc3 />}</div>
@@ -149,7 +151,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
         <span className="dj-num">{position < 0 ? "−" : ""}{formatTime(Math.abs(position))}.{Math.floor(Math.abs(position) / 100) % 10}</span>
       </div>
       <div className="dj-deck-flags">
-        <span className="dj-chip dj-chip--state" data-state={stateKind}>{leading ? "MASTER" : deck?.syncEnabled ? `→ ${deck.syncLeader || "—"}` : status}</span>
+        <span className="dj-chip dj-chip--state" data-state={monitorOnly ? "junction" : stateKind}>{monitorOnly ? status : leading ? "MASTER" : deck?.syncEnabled ? `→ ${deck.syncLeader || "—"}` : status}</span>
         {/* rekordbox のデッキヘッダ：左に KEY SYNC とキー表示、右に BEAT SYNC / MASTER。 */}
         <div className="dj-sync-block" role="group" aria-label={`Deck ${id} SYNC`}>
           <button className="dj-chip dj-chip--keysync" disabled
@@ -168,7 +170,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
       </div>
     </div>
     <div className="dj-overview">
-      <DeckWaveform assetId={deck?.track?.assetId} remoteWaveform={deck?.track?.waveform} trackId={trackId} positionMs={position} durationMs={duration} layout="horizontal" side={left ? "left" : "right"} color={left ? "cyan" : "fuchsia"} hotCues={deck?.hotCues} playing={deck?.status === "playing"} rate={deck?.rate ?? 1} bpm={deck?.track?.bpm} loopRegion={deck?.loopRegion} onSeek={disabled ? undefined : onSeekAbsolute} />
+      <DeckWaveform assetId={deck?.track?.assetId} remoteWaveform={deck?.track?.waveform} monitorAssetId={monitorAssetId} trackId={trackId} positionMs={position} durationMs={duration} layout="horizontal" side={left ? "left" : "right"} color={left ? "cyan" : "fuchsia"} hotCues={deck?.hotCues} playing={deck?.status === "playing"} rate={deck?.rate ?? 1} bpm={deck?.track?.bpm} loopRegion={deck?.loopRegion} onSeek={disabled ? undefined : onSeekAbsolute} />
     </div>
     <div className="dj-deck-controls">
       <div className="dj-perf">
@@ -184,7 +186,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
         <div className="dj-perf-main">
           <div className="dj-phase" aria-hidden style={{ gridTemplateColumns: `repeat(${phaseCells}, 1fr)` }}>{Array.from({ length: phaseCells }, (_, index) => <i key={index} className={cn(index % beatsPerBar === 0 && "is-bar", index === phase && "is-on")} />)}</div>
           {gridEditor ? <div className="dj-grid-editor-slot">{gridEditor}</div> : <>
-            {padMode === "sampler" ? <SamplerPads offset={left?8:0} enabled={Boolean(connected && capabilities.includes("sampler"))} cueAvailable={capabilities.includes("mixer.pfl")} /> : <PerformancePads page={padPage} cueColors={cueColors} onKey={(semitones, keyboard) => {
+            {padMode === "sampler" ? <SamplerPads offset={left?8:0} enabled={Boolean(!monitorOnly && connected && capabilities.includes("sampler"))} cueAvailable={!monitorOnly && capabilities.includes("mixer.pfl")} /> : <PerformancePads page={padPage} cueColors={cueColors} onKey={(semitones, keyboard) => {
               setPadError(""); const trackId = deck?.track?.trackId, generation = djEngineClient.getDeckGeneration(id);
               void (async () => { await djEngineClient.send("deck.key.shift", {deck:id,trackId,semitones});
                 if (keyboard && generation === djEngineClient.getDeckGeneration(id)) { const cue = deck?.hotCues[keyboardCue]; if (cue == null) throw new Error("KEYBOARDにはホットキューを設定してください"); await djEngineClient.seek(id,cue); if(generation === djEngineClient.getDeckGeneration(id)) await djEngineClient.play(id); }
@@ -194,7 +196,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
               onHotCue={onHotCue} onBeatLoop={(beats) => { setLoopBeats(beats); (onBeatLoop ?? onLoop)(beats); }} onBeatJump={onBeatJump} onFx={onFx} />}
             {padMode === "keyboard" && <label>HOT CUE <select aria-label={`Deck ${id} KEYBOARDのキュー`} value={keyboardCue} onChange={e=>setKeyboardCue(Number(e.target.value))}>{Array.from({length:16},(_,i)=><option key={i} value={i} disabled={deck?.hotCues[i]==null}>{String.fromCharCode(65+i)}</option>)}</select></label>}
             {padError && <small role="alert">{padError}</small>}
-            <details className="dj-pad-extras"><summary>KEY / SLIP / MEMORY</summary><DeckPerformanceControls id={id} deck={deck} enabled={Boolean(connected && deck?.track)} /></details>
+            <details className="dj-pad-extras"><summary>KEY / SLIP / MEMORY</summary><DeckPerformanceControls id={id} deck={deck} enabled={Boolean(!monitorOnly && connected && deck?.track)} /></details>
             <div className="dj-pad-mode-row">
               <div className="dj-pad-pages" role="group" aria-label={`Deck ${id} ${padMode==="sampler"?"バンク":"ページ"}`}>
                 {Array.from({length:lastPage+1},(_,page)=><button key={page} type="button" aria-pressed={displayedPage===page} onClick={()=>movePage(page-displayedPage)}>{padMode==="sampler"?"BANK":"PAGE"} {page+1}</button>)}
@@ -245,7 +247,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
       <TempoPlatter deckId={id} bpm={bpm} trackBpm={trackBpm} rate={rate} positionMs={position}
         playing={deck?.status === "playing"} disabled={!supported("deck.tempo")}
         range={tempoRange} onRange={(range) => { setTempoRange(range); localStorage.setItem(`plumdeck.tempoRange.${id}`, String(range)); window.dispatchEvent(new CustomEvent("plumdeck:controller-tempo-range", { detail: { deck: id, range } })); }} onTempo={onTempo} />
-      <button className="dj-eject dj-eject--deck" disabled={disabled} onClick={onUnload} aria-label={`Eject deck ${id}`} title="デッキから取り出す"><Upload /></button>
+      <button className="dj-eject dj-eject--deck" disabled={monitorOnly ? false : disabled} onClick={onUnload} aria-label={`Eject deck ${id}`} title={monitorOnly ? "Junction Live表示を解除（実デッキへ戻る）" : "デッキから取り出す"}><Upload /></button>
     </div>
     {deck?.lastError && <div className="dj-deck-error" role="alert">{deck.lastError}</div>}
   </article>;

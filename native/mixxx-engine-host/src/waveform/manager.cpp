@@ -46,7 +46,7 @@ Manager::Manager():root_(qEnvironmentVariable("PLUMDECK_WAVEFORM_CACHE")) {
 }
 Manager::~Manager(){stop_=true;wake_.notify_one();if(worker_.joinable())worker_.join();}
 QJsonObject Manager::ensure(const QString& path,quint64 generation) {
-    const auto binding=sourceBinding(path);if(!binding.provider)return {{"state","queued"},{"error","NOT_READY"}};
+    const auto binding=ensureSourceBinding(path);if(!binding.provider)return {{"state","error"},{"error","DECODE_FAILED"}};
     const auto fp=fingerprint(path);if(fp.isEmpty()||fp!=binding.fingerprint)return {{"state","error"},{"error","SOURCE_CHANGED"}};
     const auto key=QString::fromLatin1(QCryptographicHash::hash((fp+binding.provider->getDisplayName()+":3ebac449:stereo:64:butterworth2-v2").toUtf8(),QCryptographicHash::Sha256).toHex());
     std::lock_guard<std::mutex> lock(mutex_);

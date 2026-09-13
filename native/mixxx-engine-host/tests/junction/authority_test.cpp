@@ -52,3 +52,8 @@ JTEST("authority","waiting DJ can query waveform and timing without mutation aut
  for(const auto* op:{"waveform.ensure","waveform.manifest","engine.clock.probe","deck.timing.trace"})CHECK(a.authorize(op,{},100).isEmpty());
  CHECK(!a.authorize("deck.seek",ticket(a,a.epoch),100).isEmpty());CHECK(!a.authorize("deck.load",ticket(a,a.epoch),100).isEmpty());
 }
+JTEST("authority","a waiting DJ can read waveform files of its own loaded deck but not change shared decks"){
+ auto a=authority();a.owner="peer-other";
+ for(const auto* op:{"waveform.ensure","waveform.manifest","waveform.acquireReadLease","waveform.releaseReadLease","waveform.requestRange","waveform.cancelRequest","waveform.invalidate"}){CHECK(Authority::readOnlyQuery(op));CHECK(a.authorize(op,{},10).isEmpty());}
+ CHECK(!a.authorize("deck.load",{},10).isEmpty());CHECK(!a.authorize("deck.load",ticket(a,1),10).isEmpty());CHECK(!a.authorize("junction.tracks.load",{},10).isEmpty());
+}

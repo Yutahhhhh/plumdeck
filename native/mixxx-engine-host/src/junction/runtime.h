@@ -26,6 +26,12 @@ public:
     bool localMasterAudible() const noexcept;
     std::function<QJsonObject()> graphSnapshot;
     std::function<QString(const QJsonObject&)> restoreGraph;
+    /// Performer side: candidate local decks. Runtime selects current + next;
+    /// paths are hashed here and never announced.
+    std::function<QJsonArray()> localDeckTracks;
+    /// Resolves a verified Junction presentation asset for waveform analysis.
+    /// It never loads, seeks or changes a real deck.
+    QJsonObject monitorTrack(const QString& assetId,QString* error) const;
 private:
     struct Impl; std::unique_ptr<Impl> d;
 };
