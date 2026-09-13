@@ -36,6 +36,11 @@ mcp = MCPServer(
         "For audio reanalysis use plan_track_analysis then start_track_analysis. "
         "Default to embedding-only and only_outdated to preserve tags and avoid unnecessary work. "
         "Monitor, pause and resume durable jobs with the track analysis tools."
+        " Junction tools control only the running local plumdeck desktop app through its "
+        "authenticated loopback bridge. Inspect exchange text before importing it, check "
+        "junction_get_state after mutations, and do not approve, reject, end, leave, start "
+        "recording, or begin a handoff without the user's explicit intent. Junction Live "
+        "deck attachment is display-only; Program remains the actual venue output."
     ),
 )
 

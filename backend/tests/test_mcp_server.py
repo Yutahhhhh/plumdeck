@@ -219,11 +219,28 @@ async def test_list_tools_returns_all_tools(mcp_session):
     """list_tools で全ツールが返り、MCP-client reasoning toolsが含まれることを検証する。"""
     result = await mcp_session.list_tools()
     names = [t.name for t in result.tools]
-    assert len(names) == 46
+    assert len(names) == 83
     assert {"list_wordplay_pairs", "propose_wordplay_pairs", "approve_wordplay_pair", "reject_wordplay_pair"}.issubset(names)
     assert {"register_track_lyrics", "register_track_lyrics_batch"}.issubset(names)
     assert {"plan_track_analysis", "start_track_analysis", "get_track_analysis_status",
             "pause_track_analysis", "resume_track_analysis"}.issubset(names)
+    assert {
+        "junction_get_state", "junction_inspect_exchange", "junction_list_audio_devices",
+        "junction_get_network", "junction_test_network", "junction_configure_network",
+        "junction_clear_network", "junction_create_session", "junction_join_session",
+        "junction_create_invite", "junction_import_exchange",
+        "junction_approve_participant", "junction_reject_participant",
+        "junction_cancel_invite", "junction_retry_participant", "junction_update_profile",
+        "junction_reorder_roster", "junction_start_session", "junction_request_handoff",
+        "junction_cancel_handoff", "junction_accept_handoff", "junction_resume_recovery",
+        "junction_leave_session", "junction_end_session", "junction_configure_program",
+        "junction_start_program_recording", "junction_stop_program_recording",
+        "junction_load_private_preview", "junction_play_private_preview",
+        "junction_pause_private_preview", "junction_seek_private_preview",
+        "junction_set_private_preview_gain", "junction_unload_private_preview",
+        "junction_get_private_preview_state", "junction_set_microphone_enabled",
+        "junction_attach_live_monitor", "junction_detach_live_monitor",
+    }.issubset(names)
     for expected in [
         "search_tracks",
         "list_setlists",
