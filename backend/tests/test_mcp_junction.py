@@ -102,8 +102,11 @@ def test_tools_translate_typed_arguments(monkeypatch):
         junction.junction_attach_live_monitor("C", "a" * 64)
         junction.junction_set_microphone_enabled(True)
 
+        junction.junction_get_exchange_text("invite", "peer-789")
+
     assert [call["body"]["action"] for call in calls] == [
-        "network.configure", "peer.reject", "live.attach", "mic.enabled"
+        "network.configure", "peer.reject", "live.attach", "mic.enabled",
+        "exchange.export",
     ]
     assert calls[0]["body"]["arguments"] == {
         "stunUrls": ["stun:stun.example.test"],
@@ -118,6 +121,18 @@ def test_tools_translate_typed_arguments(monkeypatch):
     }
     assert calls[1]["body"]["arguments"] == {"peerId": "peer-456"}
     assert calls[2]["body"]["arguments"] == {"deck": "C", "assetId": "a" * 64}
+    assert calls[4]["body"]["arguments"] == {"kind": "invite", "peerId": "peer-789"}
+
+
+def test_guest_response_exchange_export_may_omit_peer_id(monkeypatch):
+    with _fake_bridge() as (url, calls):
+        monkeypatch.setenv(BRIDGE_URL_ENV, url)
+        monkeypatch.setenv(BRIDGE_TOKEN_ENV, "token")
+        junction.junction_get_exchange_text("response")
+    assert calls[0]["body"] == {
+        "action": "exchange.export",
+        "arguments": {"kind": "response"},
+    }
 
 
 @pytest.mark.parametrize("missing", [BRIDGE_URL_ENV, BRIDGE_TOKEN_ENV])
@@ -173,7 +188,7 @@ def test_junction_tool_schemas_are_specific_and_bounded():
     import mcp_server.server  # noqa: F401 - registers every tool
 
     tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
-    assert len([name for name in tools if name.startswith("junction_")]) == 37
+    assert len([name for name in tools if name.startswith("junction_")]) == 38
     exchange = tools["junction_inspect_exchange"].parameters["properties"]["exchange_text"]
     assert exchange["type"] == "string"
     assert exchange["minLength"] == 1
@@ -182,4 +197,7 @@ def test_junction_tool_schemas_are_specific_and_bounded():
     assert deck == {"enum": ["A", "B", "C", "D"], "title": "Deck", "type": "string"}
     asset = tools["junction_attach_live_monitor"].parameters["properties"]["asset_id"]
     assert asset["pattern"] == "^[0-9a-f]{64}$"
+    export = tools["junction_get_exchange_text"].parameters
+    assert export["properties"]["kind"]["enum"] == ["invite", "response", "notice"]
+    assert export["required"] == ["kind"]
     assert "action" not in tools["junction_get_state"].parameters.get("properties", {})

@@ -24,6 +24,7 @@ from mcp_server.junction_bridge import (
 
 Deck = Literal["A", "B", "C", "D"]
 TurnMode = Literal["rest", "temporary"]
+ExchangeKind = Literal["invite", "response", "notice"]
 ExchangeText = Annotated[
     str, Field(min_length=1, max_length=MAX_EXCHANGE_TEXT_BYTES)
 ]
@@ -75,6 +76,18 @@ def junction_get_state() -> Dict[str, Any]:
 def junction_inspect_exchange(exchange_text: ExchangeText) -> Dict[str, Any]:
     """招待・返答・通知テキストを取り込まずに検証し、秘密を除いた概要だけを返す。"""
     return _call("exchange.inspect", {"text": _exchange(exchange_text)})
+
+
+@mcp.tool()
+def junction_get_exchange_text(
+    kind: ExchangeKind,
+    peer_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """非同期生成が完了した手動交換テキストを取得する。host側のinvite/noticeは通常peer_idが必要で、guest側のresponseは省略できる。既存の招待・参加処理は再実行しない。"""
+    arguments: Dict[str, Any] = {"kind": kind}
+    if peer_id is not None:
+        arguments["peerId"] = _text(peer_id, "peer_id", 128)
+    return _call("exchange.export", arguments)
 
 
 @mcp.tool()
