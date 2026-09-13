@@ -85,6 +85,15 @@ def test_bridge_returns_structured_error_envelope_unchanged(monkeypatch):
         assert junction.junction_end_session() == envelope
 
 
+def test_prepare_engine_uses_dedicated_safe_action(monkeypatch):
+    response = {"ok": True, "result": {"running": True, "reused": False}}
+    with _fake_bridge(response) as (url, calls):
+        monkeypatch.setenv(BRIDGE_URL_ENV, url)
+        monkeypatch.setenv(BRIDGE_TOKEN_ENV, "token")
+        assert junction.junction_prepare_engine() == response
+    assert calls[0]["body"] == {"action": "prepare", "arguments": {}}
+
+
 def test_tools_translate_typed_arguments(monkeypatch):
     with _fake_bridge() as (url, calls):
         monkeypatch.setenv(BRIDGE_URL_ENV, url)
@@ -188,7 +197,7 @@ def test_junction_tool_schemas_are_specific_and_bounded():
     import mcp_server.server  # noqa: F401 - registers every tool
 
     tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
-    assert len([name for name in tools if name.startswith("junction_")]) == 38
+    assert len([name for name in tools if name.startswith("junction_")]) == 39
     exchange = tools["junction_inspect_exchange"].parameters["properties"]["exchange_text"]
     assert exchange["type"] == "string"
     assert exchange["minLength"] == 1
@@ -200,4 +209,5 @@ def test_junction_tool_schemas_are_specific_and_bounded():
     export = tools["junction_get_exchange_text"].parameters
     assert export["properties"]["kind"]["enum"] == ["invite", "response", "notice"]
     assert export["required"] == ["kind"]
+    assert tools["junction_prepare_engine"].parameters.get("properties") == {}
     assert "action" not in tools["junction_get_state"].parameters.get("properties", {})

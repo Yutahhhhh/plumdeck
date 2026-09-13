@@ -73,6 +73,12 @@ def junction_get_state() -> Dict[str, Any]:
 
 
 @mcp.tool()
+def junction_prepare_engine() -> Dict[str, Any]:
+    """アプリの新規起動後は最初に呼ぶ。デスクトップが所有する音声エンジンを安全に起動し、既に動作中ならそのインスタンスを再利用する。"""
+    return _call("prepare")
+
+
+@mcp.tool()
 def junction_inspect_exchange(exchange_text: ExchangeText) -> Dict[str, Any]:
     """招待・返答・通知テキストを取り込まずに検証し、秘密を除いた概要だけを返す。"""
     return _call("exchange.inspect", {"text": _exchange(exchange_text)})
