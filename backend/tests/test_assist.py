@@ -8,7 +8,6 @@ behaviour is to refuse rather than to guess.
 import pytest
 
 from app.services.assist_app_service import (
-    STATUS_AMBIGUOUS,
     STATUS_EMPTY,
     STATUS_NOT_IN_LIBRARY,
     STATUS_RESOLVED,
@@ -59,6 +58,21 @@ def patch_collection(mocker, entries, registered=None):
         "lookup_by_paths",
         lambda paths: {rekordbox_library.normalize_path(e.filepath): e for e in entries},
     )
+    mocker.patch.object(
+        rekordbox_library,
+        "lookup_by_identities",
+        lambda identities: {
+            rekordbox_library.normalize_path(e.filepath): e
+            for e in entries
+            if any(
+                rekordbox_library.normalize_text(e.title)
+                == rekordbox_library.normalize_text(title)
+                and rekordbox_library.normalize_text(e.artist)
+                == rekordbox_library.normalize_text(artist)
+                for title, artist in identities
+            )
+        },
+    )
     if registered is not None:
         mocker.patch.object(
             rekordbox_library,
@@ -105,7 +119,7 @@ def test_the_sampler_and_click_files_never_become_deck_tracks(session, mocker, t
     assert deck["match_confidence"] == "title_and_artist"
 
 
-def test_two_open_copies_of_the_same_track_are_reported_as_ambiguous(session, mocker, tmp_path):
+def test_two_open_copies_of_the_same_track_choose_one_deterministically(session, mocker, tmp_path):
     first = tmp_path / "a" / "Bad Girl.mp3"
     second = tmp_path / "b" / "Bad Girl.mp3"
     for path in (first, second):
@@ -123,9 +137,28 @@ def test_two_open_copies_of_the_same_track_are_reported_as_ambiguous(session, mo
     deck = AssistAppService(session).resolve_decks(
         [observation(1, "Bad Girl", "Usher")], [str(first), str(second)]
     )["decks"][0]
-    assert deck["status"] == STATUS_AMBIGUOUS
-    assert deck["track"] is None
-    assert {candidate["rekordbox_id"] for candidate in deck["candidates"]} == {"1", "2"}
+    assert deck["status"] == STATUS_RESOLVED
+    assert deck["track"] is not None
+    assert deck["rekordbox_id"] == "1"
+
+
+def test_exact_collection_identity_falls_back_when_open_paths_miss_track(
+    session, mocker, tmp_path
+):
+    audio = tmp_path / "Bad Girl.mp3"
+    audio.write_bytes(b"")
+    track = make_track(session, str(audio))
+    collection_entry = entry(str(audio), "Bad Girl", "Usher", content_id="9")
+    patch_collection(mocker, [collection_entry])
+    mocker.patch.object(rekordbox_library, "lookup_by_paths", return_value={})
+
+    deck = AssistAppService(session).resolve_decks(
+        [observation(1, "Bad Girl", "Usher")], [SAMPLER]
+    )["decks"][0]
+
+    assert deck["status"] == STATUS_RESOLVED
+    assert deck["track"]["id"] == track.id
+    assert deck["rekordbox_id"] == "9"
 
 
 def test_contradictory_artist_does_not_resolve_by_title(session, mocker, tmp_path):
