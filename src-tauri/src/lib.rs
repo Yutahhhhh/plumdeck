@@ -59,6 +59,7 @@ use tauri_plugin_deep_link::DeepLinkExt;
 mod assist;
 mod dj_engine;
 mod junction_mcp_bridge;
+mod share_musics;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -148,6 +149,7 @@ pub fn run() {
         .manage(JunctionInvite::default())
         .manage(assist::AssistState::default())
         .manage(assist::commands::WindowBounds::default())
+        .manage(share_musics::ShareMusics::default())
         .invoke_handler(tauri::generate_handler![
             junction_pending_invite,
             startup::backend_startup_status,
@@ -175,6 +177,11 @@ pub fn run() {
             dj_engine::commands::junction_command,
             junction_mcp_bridge::junction_live_monitor_deck,
             junction_mcp_bridge::junction_live_monitor_set,
+            share_musics::share_musics_status,
+            share_musics::share_musics_login,
+            share_musics::share_musics_cancel_login,
+            share_musics::share_musics_logout,
+            share_musics::share_musics_request,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

@@ -198,6 +198,7 @@ jobs:
         env:
           CI: true
           TAURI_SKIP_SIDECAR: true
+          PLUMDECK_SHARE_MUSICS_URL: ${{ secrets.PLUMDECK_SHARE_MUSICS_URL }}
 
       - name: Preserve and verify nested macOS frameworks
         if: matrix.platform == 'macos-latest'

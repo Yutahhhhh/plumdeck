@@ -55,6 +55,8 @@ interface Props {
   busyKey?: string;
   errors: Record<string, string>;
   copiedPackets: Record<string, string | undefined>;
+  /** Peers whose invite/response travel through share-musics. */
+  automaticPeers?: Set<string>;
   onExchangeAction: (peerId: string, action: ExchangeActionId) => void;
   onImportText: (peerId: string, text: string) => Promise<void>;
   onChooseParticipant: (peerId: string, first: boolean) => void;
@@ -71,6 +73,7 @@ export function JunctionRoster({
   busyKey,
   errors,
   copiedPackets,
+  automaticPeers,
   onExchangeAction,
   onImportText,
   onChooseParticipant,
@@ -143,6 +146,7 @@ export function JunctionRoster({
                 busy={busyKey === participant.peerId || busyKey === 'handoff'}
                 error={errors[participant.peerId]}
                 copiedPacket={copiedPackets[participant.peerId]}
+                automatic={Boolean(automaticPeers?.has(participant.peerId))}
                 onExchangeAction={onExchangeAction}
                 onImportText={onImportText}
                 onChooseParticipant={onChooseParticipant}
@@ -169,6 +173,7 @@ interface RowProps {
   busy: boolean;
   error?: string;
   copiedPacket?: string;
+  automatic: boolean;
   onExchangeAction: (peerId: string, action: ExchangeActionId) => void;
   onImportText: (peerId: string, text: string) => Promise<void>;
   onChooseParticipant: (peerId: string, first: boolean) => void;
@@ -185,6 +190,7 @@ function RosterRow({
   busy,
   error,
   copiedPacket,
+  automatic,
   onExchangeAction,
   onImportText,
   onChooseParticipant,
@@ -201,7 +207,7 @@ function RosterRow({
     disabled: !sortable,
   });
   const style = {transform: CSS.Transform.toString(transform), transition};
-  const guidance = host && !isSelf && participant.exchange ? deriveHostCardGuidance(participant, Boolean(copiedPacket && copiedPacket === participant.exchange.inviteText)) : undefined;
+  const guidance = host && !isSelf && participant.exchange ? deriveHostCardGuidance(participant, Boolean(copiedPacket && copiedPacket === participant.exchange.inviteText), automatic) : undefined;
   const primary = primaryAction(participant, snapshot, host, state);
   // The coordinator can withdraw a pending turn before it is committed.
   const cancellable = handoffCancelAvailable(state, host);
@@ -274,7 +280,7 @@ function RosterRow({
 
       {guidance && <ExchangeFlow
         key={`${participant.peerId}:${participant.exchange?.inviteId ?? ''}`}
-        guidance={guidance} host connected={participant.exchange?.state === 'connected'} busy={busy} error={error}
+        guidance={guidance} host connected={participant.exchange?.state === 'connected'} automatic={automatic} busy={busy} error={error}
         onAction={(action) => onExchangeAction(participant.peerId, action)}
         onImport={(text) => onImportText(participant.peerId, text)}
       />}

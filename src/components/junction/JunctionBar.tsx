@@ -5,6 +5,7 @@ import { useJunction } from '@/hooks/useJunction';
 import { junctionState } from '@/services/junction/state';
 import { junctionCommand } from '@/services/junction/client';
 import { djEngineClient } from '@/services/dj-engine/client';
+import { startShareMusics } from '@/services/junction/share-musics/coordinator';
 import { JunctionRootButton } from './JunctionRootButton';
 import { JunctionPanel } from './JunctionPanel';
 import './junction.css';
@@ -22,6 +23,7 @@ export function JunctionBar() {
 
   useEffect(() => {
     if (!isTauri()) return;
+    startShareMusics();
     let live = true;
     let running = false;
     const poll = async () => {

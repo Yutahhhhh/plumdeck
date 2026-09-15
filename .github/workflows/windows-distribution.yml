@@ -208,6 +208,8 @@ jobs:
         shell: bash
         run: cp .env.production.example .env.production
       - run: pnpm exec tauri build --bundles msi --config src-tauri/tauri.windows.conf.json
+        env:
+          PLUMDECK_SHARE_MUSICS_URL: ${{ secrets.PLUMDECK_SHARE_MUSICS_URL }}
       - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
