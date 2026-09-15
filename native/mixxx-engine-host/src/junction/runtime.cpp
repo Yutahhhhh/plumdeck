@@ -126,7 +126,7 @@ struct Runtime::Impl {
     // is still carrying audio. It is promoted only once it actually connects,
     // so a manual re-exchange never interrupts an established peer.
     struct PendingControl {QString type;QByteArray bytes;};
-    struct Peer {QString id,name,fp,avatarDataUrl,themeColor;bool approved=false,hello=false,junctionTracksV1=false,producing=false,remoteStreamReady=false,endingAck=false;std::unique_ptr<MediaTransport> transport;QQueue<PendingControl> pending;
+    struct Peer {QString id,name,fp,avatarDataUrl,themeColor;bool approved=false,hello=false,junctionTracksV1=false,producing=false,remoteStreamReady=false,endingAck=false,lite=false;QString liteSdp,liteSdpType;std::unique_ptr<MediaTransport> transport;QQueue<PendingControl> pending;
         qint64 lastControlAt=0,healthAt=0,bulkDisconnectedAt=0;quint64 serial=0,candidateSerial=0;std::unique_ptr<MediaTransport> candidate,retiring; qint64 retireAt=0;ManualAttempt manual;HealthReportMessage health;bool hasHealth=false;
         MediaTransport::Statistics healthStats;bool healthStatsReady=false,probeReady=false;double lastProbeRttMs=0,smoothedRttMs=0,smoothedJitterMs=0;};
     std::map<QString,std::unique_ptr<Peer>> peers;
@@ -136,7 +136,7 @@ struct Runtime::Impl {
     QTimer timer;quint64 ticks=0,controlSeq=0;QString origin,room,name,displayName,avatarDataUrl,themeColor,token,recovery,invite,problem,connection="disconnected",programState="idle";
     QStringList iceServers;bool iceReady=false;QQueue<QJsonObject> deferredSignals;QJsonObject pendingInvite,graph,preparedGraph;QJsonArray participantRoster;
     QString lifecycle=QStringLiteral("live");QStringList rosterOrder,finishedOrder;QSet<QString> turnRequests;
-    bool hosting=false,adopt=false,programOpened=false,prepared=false,ready=false,bootstrapStart=false;
+    bool hosting=false,adopt=false,programOpened=false,prepared=false,ready=false,bootstrapStart=false,liteSession=false;
     QStringList reasons;quint32 delay=24000;int programDevice=-1,maxPeers=8;
     qint64 inviteExpiry=0,turnRefreshAt=0,fenceDeadline=0,startDeadline=0,lastSharedChange=0,reconnectAt=0,endingAt=0;bool endingHost=false;unsigned reconnectAttempts=0;bool graphDirty=false;quint64 generation=1,graphSeq=0,signalGeneration=0;
     bool aligned=false,finalCheckpoint=false,validationSent=false;
@@ -220,7 +220,7 @@ struct Runtime::Impl {
         if(p.pending.size()>=128) {p.pending.clear();if(manual)manualSetState(p,ExchangeState::NeedsExchange,"このDJへの制御通信が混雑しています。接続情報を作り直してください","control_backpressure");else fail("制御通信が混雑しています");return;}
         p.pending.enqueue(PendingControl{type,bytes});
     }
-    void broadcast(const QString& type,const QJsonObject& payload) {for(auto& [id,p]:peers)if(p->approved&&p->transport)queue(*p,type,payload);}
+    void broadcast(const QString& type,const QJsonObject& payload) {for(auto& [id,p]:peers)if(p->approved&&p->transport&&!p->lite)queue(*p,type,payload);}
     void restoreLobby() {
         lifecycle="lobby";startDeadline=0;bootstrapStart=false;
         captureEnabled.store(false);tap.enable(false,false);for(auto& [id,p]:peers){Q_UNUSED(id);if(p->producing&&p->transport){p->transport->startProducer(nullptr);p->producing=false;}}
@@ -482,6 +482,45 @@ struct Runtime::Impl {
         p.transport=std::move(transport);
         queue(p,"peer.hello",localProfile());
         if(hosting)queue(p,"session.snapshot",wireState(true));
+    }
+    void sendLite(Peer& p,const QJsonObject& value) {
+        if(p.lite&&p.transport)p.transport->sendControl(json(value));
+    }
+    void sendLiteOwner() {
+        for(auto& [id,p]:peers){Q_UNUSED(id);if(p->lite&&p->approved)sendLite(*p,{{"type","owner"},{"ownerPeerId",auth.owner}});}
+    }
+    void selectLiteOwner(const QString& target) {
+        if(target!=auth.local){auto found=peers.find(target);if((found==peers.end()||!found->second->approved)&&!(liteSession&&validOpaqueId(target)))return;}
+        const auto previous=auth.owner;if(previous==target)return;
+        auth.owner=target;auth.next.clear();auth.handoffId.clear();auth.committed.reset();auth.phase="playing";++auth.epoch;++auth.revision;
+        turnRequests.remove(target);finishedOrder.removeAll(target);if(!previous.isEmpty()&&previous!=target){finishedOrder.removeAll(previous);finishedOrder.append(previous);}rosterOrder.removeAll(target);rosterOrder.prepend(target);
+        programPending.clear();programEnqueuedThrough=0;ownerAudioAt=0;captureEpoch.store(auth.epoch);scheduledEpoch.store(0);scheduledFrame.store(UINT64_MAX);
+        if(target==auth.local){q->setCaptureAnchor(UINT64_MAX,0);captureEnabled.store(true);tap.enable(liteSession,true);}else{captureEnabled.store(false);tap.enable(false,false);}
+        for(auto& [id,p]:peers){
+            if(p->lite&&p->transport){if(id==target&&hosting)p->transport->setBrowserReceive(auth.epoch,now());if(!hosting&&id==auth.host){if(target==auth.local){p->transport->setBrowserSendEpoch(auth.epoch,now());p->transport->startProducer(&tap.networkRing());p->producing=true;}else{p->transport->startProducer(nullptr);p->producing=false;}}}
+        }
+        audible.store(target==auth.local);sendLiteOwner();broadcast("session.snapshot",wireState(false));
+    }
+    void liteControl(const QString& id,const QByteArray& bytes) {
+        auto found=peers.find(id);if(found==peers.end()||!found->second->lite||bytes.size()>4096)return;
+        QJsonParseError parse;const auto document=QJsonDocument::fromJson(bytes,&parse);if(parse.error!=QJsonParseError::NoError||!document.isObject())return;
+        const auto message=document.object();const auto type=message["type"].toString();
+        if(type=="handoff-request"&&hosting&&found->second->approved){turnRequests.insert(id);++auth.revision;return;}
+        if(type=="owner"&&!hosting&&id==auth.host){const auto owner=message["ownerPeerId"].toString();if(validOpaqueId(owner))selectLiteOwner(owner);}
+    }
+    QString buildLitePeer(Peer& p,bool host) {
+        if(p.transport)return {};
+        QPointer<Runtime> safe=q;const auto id=p.id;MediaTransport::Callbacks callbacks;
+        callbacks.localDescription=[safe,id](bool,QString sdp,QString type,QString){if(safe)QMetaObject::invokeMethod(safe,[safe,id,sdp,type]{if(!safe)return;auto it=safe->d->peers.find(id);if(it==safe->d->peers.end()||!it->second->lite)return;it->second->liteSdp=sdp;it->second->liteSdpType=type;++safe->d->auth.revision;},Qt::QueuedConnection);};
+        callbacks.linkState=[safe,id](bool,LinkState state){if(safe)QMetaObject::invokeMethod(safe,[safe,id,state]{if(!safe)return;auto it=safe->d->peers.find(id);if(it==safe->d->peers.end()||!it->second->lite)return;it->second->hello=state==LinkState::Connected;if(it->second->hello){safe->d->connection="connected";safe->d->problem.clear();safe->d->sendLiteOwner();}++safe->d->auth.revision;},Qt::QueuedConnection);};
+        callbacks.control=[safe,id](QByteArray bytes){if(safe)QMetaObject::invokeMethod(safe,[safe,id,bytes]{if(safe)safe->d->liteControl(id,bytes);},Qt::QueuedConnection);};
+        callbacks.error=[safe,id](QString failure){if(safe)QMetaObject::invokeMethod(safe,[safe,id,failure]{if(!safe)return;auto it=safe->d->peers.find(id);if(it!=safe->d->peers.end()){it->second->hello=false;safe->d->problem=failure;++safe->d->auth.revision;}},Qt::QueuedConnection);};
+        auto transport=std::make_unique<MediaTransport>(p.id,QStringList{QStringLiteral("stun:stun.l.google.com:19302")},std::move(callbacks),identity,false);QString error;
+        if(!transport->startLite(host,&error))return error.isEmpty()?QStringLiteral("PlumDeck Liteとの接続を開始できません"):error;
+        p.transport=std::move(transport);p.lite=true;p.approved=true;
+        if(host)p.transport->setBrowserReceive(auth.epoch,now());
+        else{StreamManifest manifest{secureRandomHex(12),auth.local,auth.epoch,1,0,1,0};auto random=secureRandomBytes(8);manifest.ssrc=qFromBigEndian<quint32>(reinterpret_cast<const uchar*>(random.constData()));if(!manifest.ssrc)manifest.ssrc=1;manifest.rtpTimestampOrigin=qFromBigEndian<quint32>(reinterpret_cast<const uchar*>(random.constData()+4));p.transport->setSendManifest(manifest);}
+        return {};
     }
     // ---------------------------------------------------------------------
     // Manual exchange
@@ -814,7 +853,7 @@ struct Runtime::Impl {
             if(!auth.committed){auth.epoch=*epoch;const auto publicOwner=payload["performerPeerId"].toString();auth.owner=publicOwner.isEmpty()&&lifecycle!="live"?auth.host:publicOwner;auth.next=payload["nextPeerId"].toString();auth.phase=payload["handoffState"].toString();auth.handoffId=payload["handoffId"].toString();}
             name=payload["sessionName"].toString();const auto incomingRoster=payload["participants"].toArray();if(incomingRoster.size()<=64){QJsonArray merged;for(const auto& value:incomingRoster){auto row=value.toObject();if(!row.contains("avatarDataUrl")){const auto previous=rosterMetadata(row["peerId"].toString());if(previous.contains("avatarDataUrl"))row["avatarDataUrl"]=previous["avatarDataUrl"];}merged.append(row);}participantRoster=merged;}
             bool valid=false;const auto t0=payload["timelineOriginNanos"].toString().toLongLong(&valid);auto f0=parseU64(payload["timelineOriginFrame"]);if(valid&&f0)timeline.adopt(t0,*f0);
-            if(!p.hello)queue(p,"peer.hello",localProfile());if(!captureEnabled.load())captureEpoch.store(auth.epoch);audible.store(auth.owner==auth.local);++auth.revision;
+            if(!p.hello)queue(p,"peer.hello",localProfile());if(!captureEnabled.load())captureEpoch.store(auth.epoch);if(auth.owner==auth.local&&!p.producing)sendManifest(p);else if(auth.owner!=auth.local&&p.producing){p.transport->startProducer(nullptr);p.producing=false;if(!hosting){captureEnabled.store(false);tap.enable(false,false);}}audible.store(auth.owner==auth.local);++auth.revision;
         } else if(envelope.type==MessageType::ClockProbeRequest) {queue(p,"clock.reply",{{"t1",payload["t1"]},{"t2",QString::number(monotonicNanos())},{"t3",QString::number(monotonicNanos())}});}
         else if(envelope.type==MessageType::ClockProbeReply && id==auth.host) {bool a,b,c;auto t1=payload["t1"].toString().toLongLong(&a),t2=payload["t2"].toString().toLongLong(&b),t3=payload["t3"].toString().toLongLong(&c);const auto t4=monotonicNanos();const ClockProbe probe{t1,t2,t3,t4};if(a&&b&&c&&clock.add(probe)){timelineAnchor.store(clock.toLocalNanos(timeline.originNanos()));const double sampleRttMs=double((t4-t1)-(t3-t2))/1000000.0;const auto stats=p.transport?p.transport->statistics():MediaTransport::Statistics{};quint64 received=stats.receivedPackets,nacks=stats.nacksSent;if(p.healthStatsReady&&stats.receivedPackets>=p.healthStats.receivedPackets&&stats.nacksSent>=p.healthStats.nacksSent){received-=p.healthStats.receivedPackets;nacks-=p.healthStats.nacksSent;}const auto total=received+nacks;HealthReportMessage report;if(p.probeReady){p.smoothedJitterMs=.75*p.smoothedJitterMs+.25*std::abs(sampleRttMs-p.lastProbeRttMs);p.smoothedRttMs=.65*p.smoothedRttMs+.35*sampleRttMs;}else{p.smoothedRttMs=sampleRttMs;p.smoothedJitterMs=0;p.probeReady=true;}p.lastProbeRttMs=sampleRttMs;p.healthStats=stats;p.healthStatsReady=true;report.rttMs=std::clamp(p.smoothedRttMs,0.0,600000.0);report.jitterMs=std::clamp(p.smoothedJitterMs,0.0,600000.0);report.lossFraction=total?std::clamp(double(nacks)/double(total),0.0,1.0):0;report.queueFrames=0;report.audioClockErrorMs=0;report.acceptable=report.rttMs<=250.0&&report.lossFraction<=.05;p.health=report;p.hasHealth=true;p.healthAt=t4;queue(p,"health.report",report.toJson());}}
         else if(envelope.type==MessageType::HealthReport && hosting&&p.approved){QString reason;const auto report=HealthReportMessage::fromJson(payload,&reason);if(report){p.health=*report;p.hasHealth=true;p.healthAt=monotonicNanos();++auth.revision;}}
@@ -1327,12 +1366,13 @@ struct Runtime::Impl {
             auth.owner=auth.host;auth.epoch=recoveryEpoch;auth.cutoverFrame=recoveryResumeFrame;auth.phase="switching";auth.committed.reset();auth.next.clear();auth.handoffId.clear();recoveryResumeFrame=0;recoveryUntil=0;backupPending.clear();problem.clear();reasons.clear();ownerAudioAt=monotonicNanos();++auth.revision;
         }
         auth.advance(now());audible.store(auth.local==auth.owner);
-        for(auto& [id,p]:peers){if(!p->transport)continue;for(int n=0;n<8&&!p->pending.isEmpty();++n){if(!p->transport->sendControl(p->pending.head().bytes))break;p->pending.dequeue();}if(ticks%200==0)p->transport->sendKeepAlive();if(hosting)route(p->transport->decodedRing(),id);}
+        for(auto& [id,p]:peers){if(!p->transport)continue;if(!p->lite){for(int n=0;n<8&&!p->pending.isEmpty();++n){if(!p->transport->sendControl(p->pending.head().bytes))break;p->pending.dequeue();}if(ticks%200==0)p->transport->sendKeepAlive();}else if(ticks%200==0)sendLite(*p,{{"type","owner"},{"ownerPeerId",auth.owner}});if(hosting)route(p->transport->decodedRing(),id);}
         if(endingAt){bool acknowledged=hosting;for(const auto& [id,p]:peers)if(p->approved&&!p->endingAck)acknowledged=false;
             if(acknowledged||monotonicNanos()>=endingAt){signalSend({{"type",endingHost?"room.close":"peer.leave"}});stop();return;}
         }
         route(tap.localRing(),auth.local);
-        if(hosting&&auth.owner!=auth.local&&ownerAudioAt&&monotonicNanos()-ownerAudioAt>300000000LL&&auth.phase!="recovery"&&(!auth.committed||now()>auth.cutoverFrame+14400))beginRecovery("プレイ担当者の音声が届いていません。配信を復旧中です");
+        const auto ownerPeer=peers.find(auth.owner);const bool liteOwner=ownerPeer!=peers.end()&&ownerPeer->second->lite;
+        if(hosting&&!liteOwner&&auth.owner!=auth.local&&ownerAudioAt&&monotonicNanos()-ownerAudioAt>300000000LL&&auth.phase!="recovery"&&(!auth.committed||now()>auth.cutoverFrame+14400))beginRecovery("プレイ担当者の音声が届いていません。配信を復旧中です");
         if(ticks%kSnapshotIntervalTicks==0 && hosting)broadcast("session.snapshot",wireState(false));
         if(ticks%200==0){if(hosting)signalSend({{"type","host.heartbeat"}});else{auto p=peers.find(auth.host);if(p!=peers.end()&&p->second->transport)queue(*p->second,"clock.probe",{{"t1",QString::number(monotonicNanos())}});}}
         if(!hosting&&bootstrapStart&&lifecycle=="starting"&&auth.phase=="preparing"&&auth.next==auth.local&&clock.ready()&&ticks%20==0){auto host=peers.find(auth.host);if(host!=peers.end()&&host->second->hello&&host->second->transport&&host->second->transport->aggregateLinkState()==LinkState::Connected){if(!host->second->producing){q->setCaptureAnchor(UINT64_MAX,0);captureEpoch.store(auth.epoch);sendManifest(*host->second);return;}ready=true;reasons.clear();queue(*host->second,"handoff.ready",{{"ready",true},{"bootstrap",true},{"handoffId",auth.handoffId}});}}
@@ -1384,7 +1424,7 @@ struct Runtime::Impl {
 #if defined(PLUMDECK_JUNCTION_WITH_LIBDATACHANNEL)
         if(signal){signal->resetCallbacks();signal->forceClose();signal.reset();}
 #endif
-        endingAt=0;endingHost=false;reconnectAt=0;reconnectAttempts=0;turnRefreshAt=0;startDeadline=0;controlSeq=0;iceReady=false;iceServers.clear();deferredSignals.clear();identity.reset();manual=false;manualDetail.clear();manualErrorCode.clear();hostCertificatePem.clear();pinnedHostFingerprint.clear();participantRoster={};rosterOrder.clear();finishedOrder.clear();turnRequests.clear();lifecycle="live";bootstrapStart=false;avatarDataUrl.clear();themeColor.clear();auth=Authority{};timeline=MediaTimeline{};clock.reset();q->setCaptureAnchor(UINT64_MAX,0);captureEpoch.store(1);scheduledFrame.store(UINT64_MAX);scheduledEpoch.store(0);sourceAnchor.store(UINT64_MAX);connection="disconnected";problem.clear();reasons.clear();invite.clear();ready=false;prepared=false;preparedGraph={};outgoing.clear();programEnqueuedThrough=0;backupPending.clear();backupOwner.clear();recoveryResumeFrame=0;recoveryUntil=0;ownerAudioAt=0;assetWaiters.clear();requestedAssets.clear();programPending.clear();validationReceiving.clear();validationOutgoing.clear();validationStart=0;validationCapture.reset();finalCheckpoint=false;aligned=false;graph={};
+        endingAt=0;endingHost=false;reconnectAt=0;reconnectAttempts=0;turnRefreshAt=0;startDeadline=0;controlSeq=0;iceReady=false;iceServers.clear();deferredSignals.clear();identity.reset();manual=false;liteSession=false;manualDetail.clear();manualErrorCode.clear();hostCertificatePem.clear();pinnedHostFingerprint.clear();participantRoster={};rosterOrder.clear();finishedOrder.clear();turnRequests.clear();lifecycle="live";bootstrapStart=false;avatarDataUrl.clear();themeColor.clear();auth=Authority{};timeline=MediaTimeline{};clock.reset();q->setCaptureAnchor(UINT64_MAX,0);captureEpoch.store(1);scheduledFrame.store(UINT64_MAX);scheduledEpoch.store(0);sourceAnchor.store(UINT64_MAX);connection="disconnected";problem.clear();reasons.clear();invite.clear();ready=false;prepared=false;preparedGraph={};outgoing.clear();programEnqueuedThrough=0;backupPending.clear();backupOwner.clear();recoveryResumeFrame=0;recoveryUntil=0;ownerAudioAt=0;assetWaiters.clear();requestedAssets.clear();programPending.clear();validationReceiving.clear();validationOutgoing.clear();validationStart=0;validationCapture.reset();finalCheckpoint=false;aligned=false;graph={};
     }
 };
 Runtime::Runtime(PlaybackBackend* backend,QObject* parent):QObject(parent),d(std::make_unique<Impl>(this,backend)){}
@@ -1462,6 +1502,43 @@ QJsonObject Runtime::command(const QString& op,const QJsonObject& p,QString* err
         if(!packet||!failure.isEmpty())return reject(failure);
         if(!verifyExchangeSignature(*packet,packet->descriptionFingerprint(),&failure))return reject(failure);
         return packet->sanitized();
+    }
+    if(op=="lite.join"){
+        if(active())return reject("参加中のセッションを終了してから操作してください");
+        if(!d->backend->available()||!MediaTransport::available())return reject("音声エンジンとWebRTCの準備が必要です");
+        const auto sessionId=p["sessionId"].toString(),local=p["localPeerId"].toString(),host=p["hostPeerId"].toString(),offer=p["sdp"].toString();
+        if(!validOpaqueId(sessionId)||!validOpaqueId(local)||!validOpaqueId(host)||local==host||offer.isEmpty()||offer.size()>65536)return reject("PlumDeck Liteの接続情報が無効です");
+        const auto fp=sdpFingerprint(offer);if(fp.size()!=64)return reject("PlumDeck Liteの接続情報に識別情報がありません");
+        d->displayName=sanitizeDisplayName(p["djName"].toString(p["displayName"].toString()));if(d->displayName.isEmpty())return reject("DJ名を入力してください");
+        d->name=p["sessionName"].toString(QStringLiteral("PlumDeck Lite Junction")).left(80);d->hosting=false;d->liteSession=true;d->lifecycle="live";d->auth.sessionId=sessionId;d->auth.local=local;d->auth.host=host;d->auth.owner=p["ownerPeerId"].toString(host);if(d->auth.owner!=host&&d->auth.owner!=local)d->auth.owner=host;d->auth.phase="playing";d->timeline.start(monotonicNanos());d->timelineAnchor.store(d->timeline.originNanos());d->connection="connecting";d->audible.store(d->auth.owner==local);d->captureEnabled.store(false);d->tap.enable(false,false);
+        auto peer=std::make_unique<Impl::Peer>();peer->id=host;peer->name=sanitizeDisplayName(p["hostName"].toString(QStringLiteral("ホスト")));peer->approved=true;peer->lite=true;d->peers[host]=std::move(peer);d->rosterOrder={host,local};
+        auto& created=*d->peers[host];const auto failure=d->buildLitePeer(created,false);if(!failure.isEmpty()){d->stop();return reject(failure);}QString remoteError;if(!created.transport->remoteDescription(false,offer,"offer",fp,&remoteError)){d->stop();return reject(remoteError);}
+        if(d->auth.owner==local){d->captureEpoch.store(d->auth.epoch);created.transport->startProducer(&d->tap.networkRing());created.producing=true;d->captureEnabled.store(true);d->tap.enable(true,true);}
+        return snapshot();
+    }
+    if(op=="lite.exchange"){
+        if(!active())return reject("Junctionセッションに参加していません");const auto id=p["peerId"].toString(d->hosting?QString{}:d->auth.host);auto found=d->peers.find(id);if(found==d->peers.end()||!found->second->lite)return reject("PlumDeck Liteの参加者が見つかりません");
+        auto& peer=*found->second;const auto stats=peer.transport?peer.transport->statistics():MediaTransport::Statistics{};return {{"state",peer.transport&&peer.transport->linkState(false)==LinkState::Connected?"connected":peer.liteSdp.isEmpty()?"gathering":"ready"},{"sdp",peer.liteSdp},{"type",peer.liteSdpType},{"receivedPackets",QString::number(stats.receivedPackets)},{"sentPackets",QString::number(stats.sentPackets)}};
+    }
+    if(op=="lite.guest.offer"){
+        if(!active()||d->hosting||!d->liteSession)return reject("PlumDeck Liteのゲスト接続が必要です");const auto sdp=p["sdp"].toString(),fp=sdpFingerprint(sdp);auto found=d->peers.find(d->auth.host);if(found==d->peers.end()||!found->second->lite||fp.size()!=64||sdp.size()>65536)return reject("PlumDeck Liteの接続情報が無効です");auto& peer=*found->second;if(peer.transport)peer.transport->close();peer.transport.reset();peer.liteSdp.clear();peer.liteSdpType.clear();peer.hello=false;peer.producing=false;const auto failure=d->buildLitePeer(peer,false);if(!failure.isEmpty())return reject(failure);QString remoteError;if(!peer.transport->remoteDescription(false,sdp,"offer",fp,&remoteError))return reject(remoteError);if(d->auth.owner==d->auth.local){peer.transport->setBrowserSendEpoch(d->auth.epoch,d->now());peer.transport->startProducer(&d->tap.networkRing());peer.producing=true;d->captureEnabled.store(true);d->tap.enable(true,true);}return snapshot();
+    }
+    if(op=="lite.peer.ensure"){
+        if(!active()||!d->hosting)return reject("ホストのJunctionセッションが必要です");const auto id=p["peerId"].toString();if(!validOpaqueId(id)||id==d->auth.local)return reject("PlumDeck Liteの参加者IDが無効です");auto found=d->peers.find(id);if(found==d->peers.end()){auto peer=std::make_unique<Impl::Peer>();peer->id=id;peer->name=sanitizeDisplayName(p["djName"].toString(p["displayName"].toString(QStringLiteral("DJ"))));peer->approved=true;peer->lite=true;d->peers[id]=std::move(peer);d->rosterOrder.append(id);found=d->peers.find(id);++d->auth.revision;}else if(!found->second->lite)return reject("同じ参加者IDが別の接続で使用されています");
+        if(found->second->transport&&(found->second->transport->linkState(false)==LinkState::Failed||found->second->transport->linkState(false)==LinkState::Closed)){found->second->transport->close();found->second->transport.reset();found->second->liteSdp.clear();found->second->liteSdpType.clear();found->second->hello=false;}
+        const auto failure=d->buildLitePeer(*found->second,true);if(!failure.isEmpty())return reject(failure);auto& peer=*found->second;const auto stats=peer.transport?peer.transport->statistics():MediaTransport::Statistics{};return {{"state",peer.transport&&peer.transport->linkState(false)==LinkState::Connected?"connected":peer.liteSdp.isEmpty()?"gathering":"ready"},{"sdp",peer.liteSdp},{"type",peer.liteSdpType},{"receivedPackets",QString::number(stats.receivedPackets)},{"sentPackets",QString::number(stats.sentPackets)}};
+    }
+    if(op=="lite.peer.answer"){
+        if(!active()||!d->hosting)return reject("ホストのJunctionセッションが必要です");const auto id=p["peerId"].toString(),sdp=p["sdp"].toString();auto found=d->peers.find(id);if(found==d->peers.end()||!found->second->lite||!found->second->transport)return reject("PlumDeck Liteの参加者が見つかりません");const auto fp=sdpFingerprint(sdp);QString failure;if(fp.size()!=64||sdp.size()>65536||!found->second->transport->remoteDescription(false,sdp,"answer",fp,&failure))return reject(failure.isEmpty()?QStringLiteral("PlumDeck Liteの返答が無効です"):failure);return snapshot();
+    }
+    if(op=="lite.peer.remove"){
+        if(!active()||!d->hosting)return reject("ホストのJunctionセッションが必要です");const auto id=p["peerId"].toString();auto found=d->peers.find(id);if(found!=d->peers.end()&&found->second->lite){if(d->auth.owner==id)d->selectLiteOwner(d->auth.local);d->peers.erase(found);d->rosterOrder.removeAll(id);d->finishedOrder.removeAll(id);d->turnRequests.remove(id);++d->auth.revision;}return snapshot();
+    }
+    if(op=="lite.owner.set"){
+        if(!active())return reject("Junctionセッションに参加していません");const auto owner=p["ownerPeerId"].toString();if(d->hosting||d->liteSession)d->selectLiteOwner(owner);return snapshot();
+    }
+    if(op=="lite.roster.set"){
+        if(!active()||d->hosting||!d->liteSession||!p["members"].isArray())return reject("PlumDeck Liteのゲスト接続が必要です");const auto members=p["members"].toArray();if(members.size()>8)return reject("PlumDeck Liteの参加者一覧が不正です");QJsonArray roster;int order=0;for(const auto& value:members){const auto member=value.toObject();const auto id=member["peerId"].toString();if(!validOpaqueId(id))return reject("PlumDeck Liteの参加者一覧が不正です");if(member["status"]!="approved")continue;const auto memberName=sanitizeDisplayName(member["displayName"].toString(QStringLiteral("DJ")));roster.append(QJsonObject{{"peerId",id},{"displayName",memberName},{"djName",memberName},{"approved",true},{"isHost",id==d->auth.host},{"orderIndex",order++},{"status","connected"}});}d->participantRoster=roster;++d->auth.revision;return snapshot();
     }
     const auto input=p["text"].toString(p["invite"].toString()).trimmed();
     const bool manualCreate=op=="create"&&(p["exchangeMode"]=="manual"||p["signalingUrl"].toString().isEmpty());
@@ -1591,6 +1668,7 @@ QJsonObject Runtime::command(const QString& op,const QJsonObject& p,QString* err
         // Validate the venue output before mutating the shared order: a refused start leaves the lobby as it was.
         if(d->programDevice<0)return reject("会場への音声出力が未選択です。「セッション設定」の「会場への音声出力」で出力先を反映してから開始してください");
         d->openProgram();if(d->programState=="error")return reject(d->problem.isEmpty()?QStringLiteral("会場の音声出力を開けません"):d->problem);
+        if(target!=d->auth.local&&peer!=d->peers.end()&&peer->second->lite){d->lifecycle="live";d->selectLiteOwner(target);return snapshot();}
         const auto previousOrder=d->rosterOrder;const auto previousFinished=d->finishedOrder;const auto previousRequests=d->turnRequests;
         d->rosterOrder.removeAll(target);d->rosterOrder.prepend(target);d->finishedOrder.clear();d->turnRequests.remove(target);d->problem.clear();d->reasons.clear();
         if(target==d->auth.local){d->captureEnabled.store(true);d->tap.enable(false,true);d->lifecycle="live";++d->auth.revision;d->broadcast("session.snapshot",d->wireState());return snapshot();}
@@ -1621,7 +1699,7 @@ QJsonObject Runtime::command(const QString& op,const QJsonObject& p,QString* err
         auto it=d->programPending.lower_bound(d->recoveryResumeFrame);d->programPending.erase(it,d->programPending.end());
         d->broadcast("session.recovery",{{"stage","scheduled"},{"reason","ホストの手元の演奏へ切り替えます"},{"frame",u64(d->recoveryResumeFrame)},{"epoch",u64(d->recoveryEpoch)}});return snapshot();
     }
-    if(op=="handoff.request") {if(d->lifecycle!="live")return reject("最初のDJを選び、セッションを開始してください");auto target=p["targetPeerId"].toString(d->auth.local);if(d->hosting){auto peer=d->peers.find(target);if(target!=d->auth.local&&(peer==d->peers.end()||!peer->second->approved))return reject("承認済みの参加者を選択してください");auto failure=d->auth.prepare(target);if(!failure.isEmpty())return reject(failure);d->turnRequests.remove(target);d->finishedOrder.removeAll(target);d->rosterOrder.removeAll(target);const int ownerIndex=d->rosterOrder.indexOf(d->auth.owner);d->rosterOrder.insert(ownerIndex<0?0:ownerIndex+1,target);d->resetPreparation();d->broadcast("handoff.prepare",{{"targetPeerId",target},{"handoffId",d->auth.handoffId}});if(d->auth.owner==d->auth.local)d->startExport();}else{auto i=d->peers.find(d->auth.host);if(i==d->peers.end())return reject("ホストに接続していません");d->queue(*i->second,"handoff.request",{});}return snapshot();}
+    if(op=="handoff.request") {if(d->lifecycle!="live")return reject("最初のDJを選び、セッションを開始してください");auto target=p["targetPeerId"].toString(d->auth.local);if(d->hosting){auto peer=d->peers.find(target);if(target!=d->auth.local&&(peer==d->peers.end()||!peer->second->approved))return reject("承認済みの参加者を選択してください");const auto current=d->peers.find(d->auth.owner);if((peer!=d->peers.end()&&peer->second->lite)||(current!=d->peers.end()&&current->second->lite)){d->selectLiteOwner(target);return snapshot();}auto failure=d->auth.prepare(target);if(!failure.isEmpty())return reject(failure);d->turnRequests.remove(target);d->finishedOrder.removeAll(target);d->rosterOrder.removeAll(target);const int ownerIndex=d->rosterOrder.indexOf(d->auth.owner);d->rosterOrder.insert(ownerIndex<0?0:ownerIndex+1,target);d->resetPreparation();d->broadcast("handoff.prepare",{{"targetPeerId",target},{"handoffId",d->auth.handoffId}});if(d->auth.owner==d->auth.local)d->startExport();}else{auto i=d->peers.find(d->auth.host);if(i==d->peers.end())return reject("ホストに接続していません");if(i->second->lite)d->sendLite(*i->second,{{"type","handoff-request"}});else d->queue(*i->second,"handoff.request",{});}return snapshot();}
     if(op=="handoff.cancel") {if(!d->hosting)return reject("ホストに取り消しを依頼してください");const auto handoffId=d->auth.handoffId;auto failure=d->auth.cancel();if(!failure.isEmpty())return reject(failure);d->broadcast("handoff.cancel",{{"handoffId",handoffId},{"reason","cancelled"}});if(d->lifecycle=="starting")d->restoreLobby();return snapshot();}
     if(op=="handoff.accept"){
         if(!d->hosting){auto h=d->peers.find(d->auth.host);if(h==d->peers.end())return reject("ホストに接続していません");d->queue(*h->second,"handoff.ready",{{"requestFence",true},{"handoffId",d->auth.handoffId}});return snapshot();}

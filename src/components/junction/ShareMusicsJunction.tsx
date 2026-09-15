@@ -219,7 +219,10 @@ export function ShareMusicsHostSection({snapshot, djName}: HostProps) {
 }
 
 function memberProgress(member: SharedMember, snapshot: JunctionSnapshot, memory: HostMemory): string {
-  if (member.client === 'lite') return 'スマホとの接続は準備中です';
+  if (member.client === 'lite') {
+    const participant = snapshot.participants.find((item) => item.peerId === member.peerId);
+    return participant?.status === 'connected' ? 'スマホと接続しました' : memory.liteOffer[member.peerId] ? 'スマホからの返答を待っています' : '接続情報を準備しています';
+  }
   if (memory.failed[member.peerId]) return `招待を作れませんでした：${memory.failed[member.peerId]}`;
   const peerId = memory.peerByMember[member.peerId];
   const state = snapshot.participants.find((participant) => participant.peerId === peerId)?.exchange?.state;

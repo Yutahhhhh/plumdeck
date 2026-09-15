@@ -18,6 +18,15 @@ test('only approved desktop guests are driven with native packets; phones use th
   const v = view([member('m1'), member('m2', {status: 'pending'}), member('m3', {client: 'lite'}), member('m4', {status: 'left'})]);
   assert.deepEqual(desktopGuests(v).map((m) => m.peerId), ['m1']);
   assert.deepEqual(planHost(v, hostSnapshot(), emptyHostMemory()), {kind: 'create_invite', memberId: 'm1', djName: 'DJ m1'});
+  assert.deepEqual(automaticHostPeers(v, emptyHostMemory()), ['m3']);
+});
+
+test('Lite offer and answer signals are retained independently from desktop exchange packets', () => {
+  const host = emptyHostMemory(), guest = emptyGuestMemory();
+  receiveSignals(view([member('m3', {client: 'lite'})], [{id: 7, senderPeerId: 'm3', kind: 'answer', payload: {type: 'answer', sdp: 'answer-sdp'}}]), host, null);
+  assert.deepEqual(host.liteAnswers.m3, {signalId: 7, text: 'answer-sdp'});
+  receiveSignals(guestView('approved', [{id: 9, senderPeerId: 'host', kind: 'offer', payload: {type: 'offer', sdp: 'offer-sdp'}}]), null, guest);
+  assert.deepEqual(guest.liteOffer, {signalId: 9, text: 'offer-sdp'});
 });
 
 test('host walks an approved desktop guest from roster slot to native approval exactly once', () => {

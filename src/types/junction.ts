@@ -158,7 +158,15 @@ export type JunctionOp =
   | 'network.get'
   | 'network.configure'
   | 'network.clear'
-  | 'network.test';
+  | 'network.test'
+  | 'lite.join'
+  | 'lite.exchange'
+  | 'lite.guest.offer'
+  | 'lite.peer.ensure'
+  | 'lite.peer.answer'
+  | 'lite.peer.remove'
+  | 'lite.owner.set'
+  | 'lite.roster.set';
 export interface JunctionLease { sessionId: string; epoch: string; actorPeerId: string }
 
 /** Sanitized result of exchange.inspect. No secrets, bounded fields. */
