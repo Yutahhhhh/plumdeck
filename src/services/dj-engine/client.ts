@@ -15,6 +15,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { LatestCommandQueue } from "./latest-command-queue";
 import { ScratchCommandQueue } from "./scratch-command-queue";
+import { Backspin } from "./backspin";
 import { microphoneCommandParams } from "./audio-settings";
 
 import {
@@ -113,6 +114,7 @@ export class DjEngineClient {
   private seekGeneration: Record<DeckId, number> = { A: 0, B: 0, C: 0, D: 0 };
   private controlQueues = new Map<string, LatestCommandQueue<ContinuousControl>>();
   private scratchQueues = new Map<DeckId, ScratchCommandQueue>();
+  private backspins = new Map<DeckId, { spin: Backspin; gestureId: string }>();
   private scratchGestures = new Map<string, { deck: DeckId; session: string | null; generation: number; trackId: string | undefined; positionMs: number; leaseKey: string; lease: ReturnType<typeof captureJunctionLease> }>();
   private stateListeners = new Set<StateListener>();
   private statusListeners = new Set<StatusListener>();
@@ -364,6 +366,8 @@ export class DjEngineClient {
   }
 
   seek(deck: DeckId, positionMs: number, durationMs?: number): Promise<unknown> {
+    const settling = this.settleBackspin(deck);
+    if (settling) return settling.then(() => this.seek(deck, positionMs, durationMs));
     const params = routePerformanceCommand(DJ_ENGINE_OPS.deckSeek, buildSeekParams(deck, positionMs, durationMs));
     let queue = this.seekQueues.get(deck);
     if (!queue) {
@@ -378,6 +382,8 @@ export class DjEngineClient {
   }
 
   scratch(deck: DeckId, phase: ScratchPhase, positionMs: number, gestureId: string, capturedAt = performance.now(), keepalive = false): Promise<unknown> {
+    // 別の手が掴んだら、惰性中のバックスピンを先に着地させる（同じキューで begin より前に end が届く）。
+    if (phase === "begin") void this.settleBackspin(deck);
     const command = buildScratchParams(deck, phase, positionMs, gestureId);
     const mapped = deckRealtimeStore.mapping.at(capturedAt);
     if (mapped && this.clientState.snapshot?.engine.capabilities.includes("deck.clock.v2")) {
@@ -419,6 +425,37 @@ export class DjEngineClient {
     return result;
   }
 
+  /**
+   * 手を離した瞬間にバックスピンと判定されたジェスチャーを、指の代わりに惰性で回す。
+   * 十分に減速したら end を送り、エンジンが即座に通常再生（停止中なら停止）へ着地させる。
+   */
+  backspin(deck: DeckId, gestureId: string, positionMs: number, velocity: number, weight: number, onError?: (error: unknown) => void): void {
+    void this.settleBackspin(deck);
+    let reported = false;
+    const report = (error: unknown) => { if (!reported) { reported = true; onError?.(error); } };
+    const spin = new Backspin({
+      velocity, weight, positionMs,
+      move: (position, at) => { void this.scratch(deck, "move", position, gestureId, at).catch(report); },
+      land: (position) => {
+        if (this.backspins.get(deck)?.gestureId === gestureId) this.backspins.delete(deck);
+        const landed = this.scratch(deck, "end", position, gestureId);
+        landed.catch(report);
+        return landed;
+      },
+    });
+    if (spin.active) this.backspins.set(deck, { spin, gestureId });
+  }
+
+  /** 惰性で回っているデッキを掴み直す。同じジェスチャーを指で続けるための ID と変位を返す。 */
+  grabBackspin(deck: DeckId): { gestureId: string; positionMs: number } | null {
+    const current = this.backspins.get(deck);
+    if (!current) return null;
+    this.backspins.delete(deck);
+    const positionMs = current.spin.grab();
+    if (!this.scratchGestures.has(current.gestureId)) return null;
+    return { gestureId: current.gestureId, positionMs };
+  }
+
   setTempo(deck: DeckId, rate: number): Promise<unknown> {
     return this.continuous(`${deck}:tempo`, DJ_ENGINE_OPS.deckTempoSet, buildTempoParams(deck, rate), deck);
   }
@@ -443,6 +480,8 @@ export class DjEngineClient {
   }
 
   jumpToHotCue(deck: DeckId, index: number): Promise<unknown> {
+    const settling = this.settleBackspin(deck);
+    if (settling) return settling.then(() => this.jumpToHotCue(deck, index));
     return this.send(DJ_ENGINE_OPS.deckHotcueJump, this.withTrack(deck, buildHotcueParams(deck, index)));
   }
 
@@ -459,6 +498,8 @@ export class DjEngineClient {
   }
 
   beatJump(deck: DeckId, beats: number): Promise<unknown> {
+    const settling = this.settleBackspin(deck);
+    if (settling) return settling.then(() => this.beatJump(deck, beats));
     return this.send(DJ_ENGINE_OPS.deckBeatJump, this.withTrack(deck, buildBeatStepParams(deck, beats)));
   }
 
@@ -643,7 +684,21 @@ export class DjEngineClient {
     return this.attaching;
   }
 
+  /**
+   * 惰性中に位置を動かすと、エンジンは古い基準位置へ着地しようとして音が跳ぶ。
+   * 先に着地させてから次の操作を送る。回っていなければ null。
+   */
+  private settleBackspin(deck: DeckId): Promise<unknown> | null {
+    const current = this.backspins.get(deck);
+    if (!current) return null;
+    this.backspins.delete(deck);
+    return Promise.resolve(current.spin.stop()).catch(() => undefined);
+  }
+
   private async releaseScratch(deck: DeckId): Promise<void> {
+    // 回転だけ止め、下の end で最後に送った変位へ着地させる。
+    this.backspins.get(deck)?.spin.grab();
+    this.backspins.delete(deck);
     const gestures = [...this.scratchGestures.entries()].filter(([, item]) => item.deck === deck);
     if (!gestures.length) return;
     const results = await Promise.allSettled(gestures.map(([gestureId, item]) =>
@@ -657,6 +712,8 @@ export class DjEngineClient {
     this.controlQueues.clear();
     for (const queue of this.scratchQueues.values()) queue.clear();
     this.scratchQueues.clear();
+    for (const { spin } of this.backspins.values()) spin.grab();
+    this.backspins.clear();
     this.scratchGestures.clear();
   }
 

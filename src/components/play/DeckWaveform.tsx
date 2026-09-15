@@ -1,6 +1,7 @@
 import { useNativeWaveform } from "./useNativeWaveform";
 import { waveformRenderer } from "@/services/waveform/renderer";
 import { deckRealtimeStore } from "@/services/dj-engine/deck-realtime-store";
+import { classifyRelease, MotionHistory } from "@/services/dj-engine/scratch-release";
 import { assetWaveform } from '@/services/junction/asset-resolver';
 import type { AssetWaveform } from '@/types/dj-engine';
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -27,6 +28,10 @@ type Props = {
   onGridShift?: (deltaMs: number) => void;
   onScratch?: (command: { phase: ScratchPhase; positionMs: number; gestureId: string; capturedAt?: number; keepalive?: boolean }) => Promise<unknown>;
   onScratchError?: (error: unknown) => void;
+  /** 手を離した瞬間にバックスピンと判定したときだけ呼ぶ。end は惰性の後に呼び出し側が送る。 */
+  onBackspin?: (release: { gestureId: string; positionMs: number; velocity: number }) => void;
+  /** 惰性で回っているジェスチャーを掴み直す。回っていなければ null。 */
+  onScratchGrab?: () => { gestureId: string; positionMs: number } | null;
   scratching?: boolean;
   loopRegion?: LoopRegion | null;
   /** 曲頭より前に置いた無音の助走（ms）。0 なら助走なし。 */
@@ -44,10 +49,12 @@ type DragGesture = {
   lastMotionAt: number; layout: WaveformLayout; pointer: number; coordinate: number; origin: number; moved: boolean;
   kind: "overview" | "grid" | "scratch";
   length: number; span: number; positionMs: number; gestureId: string; errorReported: boolean;
+  /** スクラッチ中のポインター履歴。離した瞬間のバックスピン判定に使う。 */
+  motion?: MotionHistory;
   /** 0 より大きければ、このジェスチャーはスクラッチではなくプリロール調整に切り替わっている。 */
 };
 
-export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform, monitorAssetId, trackId, positionMs, durationMs, layout, side, color, onSeek, mode = "overview", bpm, beatgridOffsetMs = 0, beatsPerBar = 4, hotCues = NO_CUES, label, compact, playing = false, rate = 1, beatTimesMs, beatNumbers, gridAvailable = true, onGridShift, onScratch, onScratchError, scratching = false, loopRegion = null }: Props) {
+export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform, monitorAssetId, trackId, positionMs, durationMs, layout, side, color, onSeek, mode = "overview", bpm, beatgridOffsetMs = 0, beatsPerBar = 4, hotCues = NO_CUES, label, compact, playing = false, rate = 1, beatTimesMs, beatNumbers, gridAvailable = true, onGridShift, onScratch, onScratchError, onBackspin, onScratchGrab, scratching = false, loopRegion = null }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sizeRef = useRef({ width: 0, height: 0 });
   const paintRef = useRef<() => void>(() => undefined);
@@ -72,7 +79,8 @@ export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform
   const bars = useMemo(() => barNumbers(beatTimesMs?.length ?? 0, beatNumbers, beatsPerBar), [beatTimesMs, beatNumbers, beatsPerBar]);
   const [dragging, setDragging] = useState(false);
   const drag = useRef<DragGesture | null>(null);
-  const releaseDrag = useRef<() => void>(() => undefined);
+  /** thrown は指を離したことによる解放。フォーカス喪失や曲の入れ替えでは惰性を付けない。 */
+  const releaseDrag = useRef<(thrown?: boolean) => void>(() => undefined);
   const scratchHeartbeat = useRef<ReturnType<typeof setInterval> | null>(null);
   const optimistic = useRef<SeekPreview | null>(null);
   const telemetry = useRef({ position: positionMs, receivedAt: performance.now() });
@@ -473,12 +481,17 @@ export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform
     if (scratchHeartbeat.current) clearInterval(scratchHeartbeat.current);
     scratchHeartbeat.current = null;
   };
-  releaseDrag.current = () => {
+  releaseDrag.current = (thrown = false) => {
     const gesture = drag.current;
     if (!gesture) return;
     drag.current = null;
     stopHeartbeat();
-    if (gesture.kind === "scratch") sendScratch(gesture, "end");
+    if (gesture.kind === "scratch") {
+      // 判定は記録済みの履歴だけで即座に行う。スクラッチなら待たずに end を送る。
+      const release = thrown && onBackspin && gesture.motion ? classifyRelease(gesture.motion.samples, performance.now(), playing) : null;
+      if (release?.kind === "backspin") onBackspin!({ gestureId: gesture.gestureId, positionMs: gesture.positionMs, velocity: release.velocity });
+      else sendScratch(gesture, "end");
+    }
     else if (gesture.kind === "overview" && gesture.moved) seekLive(visualPosition(), true);
     setDragging(false);
     invalidateRef.current();
@@ -517,7 +530,12 @@ export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform
         else if (kind === "overview") seekLive(clamp((coordinate - origin) / length * durationMs), true);
         else {
           optimistic.current = null;
-          sendScratch(gesture, "begin");
+          // 惰性で回っているところを掴んだら、同じジェスチャーを指で続ける。
+          const grabbed = onScratchGrab?.();
+          if (grabbed) { gesture.gestureId = grabbed.gestureId; gesture.positionMs = grabbed.positionMs; }
+          gesture.motion = new MotionHistory();
+          gesture.motion.push(event.timeStamp, gesture.positionMs);
+          if (!grabbed) sendScratch(gesture, "begin");
           scratchHeartbeat.current = setInterval(() => {
             if (drag.current === gesture && performance.now() - gesture.lastMotionAt >= 250) sendScratch(gesture, "move", performance.now(), true);
           }, 250);
@@ -536,6 +554,7 @@ export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform
         if (gesture.kind === "scratch") {
           gesture.positionMs = Math.max(-60_000, Math.min(60_000, gesture.positionMs - delta / gesture.length * gesture.span));
           gesture.lastMotionAt = performance.now();
+          gesture.motion?.push(sample.timeStamp, gesture.positionMs);
           gesture.moved = true; sendScratch(gesture, "move", sample.timeStamp); continue;
         }
         gesture.moved = true;
@@ -544,7 +563,7 @@ export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform
       }}
       onPointerUp={(event) => {
         const gesture = drag.current; if (!gesture || gesture.pointer !== event.pointerId) return;
-        releaseDrag.current();
+        releaseDrag.current(true);
         if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
       }}
       onLostPointerCapture={() => releaseDrag.current()}

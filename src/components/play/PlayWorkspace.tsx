@@ -6,6 +6,7 @@ import { junctionState } from '@/services/junction/state';
 import { useJunctionTracks } from '@/hooks/useJunctionTracks';
 import { BeatFxPanel } from "./BeatFxPanel";
 import { memoryAction } from "@/services/dj-engine/memory-cues";
+import { jogWeight } from "@/services/dj-engine/jog-weight";
 import { sampler } from "@/services/dj-engine/sampler";
 import "./sampler.css";
 import { useDdj1000 } from "@/hooks/useDdj1000";
@@ -761,6 +762,9 @@ export function PlayWorkspace() {
       hotCues={deck?.hotCues} scratching={deck?.scratching} loopRegion={deck?.loopRegion}
       onSeek={connected && !monitorAssetId ? (ms) => seekAbsolute(id, ms) : undefined}
       onScratch={connected && !monitorAssetId ? (command) => scratch(id, command) : undefined}
+      onBackspin={connected && !monitorAssetId ? (release) => client.backspin(id, release.gestureId, release.positionMs, release.velocity, jogWeight(id),
+        (cause) => setCommandError(cause instanceof Error ? cause.message : String(cause))) : undefined}
+      onScratchGrab={connected && !monitorAssetId ? () => client.grabBackspin(id) : undefined}
       onScratchError={(cause) => setCommandError(cause instanceof Error ? cause.message : String(cause))} />;
   };
   // Lanes accept the same drag payload as the decks, so a row can be dropped on

@@ -183,6 +183,11 @@
 .dj-workspace--compact .dj-panel-tab { width: 16px; height: 16px; }
 .dj-workspace--compact .dj-panel-tab svg { width: 10px; height: 10px; }
 .dj-workspace--compact .dj-deck-rail .dj-chip { height: 13px; font-size: 7px; }
+/* JOG の重さはレール幅に収める。値はツールチップと読み上げで示す。 */
+.dj-deck-rail .dj-jog-weight { flex: 0 0 auto; max-width: none; }
+.dj-deck-rail .dj-jog-weight .dj-knob { width: 18px; height: 18px; }
+.dj-deck-rail .dj-jog-weight .dj-knob-value { display: none; }
+.dj-workspace--compact .dj-deck-rail .dj-jog-weight .dj-knob { width: 15px; height: 15px; }
 /* 右デッキはミラー配置なので、レールもプラッタ側の外へ回す。 */
 .dj-deck--right .dj-transport { flex-direction: row-reverse; }
 

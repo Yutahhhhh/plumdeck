@@ -54,6 +54,8 @@ jobs:
         run: node --experimental-strip-types --test src/services/deck-drop.test.mjs src/services/play-drag-routing.test.mjs src/services/waveform/repository.test.mjs
       - name: Edited tempo boundaries and cue persistence
         run: node --experimental-strip-types --test native/dj-engine-host/tests-node/beat-grid-math.test.ts native/dj-engine-host/tests-node/performance-cue-metadata.test.ts
+      - name: Waveform backspin detection and JOG weight braking
+        run: node --experimental-strip-types --test native/dj-engine-host/tests-node/scratch-release.test.ts
 
   backend:
     name: Database and import regression tests

@@ -16,6 +16,8 @@ import { PerformancePads, UNBACKED_PAD_MODES, type FxEffect, type PadMode } from
 import { PadModeSelect } from "./PadModeSelect";
 import { AutoBeatLoop, type LoopMode } from "./AutoBeatLoop";
 import { TempoPlatter, TEMPO_RANGES, type TempoRange } from "./TempoPlatter";
+import { RotaryKnob } from "./RotaryKnob";
+import { JOG_WEIGHT_DEFAULT, jogWeight, jogWeightLabel, setJogWeight, subscribeJogWeight } from "@/services/dj-engine/jog-weight";
 import "./play-controls.css";
 import { usePlayDeckDrop } from "./PlayDragDrop";
 
@@ -52,6 +54,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
   const [loopBeats, setLoopBeats] = useState(4);
   const selection = useSyncExternalStore(subscribePads, () => getPadSelection(id));
   const samplerState = useSyncExternalStore(sampler.subscribe,sampler.getSnapshot);
+  const weight = useSyncExternalStore(subscribeJogWeight, () => jogWeight(id));
   const padPage = selection.page;
   const setPadPage = (update: number | ((page: number) => number)) => selectPads(id,selection.mode,typeof update === "function" ? update(padPage) : update,true);
   const [keyboardCue, setKeyboardCue] = useState(0);
@@ -242,6 +245,9 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
           onClick={() => onQuantize?.(!quantize)}>Q</button>
         <button className={cn("dj-chip", deck?.keylock && "is-on")} disabled={!supported("deck.keylock")} aria-pressed={Boolean(deck?.keylock)}
           title="マスターテンポ：音程を変えずに再生速度を調整します" onClick={() => onKeylock(!deck?.keylock)}>MT</button>
+        {/* 波形を投げたバックスピンの重さ。スクラッチの操作感とハードウェアのジョグには効かない。 */}
+        <RotaryKnob className="dj-jog-weight" label="JOG" value={weight} min={0} max={1} step={.05} fineStep={.01} defaultValue={JOG_WEIGHT_DEFAULT}
+          disabled={monitorOnly} valueText={(value) => `${Math.round(value * 100)}% ${jogWeightLabel(value)}`} onChange={(value) => setJogWeight(id, value)} />
       </div>
       </div>
       <TempoPlatter deckId={id} bpm={bpm} trackBpm={trackBpm} rate={rate} positionMs={position}

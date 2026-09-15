@@ -20,6 +20,7 @@
 #include <QTemporaryDir>
 #include <QDateTime>
 #include <QCryptographicHash>
+#include <QtEndian>
 #include <QFile>
 #include <QFileInfo>
 #include <QSaveFile>
