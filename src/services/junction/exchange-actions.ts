@@ -37,8 +37,13 @@ export function formatExpiry(expiresAt: number | undefined, nowMs: number): stri
   return remain < 60 ? `有効期限まで約${remain}秒` : `有効期限まで約${Math.round(remain / 60)}分`;
 }
 // Copy acknowledgement belongs to this exact packet only. It never means delivered.
-export function deriveHostCardGuidance(participant: JunctionParticipant, copied = false): ExchangeGuidance {
+// `automatic`: this DJ's packets travel through share-musics; the clipboard stays a fallback.
+export function deriveHostCardGuidance(participant: JunctionParticipant, copied = false, automatic = false): ExchangeGuidance {
   const x = participant.exchange;
+  if (automatic) {
+    const automaticGuidance = deriveAutomaticHostGuidance(participant);
+    if (automaticGuidance) return automaticGuidance;
+  }
   switch (x?.state) {
     case 'idle': case 'collecting':
       return {step: 1, headline: '招待を準備しています。', waiting: true, actions: [A.cancel]};
@@ -63,9 +68,42 @@ export function deriveHostCardGuidance(participant: JunctionParticipant, copied 
         waiting: false, actions: [A.reexchange, A.open_relay]};
   }
 }
+function deriveAutomaticHostGuidance(participant: JunctionParticipant): ExchangeGuidance | undefined {
+  const x = participant.exchange;
+  switch (x?.state) {
+    case 'idle': case 'collecting':
+      return {step: 1, headline: '招待を準備しています。できあがるとPlumDeck Lite経由で相手に届きます。', waiting: true, actions: [A.cancel]};
+    case 'invite_ready': case 'awaiting_answer':
+      return {step: 2, headline: 'PlumDeck Lite経由で招待を届けています。相手の返答を待っています。', hint: '相手のplumdeckが自動で返答します。コピーでの受け渡しは不要です。',
+        waiting: true, actions: [secondary('copy_invite'), secondary('paste_answer'), A.cancel]};
+    case 'approval_pending':
+      return {step: 3, headline: `${participant.djName || participant.displayName || '相手のDJ'}から返答が届きました。参加申請を許可済みのため、自動で接続を許可しています。`,
+        waiting: true, actions: [A.approve, A.reject]};
+    case 'cancelled': case 'rejected':
+      return {step: 1, headline: 'この接続操作は終了しました。相手にはPlumDeck Lite経由で通知しています。', waiting: false, actions: [A.reexchange]};
+    case 'needs_exchange': case 'failed': case 'expired':
+      return {step: 1, headline: '再接続の招待を作ると、PlumDeck Lite経由で相手に届き、自動で再接続します。',
+        hint: '同じDJの枠を使います。セッションの作り直しは不要です。', error: x.state === 'failed' ? x.detail || x.errorCode : undefined,
+        waiting: false, actions: [A.reexchange, A.open_relay]};
+    default:
+      return undefined;
+  }
+}
 /** The guest's own connection, displayed at session level, never as a host-row action. */
-export function deriveGuestGuidance(snapshot: JunctionSnapshot, copied = false): ExchangeGuidance {
+export function deriveGuestGuidance(snapshot: JunctionSnapshot, copied = false, automatic = false): ExchangeGuidance {
   const x = snapshot.participants.find((p) => p.peerId === snapshot.hostPeerId)?.exchange ?? snapshot.exchange;
+  if (automatic) {
+    switch (x?.state) {
+      case 'idle': case 'collecting':
+        return {step: 2, headline: 'PlumDeck Lite経由で招待を受け取りました。返答を準備しています。', waiting: true, actions: [A.cancel]};
+      case 'response_ready': case 'awaiting_host':
+        return {step: 3, headline: 'PlumDeck Lite経由で返答を届けています。管理DJ側で自動的に接続されます。', waiting: true,
+          actions: [secondary('copy_answer'), secondary('paste_invite'), A.cancel]};
+      case 'needs_exchange': case 'failed': case 'expired': case 'cancelled': case 'rejected':
+        return {step: 1, headline: '管理DJが再接続の招待を作ると、PlumDeck Lite経由で届いて自動で再接続します。',
+          error: x.state === 'failed' ? x.detail || x.errorCode : undefined, waiting: true, actions: [secondary('paste_invite')]};
+    }
+  }
   switch (x?.state) {
     case 'idle': case 'collecting':
       return {step: 2, headline: '招待を受け取りました。あなたの返答を準備しています。', waiting: true, actions: [A.cancel]};

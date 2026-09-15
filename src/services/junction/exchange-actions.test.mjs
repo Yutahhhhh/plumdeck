@@ -51,3 +51,21 @@ test('connection is distinct from playback readiness; expiry is based on actual 
   assert.equal(formatExpiry(undefined,1000),undefined); assert.equal(formatExpiry(999,1000),'有効期限切れ');
   assert.equal(formatExpiry(31000,1000),'有効期限まで約30秒'); assert.equal(formatExpiry(601000,1000),'有効期限まで約10分');
 });
+test('share-musics delivery replaces clipboard steps without hiding the manual fallback', () => {
+  for (const state of ['invite_ready', 'awaiting_answer']) {
+    const g = deriveHostCardGuidance(peer(state), false, true);
+    assert.equal(g.step, 2); assert.equal(g.waiting, true); assert.equal(primaryExchangeAction(g), undefined);
+    assert.match(g.headline, /PlumDeck Lite経由/);
+    assert(g.actions.some(a => a.id === 'copy_invite') && g.actions.some(a => a.id === 'paste_answer'));
+  }
+  assert.equal(primaryExchangeAction(deriveHostCardGuidance(peer('approval_pending'), false, true)).id, 'approve');
+  assert.equal(primaryExchangeAction(deriveHostCardGuidance(peer('failed'), false, true)).id, 'reexchange');
+  assert.equal(deriveHostCardGuidance(peer('connected'), false, true).headline, deriveHostCardGuidance(peer('connected')).headline);
+  const reply = deriveGuestGuidance(guest('response_ready'), false, true);
+  assert.equal(reply.step, 3); assert.equal(primaryExchangeAction(reply), undefined); assert.match(reply.headline, /PlumDeck Lite経由/);
+  const lost = deriveGuestGuidance(guest('needs_exchange'), false, true);
+  assert.equal(primaryExchangeAction(lost), undefined); assert(lost.actions.some(a => a.id === 'paste_invite'));
+  for (const state of states) for (const g of [deriveHostCardGuidance(peer(state), false, true), deriveGuestGuidance(guest(state), false, true)]) {
+    assert(g.actions.filter(a => a.intent === 'primary').length <= 1, state);
+  }
+});

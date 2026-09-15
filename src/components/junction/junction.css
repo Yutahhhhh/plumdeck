@@ -456,3 +456,21 @@
   .junction-row-warning { margin-left: 63px; }
   .junction-row-primary { max-width: calc(100vw - 145px); }
 }
+
+/* share-musics linked admission */
+.junction-share-musics { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid #2b3a49; border-radius: 8px; background: #0d1620; }
+.junction-share-musics-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.junction-share-musics-head h3 { margin: 0; font-size: 13px; }
+.junction-share-musics-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.junction-share-musics-row .junction-card-note { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.junction-share-musics-waiting strong { font-size: 14px; }
+.junction-share-musics-waiting small { color: #91a5b4; font-size: 11px; }
+.junction-share-musics-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.junction-share-musics-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border-radius: 6px; background: #13202c; }
+.junction-share-musics-list li > div:first-child { display: grid; min-width: 0; gap: 2px; }
+.junction-share-musics-list strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+.junction-share-musics-list small { overflow-wrap: anywhere; color: #91a5b4; font-size: 11px; }
+.junction-share-musics-list .junction-card-actions { flex-wrap: nowrap; margin: 0; }
+.junction-entry-subhead { margin: 0; font-size: 13px; }
+.junction-share-musics-row .junction-btn,
+.junction-share-musics-list .junction-btn { flex: 0 0 auto; white-space: nowrap; }

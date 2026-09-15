@@ -4,10 +4,12 @@ Two distinct jobs live here.
 
 *Resolution* answers "which library track is actually on deck N". The deck header
 only gives a displayed title and artist, and the process's open files include the
-sampler banks and the metronome click, so neither alone is an identity. They are
-combined: a deck resolves only when exactly one *open file* is a rekordbox
-collection row whose title and artist match what the deck is showing. Anything
-else is reported as ambiguous or unresolved rather than guessed.
+sampler banks and the metronome click, so neither alone is an identity. An open
+collection file whose title and artist match is preferred. However, rekordbox
+does not expose every loaded track as an open file handle on every build, so an
+exact title-and-artist collection match is used as a fallback. If duplicate rows
+have the same identity, one is chosen deterministically, preferring a file
+already registered in plumdeck.
 
 *Recommendation* ranks the library for a chosen intent, restricted to originals
 rekordbox already knows about and that still exist on disk — a suggestion the DJ
@@ -57,17 +59,28 @@ class AssistAppService:
         """Match each observed deck to exactly one library track, or say why not."""
         library_error: Optional[str] = None
         entries: dict[str, rekordbox_library.RekordboxEntry] = {}
+        identity_entries: dict[str, rekordbox_library.RekordboxEntry] = {}
         try:
             entries = rekordbox_library.lookup_by_paths(open_audio_paths)
+            identity_entries = rekordbox_library.lookup_by_identities([
+                (observation.get("title"), observation.get("artist"))
+                for observation in observations
+                if observation.get("loaded")
+            ])
         except RekordboxLibraryUnavailable as error:
             library_error = str(error)
 
-        plumdeck_tracks = self._tracks_by_filepath([entry.filepath for entry in entries.values()])
+        all_entries = {**identity_entries, **entries}
+        plumdeck_tracks = self._tracks_by_filepath(
+            [entry.filepath for entry in all_entries.values()]
+        )
 
         decks = []
         for observation in observations:
             decks.append(
-                self._resolve_deck(observation, entries, plumdeck_tracks, library_error)
+                self._resolve_deck(
+                    observation, entries, identity_entries, plumdeck_tracks, library_error
+                )
             )
         return {
             "decks": decks,
@@ -79,6 +92,7 @@ class AssistAppService:
         self,
         observation: dict[str, Any],
         entries: dict[str, rekordbox_library.RekordboxEntry],
+        identity_entries: dict[str, rekordbox_library.RekordboxEntry],
         plumdeck_tracks: dict[str, Track],
         library_error: Optional[str],
     ) -> dict[str, Any]:
@@ -118,15 +132,15 @@ class AssistAppService:
             if rekordbox_library.normalize_text(entry.title) == title
             and rekordbox_library.normalize_text(entry.artist) == artist
         ]
+        if not exact:
+            exact = [
+                entry
+                for entry in identity_entries.values()
+                if rekordbox_library.normalize_text(entry.title) == title
+                and rekordbox_library.normalize_text(entry.artist) == artist
+            ]
         confidence = "title_and_artist"
 
-        if len(exact) > 1:
-            return {
-                **base,
-                "status": STATUS_AMBIGUOUS,
-                "message": "同じ曲名のファイルが複数開かれているため特定できません",
-                "candidates": [self._entry_summary(entry) for entry in exact],
-            }
         if not exact:
             return {
                 **base,
@@ -137,7 +151,16 @@ class AssistAppService:
                 ),
             }
 
-        entry = exact[0]
+        # Equal title/artist rows represent the same recording identity for
+        # Assist. Prefer a usable plumdeck file, then make the choice stable.
+        entry = min(
+            exact,
+            key=lambda candidate: (
+                candidate.filepath not in plumdeck_tracks,
+                rekordbox_library.normalize_path(candidate.filepath),
+                candidate.content_id,
+            ),
+        )
         track = plumdeck_tracks.get(entry.filepath)
         if track is None:
             return {

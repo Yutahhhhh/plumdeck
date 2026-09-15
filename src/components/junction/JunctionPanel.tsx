@@ -16,6 +16,9 @@ import { DJ_NAME_MAX_LENGTH, limitDjName, participantName, profileAvatarValue, s
 import { DjProfileEditor, type DjProfileValue } from './DjProfileEditor';
 import { JunctionRoster } from './JunctionRoster';
 import { NetworkSettingsSection } from './NetworkSettingsSection';
+import { ShareMusicsAccountCard, ShareMusicsHostSection, ShareMusicsLobby } from './ShareMusicsJunction';
+import { useShareMusics } from '@/hooks/useShareMusics';
+import { automaticPeerIds, publishSession, reportShareMusicsError } from '@/services/junction/share-musics/coordinator';
 import './junction.css';
 
 const PROFILE_KEY = 'plumdeck.junction.profile';
@@ -38,6 +41,9 @@ export function JunctionPanel({open, onClose, incomingInvite, onConsumeIncoming,
   const active = Boolean(snapshot?.active);
   const host = active && snapshot?.hostPeerId === snapshot?.localPeerId;
   const serverMode = snapshot?.exchange?.mode === 'server' || Boolean(snapshot?.invite && !snapshot?.exchange);
+  const shareMusics = useShareMusics();
+  const automaticPeers = useMemo(() => automaticPeerIds(shareMusics, snapshot), [shareMusics, snapshot]);
+  const guestAutomatic = Boolean(snapshot && !host && automaticPeers.has(snapshot.hostPeerId));
 
   const [profile, setProfile] = useState<DjProfileValue>(readProfile);
   const [sessionName, setSessionName] = useState('');
@@ -45,6 +51,7 @@ export function JunctionPanel({open, onClose, incomingInvite, onConsumeIncoming,
   const [preview, setPreview] = useState<ExchangeInspection | null>(null);
   const [programDevice, setProgramDevice] = useState('');
   const [adoptCurrent, setAdoptCurrent] = useState(false);
+  const [publishToMembers, setPublishToMembers] = useState(true);
   const [devices, setDevices] = useState<AudioDevice[]>([]);
   const [privatePath, setPrivatePath] = useState('');
   const [position, setPosition] = useState(0);
@@ -110,17 +117,37 @@ export function JunctionPanel({open, onClose, incomingInvite, onConsumeIncoming,
     }
   };
 
-  const runEntry = async (op: JunctionOp, params: Record<string, unknown>) => {
+  const runEntry = async (op: JunctionOp, params: Record<string, unknown>): Promise<boolean> => {
     setEntryBusy(true);
     setEntryError('');
     try {
       await junctionCommand(op, params);
       setJoinText('');
       setPreview(null);
+      return true;
     } catch (cause) {
       setEntryError(cause instanceof Error ? cause.message : String(cause));
+      return false;
     } finally {
       setEntryBusy(false);
+    }
+  };
+
+  const createSession = async () => {
+    const created = await runEntry('create', {
+      displayName: profile.djName,
+      djName: profile.djName,
+      avatarDataUrl: profile.avatarDataUrl,
+      themeColor: profile.themeColor,
+      sessionName,
+      programDevice,
+      adoptCurrent,
+      exchangeMode: 'manual',
+      startInLobby: true,
+    });
+    if (created && publishToMembers && shareMusics.phase === 'signed_in') {
+      await publishSession(sessionName.trim(), profile.djName)
+        .catch((cause) => reportShareMusicsError(`PlumDeck Liteへの公開に失敗しました：${cause instanceof Error ? cause.message : String(cause)}`));
     }
   };
 
@@ -234,17 +261,12 @@ export function JunctionPanel({open, onClose, incomingInvite, onConsumeIncoming,
             error={entryError}
             preview={preview}
             onInspect={() => void inspectInvite()}
-            onCreate={() => void runEntry('create', {
-              displayName: profile.djName,
-              djName: profile.djName,
-              avatarDataUrl: profile.avatarDataUrl,
-              themeColor: profile.themeColor,
-              sessionName,
-              programDevice,
-              adoptCurrent,
-              exchangeMode: 'manual',
-              startInLobby: true,
-            })}
+            panelOpen={open}
+            signedIn={shareMusics.phase === 'signed_in'}
+            guestWaiting={shareMusics.link?.role === 'guest' && !shareMusics.link.joined}
+            publishToMembers={publishToMembers}
+            setPublishToMembers={setPublishToMembers}
+            onCreate={() => void createSession()}
             onJoin={() => void runEntry('join', {
               displayName: profile.djName,
               djName: profile.djName,
@@ -307,14 +329,18 @@ export function JunctionPanel({open, onClose, incomingInvite, onConsumeIncoming,
               </p>
             )}
 
+            {host && <ShareMusicsHostSection snapshot={snapshot} djName={profile.djName} />}
+
             {!host && !serverMode && <section className="junction-own-connection" aria-labelledby="junction-own-connection-title">
               <h3 id="junction-own-connection-title">あなたの接続 · 参加DJ</h3>
               <p className="junction-card-note">管理DJ：{participantName(snapshot.participants.find((p) => p.peerId === snapshot.hostPeerId) ?? {peerId: snapshot.hostPeerId, displayName: '管理DJ', approved: true})}</p>
+              {guestAutomatic && <p className="junction-card-note">PlumDeck Lite経由で招待・返答を自動で受け渡しています（{shareMusics.link?.sessionName}）。</p>}
+              {guestAutomatic && (shareMusics.error || shareMusics.pollError) && <p className="junction-card-error" role="alert">{shareMusics.error || shareMusics.pollError}</p>}
               {selfExchange?.state === 'connected' && <p className="junction-exchange-next">セッションに接続済みです。</p>}
               <ExchangeFlow
                 key={`${snapshot.sessionId}:${selfExchange?.inviteId ?? snapshot.exchange?.inviteId ?? ''}`}
-                host={false} connected={selfExchange?.state === 'connected'}
-                guidance={deriveGuestGuidance(snapshot, Boolean(copiedPackets[snapshot.hostPeerId] && copiedPackets[snapshot.hostPeerId] === snapshot.exchange?.responseText))}
+                host={false} connected={selfExchange?.state === 'connected'} automatic={guestAutomatic}
+                guidance={deriveGuestGuidance(snapshot, Boolean(copiedPackets[snapshot.hostPeerId] && copiedPackets[snapshot.hostPeerId] === snapshot.exchange?.responseText), guestAutomatic)}
                 busy={Boolean(cards[snapshot.hostPeerId]?.busy)} error={cardErrors[snapshot.hostPeerId]}
                 onAction={(action) => handleExchangeAction(snapshot.hostPeerId, action)}
                 onImport={(text) => runCard(snapshot.hostPeerId, () => junctionCommand('exchange.import', {text: text.trim()}), true)}
@@ -327,6 +353,7 @@ export function JunctionPanel({open, onClose, incomingInvite, onConsumeIncoming,
               busyKey={busyKey}
               errors={cardErrors}
               copiedPackets={copiedPackets}
+              automaticPeers={automaticPeers}
               onExchangeAction={handleExchangeAction}
               onImportText={(peerId, text) => runCard(peerId, () => junctionCommand('exchange.import', {text: text.trim(), peerId}), true)}
               onChooseParticipant={(peerId, first) => void runCard('handoff', () => junctionCommand(first ? 'session.start' : 'handoff.request', first ? {performerPeerId: peerId} : {targetPeerId: peerId}))}
@@ -353,6 +380,8 @@ export function JunctionPanel({open, onClose, incomingInvite, onConsumeIncoming,
             <details className="junction-section junction-settings">
               <summary>セッション設定</summary>
               <div className="junction-settings-body">
+                <ShareMusicsAccountCard open={open} />
+
                 <h3>あなたのプロフィール</h3>
                 <DjProfileEditor value={profile} onChange={setProfile} compact />
                 <button
@@ -426,7 +455,7 @@ export function JunctionPanel({open, onClose, incomingInvite, onConsumeIncoming,
               <div className="junction-settings-body">
                 <p className="junction-card-note">接続状態：{connectionStatus(snapshot.connection.state)}</p>
                 <p className="junction-card-note">引き継ぎ：{snapshot.handoffState}</p>
-                <p className="junction-card-note">接続方法：{serverMode ? '自動接続' : '招待用の文字を直接受け渡し'}</p>
+                <p className="junction-card-note">接続方法：{serverMode ? '自動接続' : automaticPeers.size > 0 ? '招待用の文字を直接受け渡し（PlumDeck Liteのメンバーとは自動で受け渡し）' : '招待用の文字を直接受け渡し'}</p>
                 {host && snapshot.handoffState === 'recovery' && (
                   <button type="button" className="junction-btn junction-btn-primary" disabled={cards.recovery?.busy} onClick={() => void runCard('recovery', () => junctionCommand('recovery.resume'))}>このPCの演奏で再開</button>
                 )}
@@ -466,6 +495,11 @@ interface EntryProps {
   error: string;
   preview: ExchangeInspection | null;
   onInspect: () => void;
+  panelOpen: boolean;
+  signedIn: boolean;
+  guestWaiting: boolean;
+  publishToMembers: boolean;
+  setPublishToMembers: (value: boolean) => void;
   onCreate: () => void;
   onJoin: () => void;
   onInputError: (message: string) => void;
@@ -473,10 +507,11 @@ interface EntryProps {
 
 function EntrySection(props: EntryProps) {
   const [choice, setChoice] = useState<'create' | 'join' | null>(null);
-  useEffect(() => { if (props.joinText) setChoice('join'); }, [props.joinText]);
+  useEffect(() => { if (props.joinText || props.guestWaiting) setChoice('join'); }, [props.joinText, props.guestWaiting]);
   return (
     <div className="junction-entry">
       <p className="junction-entry-lead">DJ同士をつないで、順番と演奏を共有します。</p>
+      <ShareMusicsAccountCard open={props.panelOpen} />
       <div className="junction-entry-actions">
         <button type="button" className={`junction-entry-choice${choice === 'create' ? ' is-selected' : ''}`} aria-pressed={choice === 'create'} onClick={() => setChoice('create')}>
           <strong>セッションを作成</strong>
@@ -484,7 +519,7 @@ function EntrySection(props: EntryProps) {
         </button>
         <button type="button" className={`junction-entry-choice${choice === 'join' ? ' is-selected' : ''}`} aria-pressed={choice === 'join'} onClick={() => setChoice('join')}>
           <strong>招待から参加</strong>
-          <span>受け取った文字から参加する</span>
+          <span>{props.signedIn ? 'メンバーのセッション・受け取った文字から参加する' : '受け取った文字から参加する'}</span>
         </button>
       </div>
 
@@ -507,6 +542,12 @@ function EntrySection(props: EntryProps) {
             <input type="checkbox" checked={props.adoptCurrent} onChange={(event) => props.setAdoptCurrent(event.target.checked)} />
             すでに再生中の音をセッションに含める
           </label>
+          {props.signedIn && (
+            <label className="junction-check">
+              <input type="checkbox" checked={props.publishToMembers} onChange={(event) => props.setPublishToMembers(event.target.checked)} />
+              PlumDeck Liteのメンバーに公開する（申請を許可すると自動で接続）
+            </label>
+          )}
           <p className="junction-card-note">作成後にDJを招待し、最初にプレイするDJを一覧から選びます。</p>
           <button type="button" className="junction-btn junction-btn-primary junction-full-button" disabled={props.busy || !props.profile.djName.trim() || !props.sessionName.trim()} onClick={props.onCreate}>
             セッションを作成
@@ -514,8 +555,11 @@ function EntrySection(props: EntryProps) {
         </section>
       )}
 
-      {choice === 'join' && (
+      {choice === 'join' && <ShareMusicsLobby profile={props.profile} disabled={props.busy} />}
+
+      {choice === 'join' && !props.guestWaiting && (
         <section className="junction-entry-form">
+          {props.signedIn && <h3 className="junction-entry-subhead">招待用の文字から参加</h3>}
           <p className="junction-card-note">招待・返答の文字はサーバーを経由しません。管理DJから届いた招待用の文字をそのまま貼り付けます。</p>
           <label>
             招待用の文字

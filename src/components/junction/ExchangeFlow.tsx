@@ -7,13 +7,15 @@ interface Props {
   guidance: ExchangeGuidance;
   host: boolean;
   connected?: boolean;
+  /** Packets travel through share-musics: no invite/response steps for the DJ to follow. */
+  automatic?: boolean;
   busy: boolean;
   error?: string;
   onAction: (action: ExchangeActionId) => void;
   onImport: (text: string) => Promise<void>;
 }
 /** One next action; secondary actions dismiss on selection, outside click and Escape. */
-export function ExchangeFlow({guidance, host, connected, busy, error, onAction, onImport}: Props) {
+export function ExchangeFlow({guidance, host, connected, automatic, busy, error, onAction, onImport}: Props) {
   const [textOpen, setTextOpen] = useState(false);
   const [text, setText] = useState('');
   const [inputError, setInputError] = useState('');
@@ -35,11 +37,11 @@ export function ExchangeFlow({guidance, host, connected, busy, error, onAction, 
   };
   return <div className="junction-exchange-flow" aria-busy={busy}>
     {!connected && <>
-      <ol className="junction-exchange-steps" aria-label="接続までの手順">
+      {!automatic && <ol className="junction-exchange-steps" aria-label="接続までの手順">
         {['招待', '返答', '接続'].map((label, index) => <li key={label} aria-current={guidance.step === index + 1 ? 'step' : undefined} className={index + 1 < guidance.step ? 'is-done' : ''}>
           <span>{index + 1 < guidance.step ? '✓' : index + 1}</span>{label}
         </li>)}
-      </ol>
+      </ol>}
       <p className="junction-exchange-next" role="status">{guidance.headline}</p>
       {guidance.hint && <p className="junction-card-note">{guidance.hint}</p>}
     </>}

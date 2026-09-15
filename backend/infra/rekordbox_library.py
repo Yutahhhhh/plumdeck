@@ -192,6 +192,54 @@ def lookup_by_paths(paths: list[str]) -> dict[str, RekordboxEntry]:
     return entries
 
 
+def lookup_by_identities(
+    identities: list[tuple[str | None, str | None]],
+) -> dict[str, RekordboxEntry]:
+    """Return collection rows whose normalized title and artist both match.
+
+    This is the fallback for platforms where rekordbox does not expose every
+    loaded track as an open file handle.  There are at most four deck
+    identities, and a complete collection scan is bounded and inexpensive for
+    a local ``master.db``.  Filtering in Python preserves the same Unicode,
+    width, case and whitespace semantics used for deck resolution.
+    """
+    wanted = {
+        (normalize_text(title), normalize_text(artist))
+        for title, artist in identities
+        if normalize_text(title)
+    }
+    if not wanted:
+        return {}
+
+    connection = _connect(_database())
+    try:
+        rows = connection.execute(
+            "SELECT c.FolderPath, c.ID, c.Title, a.Name, c.BPM "
+            "FROM djmdContent c LEFT JOIN djmdArtist a ON a.ID = c.ArtistID "
+            "WHERE c.rb_local_deleted = 0 AND c.FolderPath IS NOT NULL"
+        ).fetchall()
+    except Exception as error:
+        raise RekordboxLibraryUnavailable(
+            "rekordbox のライブラリを読み取れませんでした"
+        ) from error
+    finally:
+        connection.close()
+
+    entries: dict[str, RekordboxEntry] = {}
+    for folder_path, content_id, title, artist, bpm in rows:
+        if (normalize_text(title), normalize_text(artist)) not in wanted:
+            continue
+        filepath = str(folder_path)
+        entries[filepath] = RekordboxEntry(
+            content_id=str(content_id),
+            filepath=filepath,
+            title=str(title or ""),
+            artist=str(artist or ""),
+            bpm=float(bpm) / 100 if bpm else None,
+        )
+    return entries
+
+
 class _CollectionPathCache:
     """Caches the set of paths rekordbox has in its collection."""
 
