@@ -34,6 +34,9 @@ public:
     MediaTransport(QString authenticatedPeerId,QStringList iceServers,Callbacks callbacks,std::shared_ptr<Identity> identity={},bool forceRelay=false);
     ~MediaTransport();
     bool start(bool offerer,QString* error=nullptr);
+    /// PlumDeck Lite uses one browser-compatible connection: the host offers a
+    /// recv-only audio m-line and the guest answers with its MASTER track.
+    bool startLite(bool host,QString* error=nullptr);
     void close();
     bool remoteDescription(bool bulk,const QString& sdp,const QString& type,const QString& authenticatedFingerprint,QString* error=nullptr);
     bool remoteCandidate(bool bulk,const QString& candidate,const QString& mid);
@@ -42,13 +45,17 @@ public:
     /// an application message to the transfer protocol.
     bool sendKeepAlive();
     bool setSendManifest(const StreamManifest&),setReceiveManifest(const StreamManifest&);
+    /// Accept browser RTP without a Junction stream manifest. The first packet
+    /// locks its SSRC/timestamp to the supplied session frame.
+    void setBrowserReceive(quint64 epoch,quint64 mediaFrameOrigin);
+    void setBrowserSendEpoch(quint64 epoch,quint64 mediaFrameOrigin);
     void startProducer(PcmRing*);
     void inheritProducerHistory(MediaTransport& previous);
     void enableAutomaticManifest(bool enabled);
     bool acknowledgeSendManifest(const QString& streamId);
     PcmRing& decodedRing();
     PcmRing& preCodecRing();
-    struct Statistics { quint64 receivedPackets=0,senderReports=0,receivedReports=0,nacksSent=0,retransmittedPackets=0; };
+    struct Statistics { quint64 receivedPackets=0,sentPackets=0,senderReports=0,receivedReports=0,nacksSent=0,retransmittedPackets=0; };
     Statistics statistics() const;
     bool selectedRelay(bool bulk=false) const;
     /// True once ICE gathering has completed on that connection.

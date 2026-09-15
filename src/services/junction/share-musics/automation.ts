@@ -73,6 +73,15 @@ export interface HostMemory {
   approvedInvite: Record<string, string>;
   /** member -> reason the roster slot could not be created; not retried automatically. */
   failed: Record<string, string>;
+  /** Lite member -> offer fingerprint already uploaded. */
+  liteOffer: Record<string, string>;
+  /** Lite member -> latest answer from the shared signal queue. */
+  liteAnswers: Record<string, ReceivedPacket>;
+  /** Lite member -> answer signal already imported by the native bridge. */
+  liteImportedAnswer: Record<string, number>;
+  litePeers: Record<string, boolean>;
+  /** Last Worker owner observed, used to restore ownership after restart. */
+  sharedOwnerPeerId: string;
 }
 
 export interface GuestMemory {
@@ -83,6 +92,9 @@ export interface GuestMemory {
   handledNotice: number;
   respondedInvite: number;
   uploadedResponse: string;
+  liteOffer?: ReceivedPacket;
+  liteHandledOffer: number;
+  liteUploadedAnswer: string;
 }
 
 export type HostAction =
@@ -97,8 +109,8 @@ export type GuestAction =
   | {kind: 'import_invite'; packet: ReceivedPacket}
   | {kind: 'upload_response'; inviteSignal: number; text: string};
 
-export const emptyHostMemory = (): HostMemory => ({afterSignalId: 0, peerByMember: {}, uploadedInvite: {}, uploadedNotice: {}, responses: {}, importedResponse: {}, approvableInvite: {}, approvedInvite: {}, failed: {}});
-export const emptyGuestMemory = (): GuestMemory => ({afterSignalId: 0, handledInvite: 0, handledNotice: 0, respondedInvite: 0, uploadedResponse: ''});
+export const emptyHostMemory = (): HostMemory => ({afterSignalId: 0, peerByMember: {}, uploadedInvite: {}, uploadedNotice: {}, responses: {}, importedResponse: {}, approvableInvite: {}, approvedInvite: {}, failed: {}, liteOffer: {}, liteAnswers: {}, liteImportedAnswer: {}, litePeers: {}, sharedOwnerPeerId: ''});
+export const emptyGuestMemory = (): GuestMemory => ({afterSignalId: 0, handledInvite: 0, handledNotice: 0, respondedInvite: 0, uploadedResponse: '', liteHandledOffer: 0, liteUploadedAnswer: ''});
 
 const AWAITING_ANSWER: ExchangeState[] = ['invite_ready', 'awaiting_answer'];
 const RESPONSE_READY: ExchangeState[] = ['response_ready', 'awaiting_host'];
@@ -118,7 +130,10 @@ export function desktopGuests(view: SharedSessionView): SharedMember[] {
 /** Native peers whose packets travel through share-musics instead of the clipboard. */
 export function automaticHostPeers(view: SharedSessionView | null, memory: HostMemory): string[] {
   if (!view) return [];
-  return desktopGuests(view).map((member) => memory.peerByMember[member.peerId]).filter((peerId): peerId is string => Boolean(peerId));
+  return [
+    ...desktopGuests(view).map((member) => memory.peerByMember[member.peerId]).filter((peerId): peerId is string => Boolean(peerId)),
+    ...view.session.members.filter((member) => member.role === 'guest' && member.status === 'approved' && member.client === 'lite').map((member) => member.peerId),
+  ];
 }
 
 /** Files arriving packets: the latest response per guest (host) or the latest invite/notice (guest). */
@@ -128,12 +143,14 @@ export function receiveSignals(view: SharedSessionView, host: HostMemory | null,
     if (host) {
       host.afterSignalId = Math.max(host.afterSignalId, signal.id);
       if (signal.kind === 'response' && text) host.responses[signal.senderPeerId] = {signalId: signal.id, text};
+      if (signal.kind === 'answer' && signal.payload.sdp) host.liteAnswers[signal.senderPeerId] = {signalId: signal.id, text: signal.payload.sdp};
     }
     if (guest) {
       guest.afterSignalId = Math.max(guest.afterSignalId, signal.id);
-      if (signal.senderPeerId !== view.session.hostPeerId || !text) continue;
-      if (signal.kind === 'invite') guest.invite = {signalId: signal.id, text};
-      if (signal.kind === 'notice') guest.notice = {signalId: signal.id, text};
+      if (signal.senderPeerId !== view.session.hostPeerId) continue;
+      if (signal.kind === 'invite' && text) guest.invite = {signalId: signal.id, text};
+      if (signal.kind === 'notice' && text) guest.notice = {signalId: signal.id, text};
+      if (signal.kind === 'offer' && signal.payload.sdp) guest.liteOffer = {signalId: signal.id, text: signal.payload.sdp};
     }
   }
 }
@@ -146,6 +163,10 @@ export function settleHostMemory(view: SharedSessionView, memory: HostMemory): v
   const approved = new Set(desktopGuests(view).map((member) => member.peerId));
   for (const table of [memory.peerByMember, memory.responses, memory.importedResponse, memory.approvableInvite, memory.approvedInvite, memory.failed]) {
     for (const memberId of Object.keys(table)) if (!approved.has(memberId)) delete table[memberId];
+  }
+  const approvedLite = new Set(view.session.members.filter((member) => member.role === 'guest' && member.status === 'approved' && member.client === 'lite').map((member) => member.peerId));
+  for (const table of [memory.liteOffer, memory.liteAnswers, memory.liteImportedAnswer]) {
+    for (const memberId of Object.keys(table)) if (!approvedLite.has(memberId)) delete table[memberId];
   }
 }
 

@@ -68,7 +68,9 @@ export interface ShareMusicsState {
 const LINK_KEY = 'plumdeck.junction.shareMusicsSession';
 const MAX_STEPS_PER_POLL = 4;
 /** Lite-protocol connections (phone <-> desktop) are enabled once the native side supports them. */
-export const LITE_PEERS_READY = false;
+export const LITE_PEERS_READY = true;
+
+interface LiteExchange { state: 'gathering' | 'ready' | 'connected'; sdp?: string; type?: string }
 
 let state: ShareMusicsState = {phase: 'unknown', sessions: [], link: readLink(), view: null};
 const listeners = new Set<() => void>();
@@ -223,6 +225,7 @@ export async function endLink(notice?: string) {
   const link = state.link;
   setLink(null);
   update({view: null, error: undefined, pollError: undefined, notice});
+  if (link?.role === 'guest' && link.hostClient === 'lite' && link.joined) await junctionCommand('leave').catch(() => {});
   if (link) await shareMusicsApi.leave(link.sessionId).catch(() => {});
 }
 
@@ -294,6 +297,7 @@ async function hostPoll(link: ShareMusicsLink): Promise<number> {
   settleHostMemory(view, link.host);
   persist(link);
   update({view});
+  await syncLiteHost(link, view, snapshot);
   for (let step = 0; step < MAX_STEPS_PER_POLL && current(link); step += 1) {
     const live = junctionState.get();
     const action = live?.active ? planHost(view, live, link.host) : null;
@@ -302,6 +306,63 @@ async function hostPoll(link: ShareMusicsLink): Promise<number> {
     persist(link);
   }
   return hostPollDelay(view, junctionState.get() ?? snapshot, link.host);
+}
+
+function workerOwnerForNative(view: SharedSessionView, link: ShareMusicsLink, snapshot: JunctionSnapshot): string | undefined {
+  if (snapshot.performerPeerId === snapshot.localPeerId) return view.session.hostPeerId;
+  const lite = view.session.members.find((member) => member.client === 'lite' && member.peerId === snapshot.performerPeerId);
+  if (lite) return lite.peerId;
+  return Object.entries(link.host.peerByMember).find(([, nativePeerId]) => nativePeerId === snapshot.performerPeerId)?.[0];
+}
+
+function nativeOwnerForWorker(view: SharedSessionView, link: ShareMusicsLink, snapshot: JunctionSnapshot): string | undefined {
+  if (view.session.ownerPeerId === view.session.hostPeerId) return snapshot.localPeerId;
+  const member = view.session.members.find((item) => item.peerId === view.session.ownerPeerId && item.status === 'approved');
+  if (!member) return undefined;
+  return member.client === 'lite' ? member.peerId : link.host.peerByMember[member.peerId];
+}
+
+async function syncLiteHost(link: ShareMusicsLink, view: SharedSessionView, initialSnapshot: JunctionSnapshot): Promise<void> {
+  const approved = view.session.members.filter((member) => member.role === 'guest' && member.status === 'approved' && member.client === 'lite');
+  const approvedIds = new Set(approved.map((member) => member.peerId));
+  for (const peerId of Object.keys(link.host.litePeers)) {
+    if (approvedIds.has(peerId)) continue;
+    await junctionCommand('lite.peer.remove', {peerId});
+    delete link.host.litePeers[peerId];
+  }
+  for (const member of approved) {
+    const exchange = await junctionCommand('lite.peer.ensure', {peerId: member.peerId, djName: member.displayName}) as LiteExchange;
+    link.host.litePeers[member.peerId] = true;
+    if (exchange.sdp) {
+      const fingerprint = packetFingerprint(exchange.sdp);
+      if (link.host.liteOffer[member.peerId] !== fingerprint) {
+        await shareMusicsApi.signal(link.sessionId, member.peerId, 'offer', {type: 'offer', sdp: exchange.sdp});
+        link.host.liteOffer[member.peerId] = fingerprint;
+      }
+    }
+    const answer = link.host.liteAnswers[member.peerId];
+    if (answer && link.host.liteImportedAnswer[member.peerId] !== answer.signalId) {
+      await junctionCommand('lite.peer.answer', {peerId: member.peerId, sdp: answer.text});
+      link.host.liteImportedAnswer[member.peerId] = answer.signalId;
+    }
+  }
+  let snapshot = junctionState.get() ?? initialSnapshot;
+  // On the first poll after an app restart, restore a phone owner recorded by
+  // the shared service before treating the native host as authoritative.
+  if (!link.host.sharedOwnerPeerId) {
+    const restored = nativeOwnerForWorker(view, link, snapshot);
+    if (restored && restored !== snapshot.performerPeerId) {
+      await junctionCommand('lite.owner.set', {ownerPeerId: restored});
+      snapshot = junctionState.get() ?? snapshot;
+    }
+  }
+  link.host.sharedOwnerPeerId = view.session.ownerPeerId;
+  const sharedOwner = workerOwnerForNative(view, link, snapshot);
+  if (sharedOwner && sharedOwner !== view.session.ownerPeerId) {
+    await shareMusicsApi.setOwner(link.sessionId, sharedOwner);
+    link.host.sharedOwnerPeerId = sharedOwner;
+  }
+  persist(link);
 }
 
 /** Returns a user-facing problem for steps that are deliberately not retried. */
@@ -358,16 +419,20 @@ async function guestPoll(link: ShareMusicsLink): Promise<number> {
   receiveSignals(view, null, link.guest);
   persist(link);
   update({view});
-  const snapshot = junctionState.get();
-  if (link.joined && snapshot && !guestSessionMatches(snapshot, link.nativeSessionId)) {
-    await endLink();
-    return 0;
-  }
   if (view.me.status === 'rejected' && !link.joined) {
     await endLink(`${link.hostName}が参加を許可しませんでした`);
     return 0;
   }
   if (view.me.status === 'left') {
+    await endLink();
+    return 0;
+  }
+  if (link.hostClient === 'lite') {
+    await syncLiteGuest(link, view);
+    return view.me.status === 'pending' ? 1000 : link.joined ? 3000 : 1000;
+  }
+  const snapshot = junctionState.get();
+  if (link.joined && snapshot && !guestSessionMatches(snapshot, link.nativeSessionId)) {
     await endLink();
     return 0;
   }
@@ -378,6 +443,44 @@ async function guestPoll(link: ShareMusicsLink): Promise<number> {
     persist(link);
   }
   return guestPollDelay(view, junctionState.get(), link.joined);
+}
+
+async function syncLiteGuest(link: ShareMusicsLink, view: SharedSessionView): Promise<void> {
+  if (view.me.status !== 'approved') return;
+  const offer = link.guest.liteOffer;
+  if (offer && link.guest.liteHandledOffer !== offer.signalId) {
+    if (junctionState.active() && !guestSessionMatches(junctionState.get(), link.nativeSessionId)) throw new Error('別のJunctionセッションに参加中です。退出してから参加してください');
+    if (!link.joined) {
+      const profile = link.profile ?? {djName: 'DJ'};
+      await junctionCommand('lite.join', {
+        sessionId: link.sessionId,
+        localPeerId: link.memberId,
+        hostPeerId: view.session.hostPeerId,
+        ownerPeerId: view.session.ownerPeerId,
+        sessionName: link.sessionName,
+        hostName: link.hostName,
+        djName: profile.djName,
+        sdp: offer.text,
+      });
+      link.joined = true;
+      link.nativeSessionId = link.sessionId;
+    } else {
+      await junctionCommand('lite.guest.offer', {sdp: offer.text});
+    }
+    link.guest.liteHandledOffer = offer.signalId;
+  }
+  if (!link.joined) return;
+  await junctionCommand('lite.roster.set', {members: view.session.members});
+  await junctionCommand('lite.owner.set', {ownerPeerId: view.session.ownerPeerId});
+  const exchange = await junctionCommand('lite.exchange', {peerId: view.session.hostPeerId}) as LiteExchange;
+  if (exchange.sdp) {
+    const fingerprint = packetFingerprint(exchange.sdp);
+    if (fingerprint !== link.guest.liteUploadedAnswer) {
+      await shareMusicsApi.signal(link.sessionId, view.session.hostPeerId, 'answer', {type: 'answer', sdp: exchange.sdp});
+      link.guest.liteUploadedAnswer = fingerprint;
+    }
+  }
+  persist(link);
 }
 
 async function runGuestAction(link: ShareMusicsLink, action: GuestAction): Promise<string | undefined> {
