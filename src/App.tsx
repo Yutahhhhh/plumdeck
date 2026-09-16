@@ -141,7 +141,7 @@ function App() {
         <div className="flex h-screen min-h-0 flex-col overflow-hidden bg-[#080b11]">
           <div className="z-[80] flex h-10 shrink-0 items-center border-b border-slate-700 bg-[#11151d] px-3 shadow-md">
             <span className="shrink-0 text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">plumdeck<span className="hidden sm:inline"> Workspace</span></span>
-            <JunctionBar />
+            <JunctionBar showRootButton={appMode === "play"} />
             <div className="ml-auto flex items-center gap-2"><Updater /><ModeToggle mode={appMode} onChange={changeMode} disabled={releasingPerformanceAudio} /></div>
           </div>
         <div className="min-h-0 flex-1">

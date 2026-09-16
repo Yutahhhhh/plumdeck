@@ -15,7 +15,12 @@ import './junction.css';
  * stays mounted (only visually toggled) so no in-progress exchange or form state
  * is lost when it is closed, and the decks behind it remain fully usable.
  */
-export function JunctionBar() {
+export interface JunctionBarProps {
+  /** falseだとヘッダーの丸ボタンだけ隠す（招待・終了ブロック通知でのパネル表示は維持）。プレイモード以外での常時表示をやめるため。 */
+  showRootButton?: boolean;
+}
+
+export function JunctionBar({ showRootButton = true }: JunctionBarProps) {
   const s = useJunction();
   const [open, setOpen] = useState(false);
   const [incomingInvite, setIncomingInvite] = useState<string | null>(null);
@@ -60,7 +65,7 @@ export function JunctionBar() {
 
   return (
     <>
-      <JunctionRootButton snapshot={s} open={open} onToggle={() => setOpen((v) => !v)} />
+      {showRootButton && <JunctionRootButton snapshot={s} open={open} onToggle={() => setOpen((v) => !v)} />}
       <JunctionPanel
         open={open}
         onClose={() => { setOpen(false); requestAnimationFrame(() => document.getElementById("junction-toggle")?.focus()); }}
