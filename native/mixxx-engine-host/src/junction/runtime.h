@@ -12,6 +12,9 @@ class Runtime final : public QObject {
 public:
     explicit Runtime(PlaybackBackend*,QObject* parent=nullptr);
     ~Runtime();
+    /// Host teardown: stop and detach while the backend is alive. Runtime
+    /// storage remains valid until the backend has joined its audio callback.
+    void detachBackend();
     QJsonObject command(const QString& op,const QJsonObject& params,QString* error);
     QJsonObject snapshot() const;
     bool active() const;
@@ -22,8 +25,11 @@ public:
     QString authorize(const QString&,const QJsonObject&) const;
     void applied(const QString&,const QJsonObject&);
     void capture(const float*,unsigned frames,quint64 sourceFrame,unsigned rate) noexcept;
+    void captureLocalReturn(const float*,unsigned frames,quint64 sourceFrame,unsigned rate) noexcept;
     bool sharedAudible() const noexcept;
     bool localMasterAudible() const noexcept;
+    /// Audio thread: the JUNCTION deck's next `frames` stereo frames at 44.1 kHz.
+    void readJunctionInput(float* out,unsigned frames) noexcept;
     std::function<QJsonObject()> graphSnapshot;
     std::function<QString(const QJsonObject&)> restoreGraph;
     /// Performer side: candidate local decks. Runtime selects current + next;

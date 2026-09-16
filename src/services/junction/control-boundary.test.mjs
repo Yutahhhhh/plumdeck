@@ -9,6 +9,13 @@ test('host authority does not grant performer controls; PFL stays local',()=>{
   assert.deepEqual(routePerformanceCommand('mixer.channel.pfl',{deck:'A',enabled:true}),{deck:'A',enabled:true});
   assert.throws(()=>routePerformanceCommand('sampler.play',{slot:0}));
 });
+test('while a Lite DJ performs, this computer prepares its own decks with a lease',()=>{
+  junctionState.set({...base,performerPeerId:'phone',localPrep:true});
+  const routed = routePerformanceCommand('deck.load',{deck:'B'});
+  assert.equal(routed.deck,'B');
+  assert.equal(routed._junction.actorPeerId,'self');
+  assert.throws(()=>routePerformanceCommand('unknown.raw',{}));
+});
 test('queued lease is not promoted after handoff and unknown raw operations fail closed',()=>{
   junctionState.set({...base,performerPeerId:'self'});
   const lease = captureJunctionLease();

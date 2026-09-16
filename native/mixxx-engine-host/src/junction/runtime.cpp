@@ -2,6 +2,7 @@
 #include "runtime.h"
 #include "media_transport.h"
 #include "program_output.h"
+#include "junction_input.h"
 #include "asset_cache.h"
 #include "validation.h"
 #include "validation_capture.h"
@@ -36,6 +37,7 @@
 #include <algorithm>
 #include <cmath>
 #include <array>
+#include <deque>
 #include <map>
 #include <vector>
 #include <sndfile.h>
@@ -127,7 +129,7 @@ struct Runtime::Impl {
     // is still carrying audio. It is promoted only once it actually connects,
     // so a manual re-exchange never interrupts an established peer.
     struct PendingControl {QString type;QByteArray bytes;};
-    struct Peer {QString id,name,fp,avatarDataUrl,themeColor;bool approved=false,hello=false,junctionTracksV1=false,producing=false,remoteStreamReady=false,endingAck=false,lite=false;QString liteSdp,liteSdpType;std::unique_ptr<MediaTransport> transport;QQueue<PendingControl> pending;
+    struct Peer {QString id,name,fp,avatarDataUrl,themeColor;bool approved=false,hello=false,junctionTracksV1=false,producing=false,remoteStreamReady=false,endingAck=false,lite=false;QString liteSdp,liteSdpType;QJsonArray liteDecks;qint64 liteDecksAt=0;std::unique_ptr<MediaTransport> transport;QQueue<PendingControl> pending;
         qint64 lastControlAt=0,healthAt=0,bulkDisconnectedAt=0;quint64 serial=0,candidateSerial=0;std::unique_ptr<MediaTransport> candidate,retiring; qint64 retireAt=0;ManualAttempt manual;HealthReportMessage health;bool hasHealth=false;
         MediaTransport::Statistics healthStats;bool healthStatsReady=false,probeReady=false;double lastProbeRttMs=0,smoothedRttMs=0,smoothedJitterMs=0;};
     std::map<QString,std::unique_ptr<Peer>> peers;
@@ -153,14 +155,34 @@ struct Runtime::Impl {
     std::map<quint64,ProgramBlock> programPending,backupPending;
     quint64 programEnqueuedThrough=0; qint64 ownerAudioAt=0;quint64 recoveryUntil=0,recoveryResumeFrame=0,recoveryEpoch=0;
     QString backupOwner;quint64 backupEpoch=0;
+    // --- JUNCTION deck: another DJ's audio as a local mixer channel --------
+    // The previous Lite owner keeps sounding here after an operator switch
+    // until the new operator fades it out (`releasingPeer`).
+    JunctionInput input;QString inputPeer,releasingPeer;InputRelease inputRelease;
+    QSet<QString> liteSenders; // Lite guest: peers the host still wants to hear.
+    // Each Lite connection owns one outbound SPSC ring for its entire session.
+    // A ring is never reassigned to another transport worker or freed while
+    // the audio callback may still hold its pointer.
+    std::map<QString,std::unique_ptr<PcmRing>> liteReturnRings;
+    std::atomic<PcmRing*> localReturnTarget{nullptr};
+    std::atomic<unsigned> localReturnReaders{0};
+    std::atomic<quint64> returnEpoch{0},returnGeneration{1},returnSequence{0};
+    QString returnRelaySource,returnRelayTarget;
+    // The Lite->Mac seam. `seam` names the outgoing DJ whose direct stream must
+    // keep reaching Program; `seamFrame` is the boundary it reaches, measured
+    // by the first captured block instead of guessed from the clock, and 0
+    // until that block lands. `takeoverAnchor` arms that one measurement.
+    struct InputSeam {QString oldOwner;quint64 oldEpoch=0;};std::optional<InputSeam> seam;
+    struct LaneBucket {float peak=0;QString deck;};std::deque<LaneBucket> lane;float lanePeak=0;quint32 laneFrames=0;
 
-    std::atomic<bool> captureEnabled{false},audible{true},separateLocalMaster{true};
+    std::atomic<bool> captureEnabled{false},audible{true},mainAudible{true},separateLocalMaster{true};
     std::atomic<quint64> lastCaptureSourceEnd{0};
     std::atomic<quint64> blockSequence{0},captureEpoch{1},sourceAnchor{UINT64_MAX},mediaAnchor{0};
     std::atomic<qint64> timelineAnchor{0};
     std::atomic<quint64> pendingAnchorSource{0},pendingAnchorMedia{0},pendingAnchorRevision{0};
     quint64 appliedAnchorRevision=0;
-    std::atomic<quint64> captureGeneration{1},scheduledEpoch{0},scheduledFrame{UINT64_MAX};
+    std::atomic<quint64> captureGeneration{1},scheduledEpoch{0},scheduledFrame{UINT64_MAX},seamFrame{0};
+    std::atomic<bool> takeoverAnchor{false};
     std::array<float,8192> pcm{};
     std::map<QString,QString> assets;
     std::map<QString,QSet<QString>> assetWaiters;
@@ -302,7 +324,10 @@ struct Runtime::Impl {
         if(!auth.local.isEmpty()){QJsonObject row{{"peerId",auth.local},{"approved",true},{"isHost",auth.local==auth.host},{"isCoordinator",auth.local==auth.host},{"isPerformer",isLive&&auth.owner==auth.local},{"isNextUp",auth.next==auth.local},{"status",connection}};enrichRosterRow(row,auth.local,nullptr,true);rows.push_back(row);}
         for(const auto& [id,p]:peers){
             QJsonObject row{{"peerId",id},{"approved",p->approved},{"isHost",id==auth.host},{"isCoordinator",id==auth.host},{"isPerformer",isLive&&id==auth.owner},{"isNextUp",id==auth.next},{"status",p->hello?"connected":p->approved?"connecting":"pending"}};enrichRosterRow(row,id,p.get());
-            if(manual&&!wire)row["exchange"]=manualExchangeJson(*p);
+            // A Lite peer connects through liteSdp/hello, never the manual
+            // packet exchange, so its idle exchange state must not be shown.
+            if(manual&&!wire&&!p->lite)row["exchange"]=manualExchangeJson(*p);
+            if(p->lite)row["client"]="lite";
             rows.push_back(row);
         }
         if(!hosting)for(const auto& value:participantRoster){const auto row=value.toObject();const auto id=row["peerId"].toString();if(!validOpaqueId(id)||id==auth.local||peers.count(id))continue;
@@ -316,6 +341,7 @@ struct Runtime::Impl {
         QJsonObject state{{"active",!auth.sessionId.isEmpty()},{"sessionId",auth.sessionId},{"localPeerId",auth.local},{"hostPeerId",auth.host},{"coordinatorPeerId",auth.host},{"performerPeerId",isLive?auth.owner:QString{}},{"nextPeerId",auth.next},{"epoch",u64(auth.epoch)},{"revision",double(auth.revision)},{"sessionName",name},{"lifecycle",lifecycle},{"handoffState",auth.phase},{"handoffId",auth.handoffId},{"participants",participants},{"readiness",QJsonObject{{"ready",ready},{"reasons",why}}},{"connection",QJsonObject{{"state",connection},{"detail",problem}}},{"program",QJsonObject{{"state",programState},{"captureActive",captureEnabled.load()},{"localMonitor",separateLocalMaster.load()?"direct":"program-delayed"},{"outputDevice",QString::number(programDevice)},{"recording",program.recording()},{"underruns",u64(program.underruns())},{"meter",double(program.peak())},{"rms",double(program.rms())},{"sampleRateHz",int(program.sampleRate())},{"deviceLatencySeconds",program.deviceLatencySeconds()}}},{"invite",hosting?invite:QString{}},{"privatePreview",backend->privatePreviewState()},{"exchange",wire?QJsonObject{{"mode",manual?QStringLiteral("manual"):QStringLiteral("server")}}:exchangeState()}};
         // Junction Live cache paths are local-only. Only the coordinator while
         // another peer performs needs the presentation pair.
+        if(!wire){state["localPrep"]=localPrep();state["junctionInput"]=inputState();}
         if(!wire)state["junctionTracks"]=(hosting&&auth.owner!=auth.local)
             ?sharedTracks.toJson([this](const SharedTrackList::Entry& entry){return trackProgress(entry);})
             :QJsonArray{};
@@ -487,27 +513,175 @@ struct Runtime::Impl {
     void sendLite(Peer& p,const QJsonObject& value) {
         if(p.lite&&p.transport)p.transport->sendControl(json(value));
     }
+    /// `senderPeerIds`: peers whose audio must keep flowing. The operator is
+    /// always one DJ; an outgoing Lite DJ stays a sender until released.
+    QJsonObject liteOwnerMessage() const {
+        QJsonArray senders{auth.owner};if(!releasingPeer.isEmpty()&&releasingPeer!=auth.owner)senders.append(releasingPeer);
+        return {{"type","owner"},{"ownerPeerId",auth.owner},{"senderPeerIds",senders}};
+    }
+    PcmRing* returnRing(const QString& id) {
+        auto& slot=liteReturnRings[id];if(!slot)slot=std::make_unique<PcmRing>(128,4096,2);return slot.get();
+    }
+    void stopLiteReturns() {
+        localReturnTarget.store(nullptr,std::memory_order_release);returnRelaySource.clear();returnRelayTarget.clear();
+        if(!hosting)return;
+        for(auto& [id,p]:peers)if(p->lite&&p->transport)p->transport->startProducer(nullptr);
+    }
+    void startLiteReturn(const QString& previous,const QString& target) {
+        stopLiteReturns();
+        if(!hosting||target==auth.local||previous.isEmpty()||previous==target)return;
+        auto found=peers.find(target);if(found==peers.end()||!found->second->lite||!found->second->transport)return;
+        auto* ring=returnRing(target);const auto generation=returnGeneration.fetch_add(1,std::memory_order_relaxed)+1;
+        StreamManifest manifest{secureRandomHex(12),auth.local,auth.epoch,generation,0,1,0};auto random=secureRandomBytes(8);
+        manifest.ssrc=qFromBigEndian<quint32>(reinterpret_cast<const uchar*>(random.constData()));if(!manifest.ssrc)manifest.ssrc=1;
+        manifest.rtpTimestampOrigin=qFromBigEndian<quint32>(reinterpret_cast<const uchar*>(random.constData()+4));
+        found->second->transport->setSendManifest(manifest);found->second->transport->restartProducer(ring);
+        returnEpoch.store(auth.epoch,std::memory_order_relaxed);
+        if(previous==auth.local)localReturnTarget.store(ring,std::memory_order_release);
+        else if(litePeer(previous)){returnRelaySource=previous;returnRelayTarget=target;}
+    }
     void sendLiteOwner() {
-        for(auto& [id,p]:peers){Q_UNUSED(id);if(p->lite&&p->approved)sendLite(*p,{{"type","owner"},{"ownerPeerId",auth.owner}});}
+        const auto message=liteOwnerMessage();
+        for(auto& [id,p]:peers){Q_UNUSED(id);if(p->lite&&p->approved)sendLite(*p,message);}
+    }
+    bool litePeer(const QString& id) const {auto it=peers.find(id);return it!=peers.end()&&it->second->lite;}
+    /// While a Lite DJ performs, this computer's decks are not shared: its DJ
+    /// may prepare and cue locally, and only its own output device hears it.
+    /// Only a receiver prepares: a DJ whose master is still being sent is
+    /// never one, so its decks stay locked until the new operator releases it.
+    bool localPrep() const {return !auth.sessionId.isEmpty()&&auth.owner!=auth.local&&!localSending()&&(liteSession||(hosting&&litePeer(auth.owner)));}
+    /// An outgoing Lite DJ that the host still wants to hear after the switch.
+    bool localSending() const {
+        if(auth.owner==auth.local)return false;
+        // A browser guest learns this from the host's senderPeerIds. The
+        // desktop host has the same obligation when its own master is the
+        // outgoing source being returned to the new Lite operator.
+        return (liteSession&&!hosting&&liteSenders.contains(auth.local))
+            || (hosting&&releasingPeer==auth.local);
+    }
+    QString junctionInputPeer() const {
+        if(!hosting)return auth.owner==auth.local&&!releasingPeer.isEmpty()?auth.host:QString{};
+        if(!releasingPeer.isEmpty())return litePeer(releasingPeer)?releasingPeer:QString{};
+        return litePeer(auth.owner)?auth.owner:QString{};
+    }
+    void releaseInput() {
+        if(releasingPeer.isEmpty())return;
+        const auto released=releasingPeer;
+        stopLiteReturns();
+        releasingPeer.clear();inputRelease.clear();++auth.revision;
+        backend->junctionInputMainMix(false);
+        if(hosting)sendLiteOwner();
+        else{auto host=peers.find(auth.host);if(host!=peers.end())sendLite(*host->second,{{"type","input-released"},{"senderPeerId",released}});}
+    }
+    QString audibleDeck(const Peer& p) const {
+        if(p.liteDecks.isEmpty()||monotonicNanos()-p.liteDecksAt>3000000000LL)return {};
+        QString best;double loudest=.001;
+        for(const auto& value:p.liteDecks){const auto deck=value.toObject();const double level=deck["audibility"].toDouble()*(deck["playing"].toBool()?1:.5);if(level>loudest){loudest=level;best=deck["deck"].toString();}}
+        return best;
+    }
+    QJsonArray displayedLiteDecks(const Peer& p) const {
+        const auto ageNanos=monotonicNanos()-p.liteDecksAt;
+        if(p.liteDecks.isEmpty()||ageNanos<0||ageNanos>3000000000LL)return {};
+        const double elapsedMs=double(ageNanos)/1000000.0;
+        QJsonArray result;
+        for(const auto& value:p.liteDecks){
+            auto deck=value.toObject();
+            if(deck["playing"].toBool()){
+                const double duration=deck["durationMs"].toDouble();
+                const double maximum=duration>0?duration:86400000.0;
+                deck["positionMs"]=std::clamp(deck["positionMs"].toDouble()+elapsedMs*deck["rate"].toDouble(1),0.0,maximum);
+            }
+            result.append(deck);
+        }
+        return result;
+    }
+    void feedInput(const float* samples,const PcmBlockInfo& info) {
+        input.write(samples,info);
+        const auto bucketFrames=info.sampleRateHz/25;if(!bucketFrames)return;
+        for(quint32 i=0;i<info.frameCount;++i){
+            lanePeak=std::max({lanePeak,std::abs(samples[size_t(i)*2]),std::abs(samples[size_t(i)*2+1])});
+            if(++laneFrames<bucketFrames)continue;
+            auto source=peers.find(inputPeer);
+            lane.push_back(LaneBucket{std::min(lanePeak,1.f),source!=peers.end()?audibleDeck(*source->second):QString{}});
+            while(lane.size()>300)lane.pop_front();
+            lanePeak=0;laneFrames=0;
+        }
+    }
+    void resetInput() {input.reset();lane.clear();lanePeak=0;laneFrames=0;}
+    QJsonObject inputState() const {
+        QJsonObject state{{"peerId",inputPeer},{"releasingPeerId",releasingPeer},{"receiving",!inputPeer.isEmpty()&&input.receiving()},
+            {"latencyMs",double(input.latencyFrames48k())/48.0},{"underruns",u64(input.underruns())},{"channel",backend->junctionInputState()},
+            {"seamFrame",u64(seamFrame.load(std::memory_order_acquire))},{"seamPending",takeoverAnchor.load(std::memory_order_acquire)}};
+        auto source=peers.find(inputPeer);
+        if(source!=peers.end()){
+            state["djName"]=source->second->name;
+            const auto decks=displayedLiteDecks(*source->second);if(!decks.isEmpty())state["decks"]=decks;
+            state["audibleDeck"]=audibleDeck(*source->second);
+        }
+        QJsonArray peaks,decks;for(const auto& bucket:lane){peaks.append(std::round(bucket.peak*1000)/1000);decks.append(bucket.deck);}
+        state["lane"]=QJsonObject{{"bucketMs",40},{"peaks",peaks},{"decks",decks}};
+        return state;
     }
     void selectLiteOwner(const QString& target) {
         if(target!=auth.local){auto found=peers.find(target);if((found==peers.end()||!found->second->approved)&&!(liteSession&&validOpaqueId(target)))return;}
         const auto previous=auth.owner;if(previous==target)return;
+        const bool previousLite=litePeer(previous);const auto previousEpoch=auth.epoch;
         auth.owner=target;auth.next.clear();auth.handoffId.clear();auth.committed.reset();auth.phase="playing";++auth.epoch;++auth.revision;
         turnRequests.remove(target);finishedOrder.removeAll(target);if(!previous.isEmpty()&&previous!=target){finishedOrder.removeAll(previous);finishedOrder.append(previous);}rosterOrder.removeAll(target);rosterOrder.prepend(target);
-        programPending.clear();programEnqueuedThrough=0;ownerAudioAt=0;captureEpoch.store(auth.epoch);scheduledEpoch.store(0);scheduledFrame.store(UINT64_MAX);
-        if(target==auth.local){q->setCaptureAnchor(UINT64_MAX,0);captureEnabled.store(true);tap.enable(liteSession,true);}else{captureEnabled.store(false);tap.enable(false,false);}
+        ownerAudioAt=0;captureEpoch.store(auth.epoch);scheduledEpoch.store(0);scheduledFrame.store(UINT64_MAX);
+        // Taking over from a Lite DJ: their audio stays on the JUNCTION deck,
+        // so this master now carries it, delayed by whatever the deck buffered.
+        // Only the audio callback can say by how much, so the seam is left
+        // unmeasured here and the capture path fills it in.
+        const bool takeOver=target==auth.local&&previous!=auth.local&&(hosting?previousLite:liteSession);
+        // The new operator starts from an audible JUNCTION deck (unity, THRU,
+        // flat EQ): stale faders must neither mute the outgoing DJ on Program
+        // nor count as the fade-out that releases their stream.
+        releasingPeer=!previous.isEmpty()&&previous!=target?previous:QString{};
+        if(takeOver){backend->junctionInputTakeOver();backend->junctionInputMainMix(true);}
+        else backend->junctionInputMainMix(false);
+        if(!releasingPeer.isEmpty())inputRelease.begin(monotonicNanos());else inputRelease.clear();
+        if(hosting)startLiteReturn(previous,target);
+        seam.reset();seamFrame.store(0,std::memory_order_relaxed);
+        // One shot, and armed only here: a later Mac-to-Mac handoff runs the
+        // ordinary fenced cutover and must never inherit this anchor.
+        const bool measureSeam=takeOver&&programOpened&&!previous.isEmpty();
+        if(measureSeam)seam=InputSeam{previous,previousEpoch};
+        takeoverAnchor.store(measureSeam,std::memory_order_release);
+        const bool stillSending=localSending();
+        if(target==auth.local){q->setCaptureAnchor(UINT64_MAX,0);captureEnabled.store(true);tap.enable(liteSession,true);}else if(!stillSending){captureEnabled.store(false);tap.enable(false,false);}
         for(auto& [id,p]:peers){
-            if(p->lite&&p->transport){if(id==target&&hosting)p->transport->setBrowserReceive(auth.epoch,now());if(!hosting&&id==auth.host){if(target==auth.local){p->transport->setBrowserSendEpoch(auth.epoch,now());p->transport->startProducer(&tap.networkRing());p->producing=true;}else{p->transport->startProducer(nullptr);p->producing=false;}}}
+            if(p->lite&&p->transport){if((hosting&&id==target)||(!hosting&&id==auth.host&&target==auth.local))p->transport->setBrowserReceive(auth.epoch,now());if(!hosting&&id==auth.host){if(target==auth.local){p->transport->setBrowserSendEpoch(auth.epoch,now());p->transport->startProducer(&tap.networkRing());p->producing=true;}else if(!stillSending){p->transport->startProducer(nullptr);p->producing=false;}}}
         }
-        audible.store(target==auth.local);sendLiteOwner();broadcast("session.snapshot",wireState(false));
+        audible.store(target==auth.local||localPrep());
+        // Local preparation keeps the headphone bus alive, but it must never
+        // leak this computer's master into the venue while a Lite peer owns it.
+        mainAudible.store(target==auth.local);
+        sendLiteOwner();broadcast("session.snapshot",wireState(false));
     }
     void liteControl(const QString& id,const QByteArray& bytes) {
         auto found=peers.find(id);if(found==peers.end()||!found->second->lite||bytes.size()>4096)return;
         QJsonParseError parse;const auto document=QJsonDocument::fromJson(bytes,&parse);if(parse.error!=QJsonParseError::NoError||!document.isObject())return;
         const auto message=document.object();const auto type=message["type"].toString();
         if(type=="handoff-request"&&hosting&&found->second->approved){turnRequests.insert(id);++auth.revision;return;}
-        if(type=="owner"&&!hosting&&id==auth.host){const auto owner=message["ownerPeerId"].toString();if(validOpaqueId(owner))selectLiteOwner(owner);}
+        if(type=="input-released"&&hosting&&found->second->approved&&auth.owner==id&&!releasingPeer.isEmpty()){releaseInput();return;}
+        if(type=="decks"&&hosting&&found->second->approved&&message["decks"].isArray()){
+            QJsonArray decks;
+            for(const auto& value:message["decks"].toArray()){if(decks.size()>=4)break;const auto deck=value.toObject();const auto name=deck["deck"].toString();if(name!="A"&&name!="B"&&name!="C"&&name!="D")continue;
+                const auto number=[&](const char* key,double low,double high){const double v=deck[key].toDouble();return std::isfinite(v)?std::clamp(v,low,high):0.0;};
+                QJsonObject row{{"deck",name},{"role",deck["role"].toString()=="current"?"current":"next"},{"title",deck["title"].toString().left(200)},{"artist",deck["artist"].toString().left(200)},
+                    {"bpm",number("bpm",0,999)},{"positionMs",number("positionMs",0,86400000)},{"durationMs",number("durationMs",0,86400000)},{"rate",number("rate",0,4)},{"audibility",number("audibility",0,1)},{"playing",deck["playing"].toBool()},{"beatsPerBar",std::clamp(deck["beatsPerBar"].toInt(4),1,16)}};
+                if(deck["firstBeatMs"].isDouble())row["firstBeatMs"]=number("firstBeatMs",-60000,86400000);
+                decks.append(row);}
+            found->second->liteDecks=decks;found->second->liteDecksAt=monotonicNanos();return;
+        }
+        if(type=="owner"&&!hosting&&id==auth.host){
+            const auto owner=message["ownerPeerId"].toString();if(!validOpaqueId(owner))return;
+            QSet<QString> senders{owner};if(message["senderPeerIds"].isArray())for(const auto& value:message["senderPeerIds"].toArray())if(validOpaqueId(value.toString()))senders.insert(value.toString());
+            liteSenders=senders;selectLiteOwner(owner);
+            // Released after the new operator faded this computer out.
+            if(owner!=auth.local&&!liteSenders.contains(auth.local)&&found->second->producing){found->second->transport->startProducer(nullptr);found->second->producing=false;captureEnabled.store(false);tap.enable(false,false);++auth.revision;}
+        }
     }
     QString buildLitePeer(Peer& p,bool host) {
         if(p.transport)return {};
@@ -520,7 +694,7 @@ struct Runtime::Impl {
         if(!transport->startLite(host,&error))return error.isEmpty()?QStringLiteral("PlumDeck Liteとの接続を開始できません"):error;
         p.transport=std::move(transport);p.lite=true;p.approved=true;
         if(host)p.transport->setBrowserReceive(auth.epoch,now());
-        else{StreamManifest manifest{secureRandomHex(12),auth.local,auth.epoch,1,0,1,0};auto random=secureRandomBytes(8);manifest.ssrc=qFromBigEndian<quint32>(reinterpret_cast<const uchar*>(random.constData()));if(!manifest.ssrc)manifest.ssrc=1;manifest.rtpTimestampOrigin=qFromBigEndian<quint32>(reinterpret_cast<const uchar*>(random.constData()+4));p.transport->setSendManifest(manifest);}
+        else{StreamManifest manifest{secureRandomHex(12),auth.local,auth.epoch,1,0,1,0};auto random=secureRandomBytes(8);manifest.ssrc=qFromBigEndian<quint32>(reinterpret_cast<const uchar*>(random.constData()));if(!manifest.ssrc)manifest.ssrc=1;manifest.rtpTimestampOrigin=qFromBigEndian<quint32>(reinterpret_cast<const uchar*>(random.constData()+4));p.transport->setSendManifest(manifest);p.transport->setBrowserReceive(auth.epoch,now());}
         return {};
     }
     // ---------------------------------------------------------------------
@@ -854,7 +1028,9 @@ struct Runtime::Impl {
             if(!auth.committed){auth.epoch=*epoch;const auto publicOwner=payload["performerPeerId"].toString();auth.owner=publicOwner.isEmpty()&&lifecycle!="live"?auth.host:publicOwner;auth.next=payload["nextPeerId"].toString();auth.phase=payload["handoffState"].toString();auth.handoffId=payload["handoffId"].toString();}
             name=payload["sessionName"].toString();const auto incomingRoster=payload["participants"].toArray();if(incomingRoster.size()<=64){QJsonArray merged;for(const auto& value:incomingRoster){auto row=value.toObject();if(!row.contains("avatarDataUrl")){const auto previous=rosterMetadata(row["peerId"].toString());if(previous.contains("avatarDataUrl"))row["avatarDataUrl"]=previous["avatarDataUrl"];}merged.append(row);}participantRoster=merged;}
             bool valid=false;const auto t0=payload["timelineOriginNanos"].toString().toLongLong(&valid);auto f0=parseU64(payload["timelineOriginFrame"]);if(valid&&f0)timeline.adopt(t0,*f0);
-            if(!p.hello)queue(p,"peer.hello",localProfile());if(!captureEnabled.load())captureEpoch.store(auth.epoch);if(auth.owner==auth.local&&!p.producing)sendManifest(p);else if(auth.owner!=auth.local&&p.producing){p.transport->startProducer(nullptr);p.producing=false;if(!hosting){captureEnabled.store(false);tap.enable(false,false);}}audible.store(auth.owner==auth.local);++auth.revision;
+            // Only a peer that is neither performing nor incoming stops sending:
+            // the incoming DJ streams during bootstrap and handoff validation.
+            if(!p.hello)queue(p,"peer.hello",localProfile());if(!captureEnabled.load())captureEpoch.store(auth.epoch);if(auth.owner==auth.local&&!p.producing)sendManifest(p);else if(auth.owner!=auth.local&&auth.next!=auth.local&&p.producing){p.transport->startProducer(nullptr);p.producing=false;if(!hosting){captureEnabled.store(false);tap.enable(false,false);}}audible.store(auth.owner==auth.local);++auth.revision;
         } else if(envelope.type==MessageType::ClockProbeRequest) {queue(p,"clock.reply",{{"t1",payload["t1"]},{"t2",QString::number(monotonicNanos())},{"t3",QString::number(monotonicNanos())}});}
         else if(envelope.type==MessageType::ClockProbeReply && id==auth.host) {bool a,b,c;auto t1=payload["t1"].toString().toLongLong(&a),t2=payload["t2"].toString().toLongLong(&b),t3=payload["t3"].toString().toLongLong(&c);const auto t4=monotonicNanos();const ClockProbe probe{t1,t2,t3,t4};if(a&&b&&c&&clock.add(probe)){timelineAnchor.store(clock.toLocalNanos(timeline.originNanos()));const double sampleRttMs=double((t4-t1)-(t3-t2))/1000000.0;const auto stats=p.transport?p.transport->statistics():MediaTransport::Statistics{};quint64 received=stats.receivedPackets,nacks=stats.nacksSent;if(p.healthStatsReady&&stats.receivedPackets>=p.healthStats.receivedPackets&&stats.nacksSent>=p.healthStats.nacksSent){received-=p.healthStats.receivedPackets;nacks-=p.healthStats.nacksSent;}const auto total=received+nacks;HealthReportMessage report;if(p.probeReady){p.smoothedJitterMs=.75*p.smoothedJitterMs+.25*std::abs(sampleRttMs-p.lastProbeRttMs);p.smoothedRttMs=.65*p.smoothedRttMs+.35*sampleRttMs;}else{p.smoothedRttMs=sampleRttMs;p.smoothedJitterMs=0;p.probeReady=true;}p.lastProbeRttMs=sampleRttMs;p.healthStats=stats;p.healthStatsReady=true;report.rttMs=std::clamp(p.smoothedRttMs,0.0,600000.0);report.jitterMs=std::clamp(p.smoothedJitterMs,0.0,600000.0);report.lossFraction=total?std::clamp(double(nacks)/double(total),0.0,1.0):0;report.queueFrames=0;report.audioClockErrorMs=0;report.acceptable=report.rttMs<=250.0&&report.lossFraction<=.05;p.health=report;p.hasHealth=true;p.healthAt=t4;queue(p,"health.report",report.toJson());}}
         else if(envelope.type==MessageType::HealthReport && hosting&&p.approved){QString reason;const auto report=HealthReportMessage::fromJson(payload,&reason);if(report){p.health=*report;p.hasHealth=true;p.healthAt=monotonicNanos();++auth.revision;}}
@@ -1234,6 +1410,13 @@ struct Runtime::Impl {
     void route(PcmRing& ring,const QString& producer) {
         for(int count=0;count<8;++count){auto result=ring.popBlock(pcm.data(),4096);if(!result.frames)return;
             if(producer==auth.local)collectValidation(pcm.data(),result.info);
+            if(hosting&&!inputPeer.isEmpty()&&producer==inputPeer)feedInput(pcm.data(),result.info);
+            if(hosting&&producer==returnRelaySource&&!returnRelayTarget.isEmpty()){
+                auto target=liteReturnRings.find(returnRelayTarget);if(target!=liteReturnRings.end()){
+                    auto info=result.info;info.epoch=returnEpoch.load(std::memory_order_relaxed);info.generation=returnGeneration.load(std::memory_order_relaxed);info.sequence=returnSequence.fetch_add(1,std::memory_order_relaxed);
+                    target->second->push(pcm.data(),info);
+                }
+            }
             if(!hosting||!programOpened)continue;
             auto info=result.info;
             if(producer==auth.owner&&info.epoch==auth.epoch){
@@ -1246,7 +1429,7 @@ struct Runtime::Impl {
                 backupPending.insert_or_assign(info.mediaFrame,ProgramBlock{info,std::vector<float>(pcm.data(),pcm.data()+info.frameCount*2)});
                 while(backupPending.size()>384)backupPending.erase(backupPending.begin());
             }
-            const auto allowed=[&](quint64 f){if(f<programEnqueuedThrough)return false;if(auth.phase=="recovery"){if(recoveryResumeFrame&&f>=recoveryResumeFrame)return producer==auth.host&&info.epoch==recoveryEpoch;return f<recoveryUntil&&producer==backupOwner&&info.epoch==backupEpoch;}if(auth.committed)return f<auth.cutoverFrame?producer==auth.committed->oldOwner&&info.epoch==auth.committed->oldEpoch:producer==auth.committed->newOwner&&info.epoch==auth.committed->newEpoch;return producer==auth.owner&&info.epoch==auth.epoch;};
+            const auto allowed=[&](quint64 f){if(f<programEnqueuedThrough)return false;if(auth.phase=="recovery"){if(recoveryResumeFrame&&f>=recoveryResumeFrame)return producer==auth.host&&info.epoch==recoveryEpoch;return f<recoveryUntil&&producer==backupOwner&&info.epoch==backupEpoch;}if(auth.committed)return f<auth.cutoverFrame?producer==auth.committed->oldOwner&&info.epoch==auth.committed->oldEpoch:producer==auth.committed->newOwner&&info.epoch==auth.committed->newEpoch;if(seam){const auto boundary=seamFrame.load(std::memory_order_acquire);if(!boundary||f<boundary)return producer==seam->oldOwner&&info.epoch==seam->oldEpoch;}return producer==auth.owner&&info.epoch==auth.epoch;};
             quint32 begin=0,end=info.frameCount;
             while(begin<end&&!allowed(info.mediaFrame+mediaFrameAdvance(begin,info.sampleRateHz)))++begin;
             while(end>begin&&!allowed(info.mediaFrame+mediaFrameAdvance(end-1,info.sampleRateHz)))--end;
@@ -1366,8 +1549,21 @@ struct Runtime::Impl {
         if(recoveryResumeFrame&&now()>=recoveryResumeFrame){
             auth.owner=auth.host;auth.epoch=recoveryEpoch;auth.cutoverFrame=recoveryResumeFrame;auth.phase="switching";auth.committed.reset();auth.next.clear();auth.handoffId.clear();recoveryResumeFrame=0;recoveryUntil=0;backupPending.clear();problem.clear();reasons.clear();ownerAudioAt=monotonicNanos();++auth.revision;
         }
-        auth.advance(now());audible.store(auth.local==auth.owner);
-        for(auto& [id,p]:peers){if(!p->transport)continue;if(!p->lite){for(int n=0;n<8&&!p->pending.isEmpty();++n){if(!p->transport->sendControl(p->pending.head().bytes))break;p->pending.dequeue();}if(ticks%200==0)p->transport->sendKeepAlive();}else if(ticks%200==0)sendLite(*p,{{"type","owner"},{"ownerPeerId",auth.owner}});if(hosting)route(p->transport->decodedRing(),id);}
+        auth.advance(now());auth.localPrep=localPrep();auth.sending=localSending();audible.store(auth.local==auth.owner||auth.localPrep);mainAudible.store(auth.local==auth.owner);
+        // Retired when Program has actually been fed past the boundary, so a
+        // stalled or silent old stream cannot strand it.
+        if(seam){const auto boundary=seamFrame.load(std::memory_order_acquire);if(boundary&&programEnqueuedThrough>=boundary)seam.reset();}
+        if(const auto wanted=junctionInputPeer();wanted!=inputPeer){inputPeer=wanted;resetInput();++auth.revision;}
+        if(!releasingPeer.isEmpty()){
+            // The new operator faded the outgoing DJ out: stop their stream.
+            const auto channel=backend->junctionInputState();
+            const bool localSource=releasingPeer==auth.local;
+            const bool localReceiver=auth.owner==auth.local;
+            const bool audible=localReceiver?(channel["available"].toBool()&&channel["audible"].toBool()):true;
+            if(inputRelease.observe(audible,localSource||input.receiving(),monotonicNanos()))releaseInput();
+        }
+        const auto ownerMessage=ticks%200==0?liteOwnerMessage():QJsonObject{};
+        for(auto& [id,p]:peers){if(!p->transport)continue;if(!p->lite){for(int n=0;n<8&&!p->pending.isEmpty();++n){if(!p->transport->sendControl(p->pending.head().bytes))break;p->pending.dequeue();}if(ticks%200==0)p->transport->sendKeepAlive();}else if(ticks%200==0)sendLite(*p,ownerMessage);if(hosting||(liteSession&&id==auth.host))route(p->transport->decodedRing(),id);}
         if(endingAt){bool acknowledged=hosting;for(const auto& [id,p]:peers)if(p->approved&&!p->endingAck)acknowledged=false;
             if(acknowledged||monotonicNanos()>=endingAt){signalSend({{"type",endingHost?"room.close":"peer.leave"}});stop();return;}
         }
@@ -1416,12 +1612,13 @@ struct Runtime::Impl {
 #elif defined(_WIN32)
         SetThreadExecutionState(ES_CONTINUOUS);
 #endif
-        captureEnabled.store(false);tap.enable(false,false);audible.store(true);separateLocalMaster.store(true);
+        captureEnabled.store(false);tap.enable(false,false);audible.store(true);mainAudible.store(true);separateLocalMaster.store(true);stopLiteReturns();backend->junctionInputMainMix(false);
+        inputPeer.clear();releasingPeer.clear();inputRelease.clear();liteSenders.clear();seam.reset();seamFrame.store(0);takeoverAnchor.store(false);resetInput();
         // The list disappears with the session. Cached files stay under the
         // cache's own quota/eviction once no longer pinned by a listed track.
         for(const auto& hash:trackPins)if(!pinnedAssets.contains(hash))cache.pin(hash,false);
         trackPins.clear();droppedTransfers.clear();sharedTracks.clear();trackTransfer.clear();trackTransferSource.clear();trackTransferAt=0;trackDigest.reset();announceSeen.clear();announcedTracks.clear();announcedAt=0;announceStream.clear();
-        peers.clear();program.close();programOpened=false;programState="stopped";
+        peers.clear();if(!localReturnReaders.load(std::memory_order_acquire))liteReturnRings.clear();program.close();programOpened=false;programState="stopped";
 #if defined(PLUMDECK_JUNCTION_WITH_LIBDATACHANNEL)
         if(signal){signal->resetCallbacks();signal->forceClose();signal.reset();}
 #endif
@@ -1429,7 +1626,13 @@ struct Runtime::Impl {
     }
 };
 Runtime::Runtime(PlaybackBackend* backend,QObject* parent):QObject(parent),d(std::make_unique<Impl>(this,backend)){}
-Runtime::~Runtime(){d->stop();}
+Runtime::~Runtime(){if(d->backend)d->stop();}
+void Runtime::detachBackend(){
+    if(!d->backend)return;
+    d->stop();
+    d->backend->attachJunction(nullptr);
+    d->backend=nullptr;
+}
 quint64 Runtime::currentAppliedSequence()const{return d->controlSeq;}
 quint64 Runtime::currentMediaFrame()const{return d->now();}
 void Runtime::setCaptureAnchor(quint64 source,quint64 media){
@@ -1458,9 +1661,10 @@ QJsonObject Runtime::monitorTrack(const QString& assetId,QString* error)const{
 }
 
 QJsonObject Runtime::snapshot()const{return d->publicState();}
-bool Runtime::localMasterAudible()const noexcept{return d->separateLocalMaster.load(std::memory_order_relaxed);}
+bool Runtime::localMasterAudible()const noexcept{return d->mainAudible.load(std::memory_order_relaxed)&&d->separateLocalMaster.load(std::memory_order_relaxed);}
 bool Runtime::sharedAudible()const noexcept{return d->audible.load(std::memory_order_relaxed);}
-QString Runtime::authorize(const QString& op,const QJsonObject& p)const{if(op=="audio.config.set"&&d->auth.local!=d->auth.owner){const auto mic=p["microphone"].toObject();if(mic.size()==1&&mic["enabled"].isBool()&&!mic["enabled"].toBool())return {};}d->auth.advance(d->now());return d->auth.authorize(op,p["_junction"].toObject(),d->now());}
+void Runtime::readJunctionInput(float* out,unsigned frames)noexcept{d->input.read(out,frames);}
+QString Runtime::authorize(const QString& op,const QJsonObject& p)const{if(op=="audio.config.set"&&d->auth.local!=d->auth.owner){const auto mic=p["microphone"].toObject();if(mic.size()==1&&mic["enabled"].isBool()&&!mic["enabled"].toBool())return {};}d->auth.advance(d->now());d->auth.localPrep=d->localPrep();d->auth.sending=d->localSending();return d->auth.authorize(op,p["_junction"].toObject(),d->now());}
 void Runtime::applied(const QString& op,const QJsonObject& params){if(!active()||d->auth.local!=d->auth.owner||Authority::localOnly(op)||Authority::readOnlyQuery(op))return;++d->controlSeq;++d->auth.revision;if(d->auth.phase=="preparing"){d->ready=false;d->graphDirty=true;d->lastSharedChange=monotonicNanos();d->reasons={"演奏の変更に同期しています"};d->broadcast("graph.applied",{{"throughSeq",u64(d->controlSeq)}});}Q_UNUSED(params);}
 void Runtime::capture(const float* pcm,unsigned frames,quint64 sourceFrame,unsigned rate)noexcept{
     if(!d->captureEnabled.load(std::memory_order_relaxed))return;
@@ -1472,7 +1676,22 @@ void Runtime::capture(const float* pcm,unsigned frames,quint64 sourceFrame,unsig
         }
     }
     auto anchor=d->sourceAnchor.load(std::memory_order_relaxed);
-    if(anchor==UINT64_MAX||sourceFrame<anchor){if(anchor!=UINT64_MAX)d->captureGeneration.fetch_add(1,std::memory_order_relaxed);d->sourceAnchor.store(sourceFrame,std::memory_order_relaxed);anchor=sourceFrame;const auto ns=monotonicNanos()-d->timelineAnchor.load(std::memory_order_relaxed);d->mediaAnchor.store(ns>0?quint64(ns/1000000000)*48000+quint64(ns%1000000000)*48000/1000000000:0,std::memory_order_relaxed);}
+    if(anchor==UINT64_MAX||sourceFrame<anchor){
+        if(anchor!=UINT64_MAX)d->captureGeneration.fetch_add(1,std::memory_order_relaxed);
+        d->sourceAnchor.store(sourceFrame,std::memory_order_relaxed);anchor=sourceFrame;
+        const auto ns=monotonicNanos()-d->timelineAnchor.load(std::memory_order_relaxed);
+        const quint64 elapsed=ns>0?quint64(ns/1000000000)*48000+quint64(ns%1000000000)*48000/1000000000:0;
+        // Taking over from the JUNCTION deck: this very block of master is
+        // carrying the frame the deck reported rendering in the same callback,
+        // so the capture starts there. The flag is consumed either way, which
+        // is what keeps it from reaching any later handoff.
+        const bool takeover=d->takeoverAnchor.exchange(false,std::memory_order_acq_rel);
+        const auto media=takeover?TakeoverAnchor::resolve(d->input.renderedMediaFrame(),elapsed):elapsed;
+        d->mediaAnchor.store(media,std::memory_order_relaxed);
+        // The boundary the outgoing DJ's direct stream plays up to: exactly
+        // where this capture begins, so Program neither gaps nor doubles.
+        if(takeover)d->seamFrame.store(media,std::memory_order_release);
+    }
     d->lastCaptureSourceEnd.store(sourceFrame+frames,std::memory_order_release);
     PcmBlockInfo info;info.epoch=d->captureEpoch.load(std::memory_order_relaxed);info.sourceFrame=sourceFrame;info.mediaFrame=d->mediaAnchor.load(std::memory_order_relaxed)+mediaFrameAdvance(sourceFrame-anchor,rate);info.frameCount=frames;info.sampleRateHz=rate;info.channels=2;info.sequence=d->blockSequence.fetch_add(1,std::memory_order_relaxed);info.generation=d->captureGeneration.load(std::memory_order_relaxed);
     const auto cutover=d->scheduledFrame.load(std::memory_order_acquire);
@@ -1483,6 +1702,16 @@ void Runtime::capture(const float* pcm,unsigned frames,quint64 sourceFrame,unsig
         info.epoch=nextEpoch;info.sourceFrame+=before;info.mediaFrame+=mediaFrameAdvance(before,rate);info.frameCount-=before;d->captureEpoch.store(nextEpoch,std::memory_order_relaxed);
         if(info.frameCount)d->tap.capture(pcm+before*2,info);
     }else d->tap.capture(pcm,info);
+}
+void Runtime::captureLocalReturn(const float* pcm,unsigned frames,quint64 sourceFrame,unsigned rate)noexcept{
+    d->localReturnReaders.fetch_add(1,std::memory_order_acq_rel);
+    auto* target=d->localReturnTarget.load(std::memory_order_acquire);
+    if(target&&pcm&&frames&&frames<=target->maxBlockFrames()){
+        PcmBlockInfo info;info.epoch=d->returnEpoch.load(std::memory_order_relaxed);info.generation=d->returnGeneration.load(std::memory_order_relaxed);
+        info.mediaFrame=mediaFrameForSource(sourceFrame,rate);info.sourceFrame=sourceFrame;info.sequence=d->returnSequence.fetch_add(1,std::memory_order_relaxed);
+        info.frameCount=frames;info.sampleRateHz=rate;info.channels=2;target->push(pcm,info);
+    }
+    d->localReturnReaders.fetch_sub(1,std::memory_order_release);
 }
 QJsonObject Runtime::command(const QString& op,const QJsonObject& p,QString* error){
     auto reject=[&](const QString& reason){if(error)*error=reason;return QJsonObject{};};
@@ -1533,10 +1762,20 @@ QJsonObject Runtime::command(const QString& op,const QJsonObject& p,QString* err
         if(!active()||!d->hosting)return reject("ホストのJunctionセッションが必要です");const auto id=p["peerId"].toString(),sdp=p["sdp"].toString();auto found=d->peers.find(id);if(found==d->peers.end()||!found->second->lite||!found->second->transport)return reject("PlumDeck Liteの参加者が見つかりません");const auto fp=sdpFingerprint(sdp);QString failure;if(fp.size()!=64||sdp.size()>65536||!found->second->transport->remoteDescription(false,sdp,"answer",fp,&failure))return reject(failure.isEmpty()?QStringLiteral("PlumDeck Liteの返答が無効です"):failure);return snapshot();
     }
     if(op=="lite.peer.remove"){
-        if(!active()||!d->hosting)return reject("ホストのJunctionセッションが必要です");const auto id=p["peerId"].toString();auto found=d->peers.find(id);if(found!=d->peers.end()&&found->second->lite){if(d->auth.owner==id)d->selectLiteOwner(d->auth.local);d->peers.erase(found);d->rosterOrder.removeAll(id);d->finishedOrder.removeAll(id);d->turnRequests.remove(id);++d->auth.revision;}return snapshot();
+        if(!active()||!d->hosting)return reject("ホストのJunctionセッションが必要です");const auto id=p["peerId"].toString();auto found=d->peers.find(id);if(found!=d->peers.end()&&found->second->lite){if(d->auth.owner==id)d->selectLiteOwner(d->auth.local);if(d->releasingPeer==id)d->releaseInput();d->peers.erase(found);d->rosterOrder.removeAll(id);d->finishedOrder.removeAll(id);d->turnRequests.remove(id);++d->auth.revision;}return snapshot();
     }
     if(op=="lite.owner.set"){
-        if(!active())return reject("Junctionセッションに参加していません");const auto owner=p["ownerPeerId"].toString();if(d->hosting||d->liteSession)d->selectLiteOwner(owner);return snapshot();
+        if(!active())return reject("Junctionセッションに参加していません");const auto owner=p["ownerPeerId"].toString();if(d->hosting&&!d->releasingPeer.isEmpty()&&owner!=d->auth.owner)return reject("JUNCTIONデッキを解放してから次のDJへ交代してください");if(d->hosting||d->liteSession)d->selectLiteOwner(owner);return snapshot();
+    }
+    if(op=="input.set"){
+        if(!active())return reject("Junctionセッションに参加していません");
+        if(d->localSending())return reject("交代後も音声を送出中のため、解放されるまで操作できません");
+        const auto failure=d->backend->junctionInputSet(p);if(!failure.isEmpty())return reject(failure);
+        return d->inputState();
+    }
+    if(op=="input.release"){
+        if(!active())return reject("Junctionセッションに参加していません");
+        d->releaseInput();return snapshot();
     }
     if(op=="lite.roster.set"){
         if(!active()||d->hosting||!d->liteSession||!p["members"].isArray())return reject("PlumDeck Liteのゲスト接続が必要です");const auto members=p["members"].toArray();if(members.size()>8)return reject("PlumDeck Liteの参加者一覧が不正です");QJsonArray roster;int order=0;for(const auto& value:members){const auto member=value.toObject();const auto id=member["peerId"].toString();if(!validOpaqueId(id))return reject("PlumDeck Liteの参加者一覧が不正です");if(member["status"]!="approved")continue;const auto memberName=sanitizeDisplayName(member["displayName"].toString(QStringLiteral("DJ")));roster.append(QJsonObject{{"peerId",id},{"displayName",memberName},{"djName",memberName},{"approved",true},{"isHost",id==d->auth.host},{"orderIndex",order++},{"status","connected"}});}d->participantRoster=roster;++d->auth.revision;return snapshot();
@@ -1700,7 +1939,7 @@ QJsonObject Runtime::command(const QString& op,const QJsonObject& p,QString* err
         auto it=d->programPending.lower_bound(d->recoveryResumeFrame);d->programPending.erase(it,d->programPending.end());
         d->broadcast("session.recovery",{{"stage","scheduled"},{"reason","ホストの手元の演奏へ切り替えます"},{"frame",u64(d->recoveryResumeFrame)},{"epoch",u64(d->recoveryEpoch)}});return snapshot();
     }
-    if(op=="handoff.request") {if(d->lifecycle!="live")return reject("最初のDJを選び、セッションを開始してください");auto target=p["targetPeerId"].toString(d->auth.local);if(d->hosting){auto peer=d->peers.find(target);if(target!=d->auth.local&&(peer==d->peers.end()||!peer->second->approved))return reject("承認済みの参加者を選択してください");const auto current=d->peers.find(d->auth.owner);if((peer!=d->peers.end()&&peer->second->lite)||(current!=d->peers.end()&&current->second->lite)){d->selectLiteOwner(target);return snapshot();}auto failure=d->auth.prepare(target);if(!failure.isEmpty())return reject(failure);d->turnRequests.remove(target);d->finishedOrder.removeAll(target);d->rosterOrder.removeAll(target);const int ownerIndex=d->rosterOrder.indexOf(d->auth.owner);d->rosterOrder.insert(ownerIndex<0?0:ownerIndex+1,target);d->resetPreparation();d->broadcast("handoff.prepare",{{"targetPeerId",target},{"handoffId",d->auth.handoffId}});if(d->auth.owner==d->auth.local)d->startExport();}else{auto i=d->peers.find(d->auth.host);if(i==d->peers.end())return reject("ホストに接続していません");if(i->second->lite)d->sendLite(*i->second,{{"type","handoff-request"}});else d->queue(*i->second,"handoff.request",{});}return snapshot();}
+    if(op=="handoff.request") {if(d->lifecycle!="live")return reject("最初のDJを選び、セッションを開始してください");auto target=p["targetPeerId"].toString(d->auth.local);if(d->hosting){if(!d->releasingPeer.isEmpty()&&target!=d->auth.owner)return reject("JUNCTIONデッキを解放してから次のDJへ交代してください");auto peer=d->peers.find(target);if(target!=d->auth.local&&(peer==d->peers.end()||!peer->second->approved))return reject("承認済みの参加者を選択してください");const auto current=d->peers.find(d->auth.owner);if((peer!=d->peers.end()&&peer->second->lite)||(current!=d->peers.end()&&current->second->lite)){d->selectLiteOwner(target);return snapshot();}auto failure=d->auth.prepare(target);if(!failure.isEmpty())return reject(failure);d->turnRequests.remove(target);d->finishedOrder.removeAll(target);d->rosterOrder.removeAll(target);const int ownerIndex=d->rosterOrder.indexOf(d->auth.owner);d->rosterOrder.insert(ownerIndex<0?0:ownerIndex+1,target);d->resetPreparation();d->broadcast("handoff.prepare",{{"targetPeerId",target},{"handoffId",d->auth.handoffId}});if(d->auth.owner==d->auth.local)d->startExport();}else{auto i=d->peers.find(d->auth.host);if(i==d->peers.end())return reject("ホストに接続していません");if(i->second->lite)d->sendLite(*i->second,{{"type","handoff-request"}});else d->queue(*i->second,"handoff.request",{});}return snapshot();}
     if(op=="handoff.cancel") {if(!d->hosting)return reject("ホストに取り消しを依頼してください");const auto handoffId=d->auth.handoffId;auto failure=d->auth.cancel();if(!failure.isEmpty())return reject(failure);d->broadcast("handoff.cancel",{{"handoffId",handoffId},{"reason","cancelled"}});if(d->lifecycle=="starting")d->restoreLobby();return snapshot();}
     if(op=="handoff.accept"){
         if(!d->hosting){auto h=d->peers.find(d->auth.host);if(h==d->peers.end())return reject("ホストに接続していません");d->queue(*h->second,"handoff.ready",{{"requestFence",true},{"handoffId",d->auth.handoffId}});return snapshot();}

@@ -51,6 +51,12 @@ set_property(TARGET mixxx-lib PROPERTY SOURCES "${PLUMDECK_MIXXX_SOURCES}")
 target_sources(mixxx-lib PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/plumdeck_soundmanager.cpp")
 include("${PLUMDECK_ROOT}/cmake/junction.cmake")
 target_link_libraries(plumdeck-mixxx-engine-host PRIVATE plumdeck-junction-core)
+# The injected SoundManager/EngineMixer sources live in mixxx-lib and are also
+# linked by upstream's optional `mixxx` executable. Keep the default `all`
+# target linkable as well as the PlumDeck host target.
+if(TARGET mixxx)
+  target_link_libraries(mixxx PRIVATE plumdeck-junction-core)
+endif()
 
 target_sources(plumdeck-mixxx-engine-host PRIVATE "${PLUMDECK_ROOT}/src/junction/private_preview.cpp")
 

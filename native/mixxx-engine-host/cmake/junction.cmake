@@ -21,6 +21,7 @@ set(JUNCTION_CORE_SOURCES
   "${JUNCTION_DIR}/asset_cache.cpp"
   "${JUNCTION_DIR}/shared_tracks.cpp"
   "${JUNCTION_DIR}/program_output.cpp"
+  "${JUNCTION_DIR}/junction_input.cpp"
   "${JUNCTION_DIR}/producer_tap.cpp"
   "${JUNCTION_DIR}/audio_bridge.cpp"
   "${JUNCTION_DIR}/authority.cpp"

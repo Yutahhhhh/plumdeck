@@ -11,6 +11,6 @@ export function routePerformanceCommand(op: string, params: Record<string, unkno
     const microphone = params.microphone as {enabled?: boolean} | undefined;
     if (!microphone?.enabled) return {...params, _junction: lease};
   } else if (!shared.has(op)) throw new Error('Junction中はこの操作を利用できません。セッション設定を開いてください。');
-  if (state?.localPeerId !== state?.performerPeerId) throw new Error('別のDJがプレイ中です。手元の試聴または引き継ぎをご利用ください。');
+  if (state?.localPeerId !== state?.performerPeerId && !state?.localPrep) throw new Error('別のDJがプレイ中です。手元の試聴または引き継ぎをご利用ください。');
   return {...params, _junction: lease};
 }

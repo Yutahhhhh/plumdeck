@@ -111,11 +111,21 @@ def test_tools_translate_typed_arguments(monkeypatch):
         junction.junction_reject_participant("peer-456")
         junction.junction_attach_live_monitor("C", "a" * 64)
         junction.junction_set_microphone_enabled(True)
+        junction.junction_configure_input(
+            volume=0.75,
+            assign="right",
+            eq_low=0.8,
+            eq_mid=1.0,
+            eq_high=1.2,
+            cue=True,
+        )
+        junction.junction_release_input()
 
         junction.junction_get_exchange_text("invite", "peer-789")
 
     assert [call["body"]["action"] for call in calls] == [
         "network.configure", "peer.reject", "live.attach", "mic.enabled",
+        "input.set", "input.release",
         "exchange.export",
     ]
     assert calls[0]["body"]["arguments"] == {
@@ -131,7 +141,16 @@ def test_tools_translate_typed_arguments(monkeypatch):
     }
     assert calls[1]["body"]["arguments"] == {"peerId": "peer-456"}
     assert calls[2]["body"]["arguments"] == {"deck": "C", "assetId": "a" * 64}
-    assert calls[4]["body"]["arguments"] == {"kind": "invite", "peerId": "peer-789"}
+    assert calls[4]["body"]["arguments"] == {
+        "volume": 0.75,
+        "orientation": 2,
+        "eqLow": 0.8,
+        "eqMid": 1.0,
+        "eqHigh": 1.2,
+        "pfl": True,
+    }
+    assert calls[5]["body"]["arguments"] == {}
+    assert calls[6]["body"]["arguments"] == {"kind": "invite", "peerId": "peer-789"}
 
 
 def test_guest_response_exchange_export_may_omit_peer_id(monkeypatch):
@@ -143,6 +162,11 @@ def test_guest_response_exchange_export_may_omit_peer_id(monkeypatch):
         "action": "exchange.export",
         "arguments": {"kind": "response"},
     }
+
+
+def test_junction_input_requires_at_least_one_setting():
+    with pytest.raises(ToolError, match="at least one"):
+        junction.junction_configure_input()
 
 
 @pytest.mark.parametrize(
@@ -243,7 +267,7 @@ def test_junction_tool_schemas_are_specific_and_bounded():
     import mcp_server.server  # noqa: F401 - registers every tool
 
     tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
-    assert len([name for name in tools if name.startswith("junction_")]) == 39
+    assert len([name for name in tools if name.startswith("junction_")]) == 41
     exchange = tools["junction_inspect_exchange"].parameters["properties"]["exchange_text"]
     assert exchange["type"] == "string"
     assert exchange["minLength"] == 1
@@ -257,5 +281,11 @@ def test_junction_tool_schemas_are_specific_and_bounded():
     assert export["required"] == ["kind"]
     expires = tools["junction_configure_network"].parameters["properties"]["turn_expires_at"]
     assert "Unix epoch milliseconds" in expires["anyOf"][0]["description"]
+    input_properties = tools["junction_configure_input"].parameters["properties"]
+    assert input_properties["volume"]["anyOf"][0]["minimum"] == 0.0
+    assert input_properties["volume"]["anyOf"][0]["maximum"] == 1.0
+    assert input_properties["eq_low"]["anyOf"][0]["minimum"] == 0.0
+    assert input_properties["eq_low"]["anyOf"][0]["maximum"] == 4.0
+    assert input_properties["assign"]["anyOf"][0]["enum"] == ["left", "thru", "right"]
     assert tools["junction_prepare_engine"].parameters.get("properties") == {}
     assert "action" not in tools["junction_get_state"].parameters.get("properties", {})

@@ -219,7 +219,7 @@ async def test_list_tools_returns_all_tools(mcp_session):
     """list_tools で全ツールが返り、MCP-client reasoning toolsが含まれることを検証する。"""
     result = await mcp_session.list_tools()
     names = [t.name for t in result.tools]
-    assert len(names) == 85
+    assert len(names) == 87
     assert {"list_wordplay_pairs", "propose_wordplay_pairs", "approve_wordplay_pair", "reject_wordplay_pair"}.issubset(names)
     assert {"register_track_lyrics", "register_track_lyrics_batch"}.issubset(names)
     assert {"plan_track_analysis", "start_track_analysis", "get_track_analysis_status",
@@ -242,6 +242,7 @@ async def test_list_tools_returns_all_tools(mcp_session):
         "junction_set_private_preview_gain", "junction_unload_private_preview",
         "junction_get_private_preview_state", "junction_set_microphone_enabled",
         "junction_attach_live_monitor", "junction_detach_live_monitor",
+        "junction_configure_input", "junction_release_input",
     }.issubset(names)
     for expected in [
         "search_tracks",

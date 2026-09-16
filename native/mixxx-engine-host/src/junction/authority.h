@@ -7,6 +7,12 @@ public:
     QString sessionId,host,local,owner,next,handoffId;
     quint64 epoch=1,throughSeq=0,revision=0,fenceFrame=0,cutoverFrame=0;
     QString phase="playing";
+    /// A Lite DJ performs: this computer's decks are local preparation only.
+    bool localPrep=false;
+    /// This computer's master is still delivered after losing the operator
+    /// role (an outgoing DJ awaiting release). Its controls stay locked, even
+    /// when `localPrep` is set; local-only PFL/headphone operations remain.
+    bool sending=false;
     std::optional<HandoffCommitMessage> committed;
     static bool localOnly(const QString& op);
     /// Non-mutating queries. A peer that is still waiting for admission (or is

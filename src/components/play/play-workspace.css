@@ -376,3 +376,27 @@
 .dj-wave-grip { position: absolute; left: calc(50% + 6px); top: 35%; font-size: 14px; color: white; pointer-events: none; }
 
 .dj-wave-retry { position: absolute; bottom: 2px; right: 3px; z-index: 2; padding: 4px 8px; color: #ffd19e; background: #332419; font-size: 11px; }
+
+/* JUNCTION deck: the other DJ's audio as one channel with a single lane. */
+.dj-junction-input { display: grid; flex-shrink: 0; grid-template-columns: minmax(150px, 220px) minmax(0, 1fr) auto; grid-template-rows: auto auto; gap: 2px 8px; padding: 4px 8px; border-top: 1px solid var(--dj-line); border-bottom: 1px solid var(--dj-line); background: var(--dj-panel); }
+.dj-junction-input.is-releasing { box-shadow: inset 3px 0 var(--dj-green); }
+.dj-junction-input-head { display: flex; align-items: center; gap: 6px; min-width: 0; grid-column: 1; grid-row: 1; }
+.dj-junction-input-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dj-junction-input-badge { display: inline-flex; align-items: center; gap: 3px; padding: 1px 5px; border-radius: 2px; background: #1f3321; color: #9ed184; font-size: 9px; font-weight: 700; letter-spacing: .06em; }
+.dj-junction-input-badge svg { width: 11px; height: 11px; }
+.dj-junction-input-status { color: var(--dj-faint); font-size: 9px; white-space: nowrap; }
+.dj-junction-input-status.is-live { color: var(--dj-green); }
+.dj-junction-input-track { display: flex; align-items: center; gap: 5px; min-width: 0; grid-column: 1; grid-row: 2; color: var(--dj-dim); font-size: 9px; }
+.dj-junction-input-track i { width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; }
+.dj-junction-input-track b { min-width: 0; overflow: hidden; color: var(--dj-text); text-overflow: ellipsis; white-space: nowrap; }
+.dj-junction-input-track span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dj-junction-input-lane { grid-column: 2; grid-row: 1 / span 2; width: 100%; height: 44px; border-radius: 2px; background: #000; }
+.dj-junction-input-controls { display: flex; align-items: center; gap: 8px; grid-column: 3; grid-row: 1 / span 2; }
+.dj-junction-input-eq { display: flex; gap: 2px; }
+.dj-junction-input-level { display: flex; flex-direction: column; gap: 2px; width: 96px; color: var(--dj-dim); font-size: 8px; font-weight: 700; }
+.dj-junction-input-vu { display: block; width: 100%; height: 3px; overflow: hidden; border-radius: 2px; background: #17191c; }
+.dj-junction-input-vu i { display: block; height: 100%; background: linear-gradient(90deg, #55ad67 0 72%, #d2a84e 72% 90%, #cf6660 90%); transition: width 80ms linear; }
+.dj-junction-input-release { border-color: #3f6b3a; color: #b9e2a8; }
+.dj-junction-input-note, .dj-junction-input-error { grid-column: 1 / -1; margin: 0; font-size: 9px; }
+.dj-junction-input-note { color: var(--dj-dim); }
+.dj-junction-input-error { color: var(--dj-red); }

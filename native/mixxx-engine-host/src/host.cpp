@@ -134,8 +134,8 @@ Host::Host(std::unique_ptr<PlaybackBackend> backend) : backend_(std::move(backen
             if (track.isEmpty() || path.isEmpty() || slot.state["status"] == "loading") continue;
             const auto channel = channels[deckNames[index]].toObject();
             const double orientation = channel["orientation"].toDouble();
-            const double crossGain = orientation < -0.5 ? (1.0 - crossfader) * 0.5
-                    : orientation > 0.5 ? (1.0 + crossfader) * 0.5 : 1.0;
+            const double crossGain = orientation < 0.5 ? (1.0 - crossfader) * 0.5
+                    : orientation > 1.5 ? (1.0 + crossfader) * 0.5 : 1.0;
             const double audibility = qMax(0.0, channel["gain"].toDouble() * channel["trim"].toDouble(1.0) * crossGain);
             rows.append(QJsonObject{{"deck", deckNames[index]}, {"path", path}, {"title", track["title"].toString()}, {"artist", track["artist"].toString()},
                 {"durationMs", track["durationMs"].toDouble()}, {"bpm", track["bpm"].toDouble()}, {"musicalKey", track["musicalKey"].toString()},
@@ -218,7 +218,13 @@ void Host::send(QJsonObject message) const {
     const QByteArray bytes = QJsonDocument(message).toJson(QJsonDocument::Compact) + '\n';
     if (std::fwrite(bytes.constData(), 1, bytes.size(), stdout) != static_cast<size_t>(bytes.size()) || std::fflush(stdout) != 0) std::exit(1);
 }
-Host::~Host() { backend_.reset(); junction_.reset(); }
+Host::~Host() {
+    // Stop while the backend is alive, then keep Runtime storage in place
+    // until backend destruction has joined the audio callback.
+    if (junction_) junction_->detachBackend();
+    backend_.reset();
+    junction_.reset();
+}
 void Host::result(const QJsonObject& cmd, const QJsonObject& data) {
     if (junction_ && !cmd["op"].toString().startsWith("junction.")) junction_->applied(cmd["op"].toString(), cmd["params"].toObject());
     auto message = envelope("result");
@@ -255,8 +261,8 @@ void Host::sampleRecordingTimeline() {
     for (int index = 0; index < 4; ++index) {
         const auto channel = channels[deckNames[index]].toObject();
         const double orientation = channel["orientation"].toDouble();
-        const double crossGain = orientation < -0.5 ? (1.0 - crossfader) * 0.5
-                : orientation > 0.5 ? (1.0 + crossfader) * 0.5 : 1.0;
+        const double crossGain = orientation < 0.5 ? (1.0 - crossfader) * 0.5
+                : orientation > 1.5 ? (1.0 + crossfader) * 0.5 : 1.0;
         const bool contributing = active && slots_[index].state["status"] == "playing" &&
                 channel["gain"].toDouble() * channel["trim"].toDouble(1.0) * crossGain > 0.0001 &&
                 slots_[index].state["track"].isObject();

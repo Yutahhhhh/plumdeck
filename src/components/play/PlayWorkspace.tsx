@@ -4,6 +4,9 @@ import { deckRealtimeStore } from '@/services/dj-engine/deck-realtime-store';
 import { junctionLeaseKey } from '@/services/junction/state';
 import { junctionState } from '@/services/junction/state';
 import { useJunctionTracks } from '@/hooks/useJunctionTracks';
+import { useJunction } from '@/hooks/useJunction';
+import { junctionCommand } from '@/services/junction/client';
+import { JunctionInputDeck } from "./JunctionInputDeck";
 import { BeatFxPanel } from "./BeatFxPanel";
 import { memoryAction } from "@/services/dj-engine/memory-cues";
 import { jogWeight } from "@/services/dj-engine/jog-weight";
@@ -80,6 +83,8 @@ export function PlayWorkspace() {
   const [activeDeck, setActiveDeck] = useState<DeckId>("A");
   const [junctionMonitorDeck, setJunctionMonitorDeck] = useState<DeckId | null>(null);
   const junction = useJunctionTracks();
+  const junctionSession = useJunction();
+  const junctionInput = junctionSession?.active ? junctionSession.junctionInput : undefined;
   const updateJunctionMonitorDeck = useCallback((deck: DeckId | null) => {
     setJunctionMonitorDeck(deck);
     void invoke<DeckId | null>('junction_live_monitor_set', {deck}).catch(() => undefined);
@@ -281,7 +286,7 @@ export function PlayWorkspace() {
 
   const loadTrack = useCallback((deck: DeckId, track: Track) => {
     const junction = junctionState.get();
-    if (junction?.active && junction.localPeerId !== junction.performerPeerId) {
+    if (junction?.active && junction.localPeerId !== junction.performerPeerId && !junction.localPrep) {
       setCommandError("別のDJがプレイ中です。Junctionの手元試聴で準備し、引き継ぎ後にデッキへロードしてください。");
       return;
     }
@@ -930,6 +935,10 @@ export function PlayWorkspace() {
     </div>}
     <section className="dj-performance" aria-label="Software DJ controller">
       {waveformLayout === "horizontal" && <div className="dj-scrolling-waves">{visibleDecks.map((id) => lane(id, "horizontal"))}</div>}
+      {junctionInput?.peerId && <JunctionInputDeck state={junctionInput}
+        performerName={junctionSession?.participants.find((participant) => participant.peerId === junctionInput.peerId)?.djName}
+        onSet={(settings) => junctionCommand('input.set', { ...settings })}
+        onRelease={() => junctionCommand('input.release')} />}
       <div className="dj-deck-pairs">{Array.from({ length: deckCount / 2 }, (_, pair) => {
         const left = DECK_IDS[pair * 2]; const right = DECK_IDS[pair * 2 + 1];
         return <div className="dj-deck-pair" key={left}>

@@ -50,6 +50,9 @@ public:
     void setBrowserReceive(quint64 epoch,quint64 mediaFrameOrigin);
     void setBrowserSendEpoch(quint64 epoch,quint64 mediaFrameOrigin);
     void startProducer(PcmRing*);
+    /// Reattach a persistent producer ring after a handoff. The transport
+    /// worker, as that ring's sole consumer, discards any old queued blocks.
+    void restartProducer(PcmRing*);
     void inheritProducerHistory(MediaTransport& previous);
     void enableAutomaticManifest(bool enabled);
     bool acknowledgeSendManifest(const QString& streamId);

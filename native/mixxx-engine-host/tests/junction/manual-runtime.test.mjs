@@ -54,6 +54,123 @@ test('additive Junction Live negotiation is independent from the compatible base
  assert.match(runtime,/!host->second->junctionTracksV1/,'an old host is never sent an unknown track message');
  assert.match(runtime,/MessageType::TrackAnnounce && p\.junctionTracksV1/,'an announcement is accepted only after negotiation');
 });
+test('the Lite takeover seam is measured from the deck, not from the clock',async()=>{
+ const runtime=await readFile(path.resolve(import.meta.dirname,'../../src/junction/runtime.cpp'),'utf8');
+ // No wall-clock cut and no standing correction survive anywhere.
+ assert.doesNotMatch(runtime,/liteCut|LiteCut|anchorBias/,'the wall-clock cut and the persistent anchor bias are gone');
+ // The deck is fed the whole block description; a bare frame count and rate
+ // would throw away the media frame the whole seam is built on.
+ assert.match(runtime,/input\.write\(samples,info\);/);
+ // The one-shot: armed in exactly one place, consumed by exchange in exactly
+ // one place, so no later handoff can inherit it.
+ assert.equal(runtime.match(/takeoverAnchor\.store\(/g).length,2,'armed at takeover and cleared on stop, nowhere else');
+ assert.match(runtime,/const bool measureSeam=takeOver&&programOpened&&!previous\.isEmpty\(\);[\s\S]{0,120}takeoverAnchor\.store\(measureSeam/);
+ assert.equal(runtime.match(/takeoverAnchor\.exchange\(false/g).length,1,'consumed exactly once, by the capture that uses it');
+ const capture=runtime.slice(runtime.indexOf('void Runtime::capture('),runtime.indexOf('QJsonObject Runtime::command('));
+ assert.match(capture,/TakeoverAnchor::resolve\(d->input\.renderedMediaFrame\(\),elapsed\)/,'the anchor is the frame the deck rendered in this same callback');
+ assert.match(capture,/if\(takeover\)d->seamFrame\.store\(media,std::memory_order_release\);/,'the Program boundary is that same measured frame');
+ // Program keeps the outgoing DJ strictly below the boundary and the new
+ // operator from it on: no gap, no duplicated frame, and no timer involved.
+ const allowed=runtime.slice(runtime.indexOf('const auto allowed=[&]'),runtime.indexOf('quint32 begin=0,end=info.frameCount;'));
+ assert.match(allowed,/if\(seam\)\{const auto boundary=seamFrame\.load\([^)]*\);if\(!boundary\|\|f<boundary\)return producer==seam->oldOwner&&info\.epoch==seam->oldEpoch;\}/);
+ assert.doesNotMatch(allowed,/now\(\)|monotonicNanos/,'admission never consults a clock');
+ // The seam retires on Program having actually been fed past the boundary.
+ assert.match(runtime,/if\(boundary&&programEnqueuedThrough>=boundary\)seam\.reset\(\);/);
+ const select=runtime.slice(runtime.indexOf('void selectLiteOwner('),runtime.indexOf('void liteControl('));
+ assert.doesNotMatch(select,/programPending\.clear\(\)/,'an operator switch never drops audio already delivered');
+ assert.doesNotMatch(select,/const auto cut=now\(\)/,'the seam is not a moment in time');
+});
+test('Lite deck metadata is timestamped on receipt and positions are extrapolated for display',async()=>{
+ const runtime=await readFile(path.resolve(import.meta.dirname,'../../src/junction/runtime.cpp'),'utf8');
+ const host=await readFile(path.resolve(import.meta.dirname,'../../src/host.cpp'),'utf8');
+ assert.match(runtime,/found->second->liteDecksAt=monotonicNanos\(\)/,'native receipt time is authoritative');
+ const display=runtime.slice(runtime.indexOf('QJsonArray displayedLiteDecks('),runtime.indexOf('void feedInput('));
+ assert.match(display,/elapsedMs=double\(ageNanos\)\/1000000\.0/);
+ assert.match(display,/positionMs.*elapsedMs\*deck\["rate"\]/s,'playing positions advance at the announced rate');
+ assert.match(runtime,/const auto decks=displayedLiteDecks\(\*source->second\)/,'snapshots expose the extrapolated copy');
+ assert.equal(host.match(/orientation < 0\.5 \? \(1\.0 - crossfader\)/g)?.length,2,
+   'native deck audibility maps orientation 0/1/2 to left/thru/right');
+});
+test('JUNCTION input drafts update from a bounded input reply without a second full snapshot',async()=>{
+ const runtime=await readFile(path.resolve(import.meta.dirname,'../../src/junction/runtime.cpp'),'utf8');
+ const client=await readFile(path.resolve(import.meta.dirname,'../../../../src/services/junction/client.ts'),'utf8');
+ const inputSet=runtime.slice(runtime.indexOf('if(op=="input.set")'),runtime.indexOf('if(op=="input.release")'));
+ assert.match(inputSet,/return d->inputState\(\)/);
+ assert.doesNotMatch(inputSet,/return snapshot\(\)/);
+ assert.match(client,/else if \(op === 'input.set'\)[\s\S]*junctionState\.set\(\{\.\.\.current, junctionInput:/);
+});
+test('the JUNCTION deck is live input: fed only on the realtime grant and never replayed or exported',async()=>{
+ const backend=await readFile(path.resolve(import.meta.dirname,'../../src/mixxx_backend.cpp'),'utf8');
+ const before=backend.slice(backend.indexOf('audioBridge_.before='),backend.indexOf('audioBridge_.after='));
+ assert.match(before,/if\(self->blockGrant_\.mayProcess\)self->feedJunctionAux\(frames\);/);
+ assert.equal(before.match(/receiveBuffer|readJunctionInput/g),null,'the aux is fed in exactly one guarded place');
+ const feed=backend.slice(backend.indexOf('void feedJunctionAux('),backend.indexOf('void detachLiveInputs('));
+ assert.match(feed,/noexcept/);assert.doesNotMatch(feed,/new |resize|push_back|lock|QJson|QString/,'no allocation or locks on the audio thread');
+ const restore=backend.slice(backend.indexOf('void tryFinalizeGraphRestore(){'),backend.indexOf('void applyGraphDeck('));
+ assert.match(restore,/transferComplete\(restoreTransfer_\)\)return;\s*\/\/[^\n]*\n[^\n]*\n\s*detachLiveInputs\(\);/,'replay starts only after the microphone and aux are detached');
+ assert.match(backend,/void detachLiveInputs\(\)\{[^}]*microphone_->receiveBuffer\([^}]*junctionAux_->receiveBuffer\(junctionAuxInput_,nullptr,0\)/);
+ const exported=backend.slice(backend.indexOf('QJsonObject snapshotStoppedGraph()'),backend.indexOf('QString restoreJunctionGraph('))+backend.slice(backend.indexOf('void applyGraphMixer(){'),backend.indexOf('bool snapshotPending_'));
+ assert.doesNotMatch(exported,/kJunctionGroup|Auxiliary|junctionAux/,'the graph never carries the live aux source');
+});
+test('Lite return audio is bidirectional, per-recipient, and excluded from JUNCTION feedback',async()=>{
+ const [runtime,transport,backend]=await Promise.all([
+  readFile(path.resolve(import.meta.dirname,'../../src/junction/runtime.cpp'),'utf8'),
+  readFile(path.resolve(import.meta.dirname,'../../src/junction/media_transport.cpp'),'utf8'),
+  readFile(path.resolve(import.meta.dirname,'../../src/mixxx_backend.cpp'),'utf8'),
+ ]);
+ assert.match(transport,/Description::Direction::SendRecv/,'the native Lite offer negotiates return audio');
+ assert.doesNotMatch(transport,/Description::Direction::RecvOnly/,'the old receive-only Lite offer is gone');
+ assert.match(runtime,/std::map<QString,std::unique_ptr<PcmRing>> liteReturnRings/,'each Lite recipient has one bounded SPSC return ring');
+ assert.match(runtime,/if\(previous==auth\.local\)localReturnTarget\.store\(ring/,'a local previous owner uses the local-master return tap');
+ assert.match(runtime,/else if\(litePeer\(previous\)\)\{returnRelaySource=previous;returnRelayTarget=target;/,'a Lite previous owner is relayed only to the new operator');
+ assert.match(runtime,/hosting\|\|\(liteSession&&id==auth\.host\)\)route\(p->transport->decodedRing\(\),id\)/,'a native Lite guest consumes the host return stream');
+ assert.match(backend,/ControlObject::set\(ConfigKey\(kJunctionGroup, "main_mix"\), 0\)/,'received audio starts CUE-only');
+ assert.match(backend,/if\(!self->junctionAuxInMain_\.load[\s\S]*captureLocalReturn/,'the return tap is fed only while Auxiliary1 is absent from main');
+ assert.match(runtime,/backend->junctionInputMainMix\(true\)/,'Auxiliary1 enters main only for local takeover');
+});
+test('Lite takeover starts the JUNCTION deck audible and measures its Program seam once',{timeout:120000},async()=>{
+ const directory=await mkdtemp('/tmp/plumdeck-lite-takeover-');const host=native(directory);
+ try{
+  await host.start();
+  const devices=await host.command('audio.devices.list');const output=devices.devices.find(d=>d.name.includes('BlackHole')&&d.outputChannels>=2);assert(output,'loopback device required, not skipped');
+  await host.command('junction.create',{djName:'ホスト DJ',sessionName:'Lite takeover',programDevice:output.id.replace(/^coreaudio:/,''),adoptCurrent:true,exchangeMode:'manual'});
+  const created=await until(host.snapshot,s=>s.active&&s.program.state==='running','host and Program');const liteId='lite-takeover-dj';
+  await host.command('junction.lite.peer.ensure',{peerId:liteId,djName:'Lite DJ'});
+  const performing=await host.command('junction.lite.owner.set',{ownerPeerId:liteId});
+  assert.equal(performing.performerPeerId,liteId);assert.equal(performing.localPrep,false,'the outgoing Mac stays locked while its master is still returned');
+  assert.equal(performing.junctionInput.releasingPeerId,created.localPeerId);
+  // Simulate the new Lite operator fading the Mac return and releasing it.
+  await host.command('junction.input.release');
+  await until(host.snapshot,s=>s.localPrep&&s.junctionInput.peerId===liteId,'the released Mac can prepare while Lite performs');
+  // Cued with the JUNCTION deck pulled down on the far crossfader side: stale, silent controls.
+  await host.command('junction.input.set',{volume:0,orientation:0});assert.equal((await host.snapshot()).junctionInput.channel.audible,false);
+  const takeover=async()=>{const s=await host.command('junction.lite.owner.set',{ownerPeerId:created.localPeerId});assert.equal(s.performerPeerId,created.localPeerId);assert.equal(s.localPrep,false);assert.equal(s.junctionInput.releasingPeerId,liteId,'the outgoing Lite DJ keeps sounding');return s;};
+  const taken=await takeover();
+  assert.equal(taken.junctionInput.channel.volume,1);assert.equal(taken.junctionInput.channel.orientation,1,'THRU');assert.equal(taken.junctionInput.channel.audible,true);
+  // The seam is measured by the first captured block, not timed: the one-shot
+  // is already spent and the boundary is real by the time the next snapshot
+  // is answered. This peer sends no audio, so the deck reported nothing to
+  // render and the boundary falls back to the session clock.
+  const seamed=await until(host.snapshot,s=>s.junctionInput.seamPending===false&&Number(s.junctionInput.seamFrame)>0,'the takeover seam is measured',4000);
+  await pause(600);const settled=await host.snapshot();
+  assert.equal(Number(settled.junctionInput.seamFrame),Number(seamed.junctionInput.seamFrame),'the boundary is measured once and never re-derived');
+  assert.equal(settled.junctionInput.seamPending,false,'nothing re-arms the one-shot');
+  // Held while the deck is up: no fade, so no release yet.
+  assert.equal(settled.junctionInput.releasingPeerId,liteId,'no automatic release while the new operator keeps the deck up');
+  // This peer never sent a frame, so the stream-ended fallback is what ends
+  // the hold: an outgoing DJ whose audio stopped arriving is already gone.
+  await until(host.snapshot,s=>s.junctionInput.releasingPeerId==='','a stream that never arrives releases on its own',6000);
+  // Again from stale silent controls, released explicitly this time. Once the
+  // Mac becomes the outgoing sender its controls are locked, so stage the old
+  // fader first and simulate the Lite receiver's release before taking back.
+  await host.command('junction.input.set',{volume:0});
+  await host.command('junction.lite.owner.set',{ownerPeerId:liteId});
+  await host.command('junction.input.release');
+  await takeover();const released=await host.command('junction.input.release');
+  assert.equal(released.junctionInput.releasingPeerId,'','an explicit release ends the hold at once');
+  await host.command('junction.end');await until(host.snapshot,s=>!s.active,'host end');
+ }finally{await host.close();await rm(directory,{recursive:true,force:true});}
+});
 test('current and previous engines connect in both host/guest directions',{skip:!previousBinary,timeout:180000},async()=>{
  const directory=await mkdtemp('/tmp/plumdeck-mixed-runtime-');
  const connect=async(hostBinary,guestBinary)=>{

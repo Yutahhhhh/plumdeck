@@ -57,3 +57,21 @@ JTEST("authority","a waiting DJ can read waveform files of its own loaded deck b
  for(const auto* op:{"waveform.ensure","waveform.manifest","waveform.acquireReadLease","waveform.releaseReadLease","waveform.requestRange","waveform.cancelRequest","waveform.invalidate"}){CHECK(Authority::readOnlyQuery(op));CHECK(a.authorize(op,{},10).isEmpty());}
  CHECK(!a.authorize("deck.load",{},10).isEmpty());CHECK(!a.authorize("deck.load",ticket(a,1),10).isEmpty());CHECK(!a.authorize("junction.tracks.load",{},10).isEmpty());
 }
+JTEST("authority","a Lite performer leaves this computer's decks to local preparation"){
+ auto a=authority();a.owner="peer-lite";
+ CHECK(!a.authorize("deck.load",ticket(a,1),10).isEmpty());
+ a.localPrep=true;
+ CHECK(a.authorize("deck.load",ticket(a,1),10).isEmpty());
+ CHECK(a.authorize("mixer.crossfader",ticket(a,1),10).isEmpty());
+ CHECK(!a.authorize("deck.load",ticket(a,0),10).isEmpty());
+}
+JTEST("authority","an outgoing DJ still sending after losing the operator role stays locked"){
+ auto a=authority();a.owner="peer-next";a.localPrep=true;a.sending=true;
+ for(const auto* op:{"deck.load","deck.play","mixer.crossfader","mixer.channel.gain","audio.config.set"})CHECK(!a.authorize(op,ticket(a,1),10).isEmpty());
+ // Local-only headphone monitoring never reaches the transmitted master.
+ CHECK(a.authorize("mixer.channel.pfl",{},10).isEmpty());CHECK(a.authorize("mixer.headphone.mix",{},10).isEmpty());
+ // Released: only now does this computer become a local receiver.
+ a.sending=false;CHECK(a.authorize("deck.load",ticket(a,1),10).isEmpty());
+ // The operator itself is never affected by the flag.
+ a.owner=a.local;a.localPrep=false;a.sending=true;CHECK(a.authorize("deck.load",ticket(a,1),10).isEmpty());
+}

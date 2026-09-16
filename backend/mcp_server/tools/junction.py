@@ -25,6 +25,7 @@ from mcp_server.junction_bridge import (
 
 
 Deck = Literal["A", "B", "C", "D"]
+JunctionInputAssign = Literal["left", "thru", "right"]
 TurnMode = Literal["rest", "temporary"]
 ExchangeKind = Literal["invite", "response", "notice"]
 UnixEpochMilliseconds = Annotated[
@@ -40,6 +41,8 @@ ExchangeText = Annotated[
     str, Field(min_length=1, max_length=MAX_EXCHANGE_TEXT_BYTES)
 ]
 AssetId = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+JunctionInputLevel = Annotated[float, Field(ge=0.0, le=1.0)]
+JunctionInputEq = Annotated[float, Field(ge=0.0, le=4.0)]
 _ASSET_ID = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -482,3 +485,39 @@ def junction_attach_live_monitor(deck: Deck, asset_id: AssetId) -> Dict[str, Any
 def junction_detach_live_monitor(deck: Deck) -> Dict[str, Any]:
     """A〜Dの表示専用Junction Liveモニターを外し、下のローカルデッキ表示へ戻す。"""
     return _call("live.detach", {"deck": deck})
+
+
+@mcp.tool()
+def junction_configure_input(
+    volume: Optional[JunctionInputLevel] = None,
+    assign: Optional[JunctionInputAssign] = None,
+    eq_low: Optional[JunctionInputEq] = None,
+    eq_mid: Optional[JunctionInputEq] = None,
+    eq_high: Optional[JunctionInputEq] = None,
+    cue: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """受信中のJUNCTIONデッキの音量、クロスフェーダー割当、3バンドEQ、ヘッドホンCUEを変更する。少なくとも1項目を指定する。"""
+    arguments: Dict[str, Any] = {}
+    for source, target in (
+        (volume, "volume"),
+        (eq_low, "eqLow"),
+        (eq_mid, "eqMid"),
+        (eq_high, "eqHigh"),
+    ):
+        if source is not None:
+            if not isinstance(source, (int, float)) or isinstance(source, bool) or not math.isfinite(source):
+                raise ToolError(f"{target} must be a finite number")
+            arguments[target] = float(source)
+    if assign is not None:
+        arguments["orientation"] = {"left": 0, "thru": 1, "right": 2}[assign]
+    if cue is not None:
+        arguments["pfl"] = cue
+    if not arguments:
+        raise ToolError("at least one JUNCTION input setting is required")
+    return _call("input.set", arguments)
+
+
+@mcp.tool()
+def junction_release_input() -> Dict[str, Any]:
+    """JUNCTIONデッキを解放し、フェード済みの前任DJへ送出停止を通知する。"""
+    return _call("input.release")

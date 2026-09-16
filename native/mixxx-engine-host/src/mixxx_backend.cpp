@@ -35,6 +35,7 @@
 #include "effects/effectslot.h"
 #include "engine/channels/enginedeck.h"
 #include "engine/channels/enginemicrophone.h"
+#include "engine/channels/engineaux.h"
 #include "engine/enginebuffer.h"
 #include "engine/enginemixer.h"
 #include "soundio/soundmanager.h"
@@ -72,6 +73,7 @@ PaDeviceIndex defaultOutputDevice() {
 }
 const QString groups[] = {QStringLiteral("[Channel1]"), QStringLiteral("[Channel2]"), QStringLiteral("[Channel3]"), QStringLiteral("[Channel4]")};
 const QString names[] = {"A", "B", "C", "D"};
+const QString kJunctionGroup = QStringLiteral("[Auxiliary1]");
 class MixxxBackend final : public QObject, public PlaybackBackend {
 public:
     MixxxBackend() = default;
@@ -234,6 +236,20 @@ public:
         samplerCount_->set(64);
         microphone_ = new EngineMicrophone(mixer_->registerChannelGroup("[Microphone1]"), effects_.get());
         mixer_->addChannel(microphone_); // EngineMixer owns the microphone too.
+        // JUNCTION deck: another DJ's audio, fed from the Junction runtime in
+        // the callback's before-hook rather than from a sound card input.
+        const auto junctionHandle = mixer_->registerChannelGroup(kJunctionGroup);
+        junctionAux_ = new EngineAux(junctionHandle, effects_.get());
+        mixer_->addChannel(junctionAux_);
+        effects_->addDeck(junctionHandle); // EQ and filter like a deck.
+        junctionAux_->onInputConfigured(junctionAuxInput_);
+        // Received audio is CUE-only until this computer takes ownership.
+        // This is also the hard feedback boundary for the return capture.
+        ControlObject::set(ConfigKey(kJunctionGroup, "main_mix"), 0);
+        junctionAuxInMain_.store(false, std::memory_order_relaxed);
+        ControlObject::set(ConfigKey(kJunctionGroup, "volume"), 1);
+        ControlObject::set(ConfigKey(kJunctionGroup, "pregain"), 1);
+        ControlObject::set(ConfigKey(kJunctionGroup, "orientation"), 1);
         ControlObject::set(ConfigKey("[Microphone1]", "pregain"), 1);
         ControlObject::set(ConfigKey("[Microphone1]", "talkover"), 0);
         ControlObject::set(ConfigKey("[Master]", "talkover_mix"), 0); // Main + record mix.
@@ -326,13 +342,22 @@ public:
         }
         renderDriver_.requestTransfer(junction::GraphDriver::Realtime,junction::RenderMode::Performing);
         audioBridge_.context=this;
-        audioBridge_.before=[](void* context,unsigned) -> bool {auto* self=static_cast<MixxxBackend*>(context);self->audioCaptureSequence_.fetch_add(1,std::memory_order_acq_rel);self->blockGrant_=self->renderDriver_.beginBlock(junction::GraphDriver::Realtime);return self->blockGrant_.mayProcess;};
+        audioBridge_.before=[](void* context,unsigned frames) -> bool {auto* self=static_cast<MixxxBackend*>(context);self->audioCaptureSequence_.fetch_add(1,std::memory_order_acq_rel);self->blockGrant_=self->renderDriver_.beginBlock(junction::GraphDriver::Realtime);
+            // The JUNCTION deck is live input, never part of the replayable
+            // graph: only a block this callback itself processes may read it.
+            if(self->blockGrant_.mayProcess)self->feedJunctionAux(frames);
+            return self->blockGrant_.mayProcess;};
         audioBridge_.after=[](void* context,float* master,float* pfl,unsigned frames){
             auto* self=static_cast<MixxxBackend*>(context);
             const auto frame=self->renderDriver_.clock().renderFrame();
             auto* runtime=self->junctionRuntime_.load(std::memory_order_acquire);
             if(self->blockGrant_.mayProcess){
-                if(runtime&&master)runtime->capture(master,frames,frame,44100);
+                if(runtime&&master){
+                    runtime->capture(master,frames,frame,44100);
+                    // The local-return producer is only fed while Auxiliary1
+                    // is excluded from main, so it can never echo JUNCTION IN.
+                    if(!self->junctionAuxInMain_.load(std::memory_order_relaxed))runtime->captureLocalReturn(master,frames,frame,44100);
+                }
                 // SoundManager caches these device-sink addresses at open.
                 // Finish all reads from graph PCM before releasing ownership.
                 if(master)std::copy_n(master,frames*2,self->audioBridge_.idleMaster.data());
@@ -858,6 +883,48 @@ public:
     bool playing(int index) const override { return ControlObject::get(ConfigKey(groups[index], "play")) > 0; }
     void gain(int index, double value) override { ControlObject::set(ConfigKey(groups[index], "volume"), value); }
     void orientation(int index, int value) override { ControlObject::set(ConfigKey(groups[index], "orientation"), value); }
+    QJsonObject junctionInputState() const override {
+        if (!available_ || !junctionAux_) return {{"available", false}};
+        const auto get = [](const char* key) { return ControlObject::get(ConfigKey(kJunctionGroup, key)); };
+        const double volume = get("volume"), crossfader = ControlObject::get(ConfigKey("[Master]", "crossfader"));
+        const int side = int(std::lround(get("orientation")));
+        const bool faded = volume <= .001 || (side == 0 && crossfader >= .999) || (side == 2 && crossfader <= -.999);
+        return {{"available", true}, {"volume", volume}, {"orientation", side}, {"pfl", get("pfl") > 0}, {"pflAvailable", pflAvailable_},
+                {"eqLow", get("filterLow")}, {"eqMid", get("filterMid")}, {"eqHigh", get("filterHigh")}, {"vu", get("vu_meter")}, {"audible", !faded}};
+    }
+    QString junctionInputSet(const QJsonObject& params) override {
+        if (!available_ || !junctionAux_) return "JUNCTIONデッキは音声出力の準備後に使えます";
+        const auto number = [&](const char* key, double low, double high, double* out) {
+            if (!params.contains(key)) return true;
+            const auto value = params[key];
+            if (!value.isDouble() || !std::isfinite(value.toDouble()) || value.toDouble() < low || value.toDouble() > high) return false;
+            *out = value.toDouble(); return true;
+        };
+        double volume = -1, orientation = -1, low = -1, mid = -1, high = -1;
+        if (!number("volume", 0, 1, &volume) || !number("orientation", 0, 2, &orientation) || !number("eqLow", 0, 4, &low) || !number("eqMid", 0, 4, &mid) || !number("eqHigh", 0, 4, &high))
+            return "JUNCTIONデッキの値が範囲外です";
+        if (orientation >= 0 && orientation != std::floor(orientation)) return "クロスフェーダーの割り当ては0・1・2で指定してください";
+        if (params.contains("pfl") && (!params["pfl"].isBool() || (params["pfl"].toBool() && !pflAvailable_))) return "ヘッドホン出力のあるデバイスでCUEを使ってください";
+        if (volume >= 0) ControlObject::set(ConfigKey(kJunctionGroup, "volume"), volume);
+        if (orientation >= 0) ControlObject::set(ConfigKey(kJunctionGroup, "orientation"), orientation);
+        if (low >= 0) ControlObject::set(ConfigKey(kJunctionGroup, "filterLow"), low);
+        if (mid >= 0) ControlObject::set(ConfigKey(kJunctionGroup, "filterMid"), mid);
+        if (high >= 0) ControlObject::set(ConfigKey(kJunctionGroup, "filterHigh"), high);
+        if (params.contains("pfl")) ControlObject::set(ConfigKey(kJunctionGroup, "pfl"), params["pfl"].toBool() ? 1 : 0);
+        return {};
+    }
+    void junctionInputTakeOver() override {
+        // Program switches from the direct stream to this master, so the deck
+        // must carry that stream unchanged. Headphone CUE is left as is.
+        if (!available_ || !junctionAux_) return;
+        for (const char* key : {"volume", "pregain", "filterLow", "filterMid", "filterHigh"}) ControlObject::set(ConfigKey(kJunctionGroup, key), 1);
+        ControlObject::set(ConfigKey(kJunctionGroup, "orientation"), 1);
+    }
+    void junctionInputMainMix(bool enabled) override {
+        if (!junctionAux_) return;
+        ControlObject::set(ConfigKey(kJunctionGroup, "main_mix"), enabled ? 1 : 0);
+        junctionAuxInMain_.store(enabled, std::memory_order_release);
+    }
     void pfl(int index, bool enabled) override { ControlObject::set(ConfigKey(groups[index], "pfl"), enabled ? 1 : 0); }
     void masterGain(double value) override { ControlObject::set(ConfigKey("[Master]", "gain"), value); }
     void crossfader(double value) override { ControlObject::set(ConfigKey("[Master]", "crossfader"), value); }
@@ -986,6 +1053,20 @@ private:
         for(const auto& map:{slot->getLoadedParameters(),slot->getHiddenParameters()})for(const auto& parameters:map)for(const auto& parameter:parameters){const auto value=values[parameter->manifest()->id()];if(value.isUndefined())continue;if(!value.isDouble()||value.toDouble()<parameter->manifest()->getMinimum()||value.toDouble()>parameter->manifest()->getMaximum()){restoreError_="Invalid Junction FX parameter";return false;}parameter->setValue(value.toDouble());parameter->updateEngineState();}return true;
     }
     static const std::array<const char*,20>& graphControls(){static const std::array<const char*,20> keys={"rate","rateRange","keylock","pitch_adjust","slip_enabled","reverse","reverseroll","volume","pregain","filterLow","filterMid","filterHigh","orientation","loop_start_position","loop_end_position","loop_enabled","cue_point","sync_enabled","sync_leader","rate_ratio"};return keys;}
+    /// Audio thread, realtime grant only: no locks, no allocation.
+    void feedJunctionAux(unsigned frames) noexcept {
+        if(!junctionAux_)return;
+        const unsigned count=std::min(frames,junction::AudioBridge::maxFrames);
+        auto* runtime=junctionRuntime_.load(std::memory_order_acquire);
+        if(runtime)runtime->readJunctionInput(junctionAuxBuffer_.data(),count);else std::fill_n(junctionAuxBuffer_.data(),size_t(count)*2,0.f);
+        junctionAux_->receiveBuffer(junctionAuxInput_,junctionAuxBuffer_.data(),count);
+    }
+    /// Graph owner released: replay renders neither the microphone nor the
+    /// JUNCTION deck, which the realtime callback no longer touches either.
+    void detachLiveInputs(){
+        if(microphone_)microphone_->receiveBuffer(AudioInput(AudioPathType::Microphone,0,mixxx::audio::ChannelCount::stereo(),0),nullptr,0);
+        if(junctionAux_)junctionAux_->receiveBuffer(junctionAuxInput_,nullptr,0);
+    }
     void tryFinalizeGraphRestore(){
         if(!restoring_||!samplers_||!samplers_->junctionLoaded())return;
         for(int i=0;i<4;++i)if(tracks_[i]&&!deckReady_[i])return;
@@ -994,7 +1075,7 @@ private:
         if(!renderDriver_.transferComplete(restoreTransfer_))return;
         // Drop any input-only device pointer queued just before ownership
         // closed; its hardware memory can be reused while replay is running.
-        if(microphone_)microphone_->receiveBuffer(AudioInput(AudioPathType::Microphone,0,mixxx::audio::ChannelCount::stereo(),0),nullptr,0);
+        detachLiveInputs();
         // One owner released at a block boundary. All controls and queued
         // exact seeks become visible together to the next realtime block.
         if(aligning_){
@@ -1143,6 +1224,10 @@ private:
     std::unique_ptr<BeatFx> beatFx_;
     std::unique_ptr<SamplerBank> samplers_;
     EngineMicrophone* microphone_ = nullptr;
+    EngineAux* junctionAux_ = nullptr;
+    const AudioInput junctionAuxInput_{AudioPathType::Auxiliary, 0, mixxx::audio::ChannelCount::stereo(), 0};
+    std::array<float, junction::AudioBridge::maxFrames * 2> junctionAuxBuffer_{};
+    std::atomic<bool> junctionAuxInMain_{false};
     QString micDevice_, micDeviceKey_, micProblem_;
     int micChannel_ = 0;
     double micGain_ = 1, micDuckingStrength_ = 0.65;

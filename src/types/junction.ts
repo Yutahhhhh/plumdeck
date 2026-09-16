@@ -56,6 +56,8 @@ export interface JunctionParticipant {
   /** The DJ asked to be considered next; only the coordinator starts handoff. */
   turnRequested?: boolean;
   connectionQuality?: JunctionConnectionQuality;
+  /** Set for PlumDeck Lite (phone) participants. */
+  client?: 'lite';
   isHost?: boolean;
   /** Session coordinator; independent from the current performer. */
   isCoordinator?: boolean;
@@ -95,6 +97,65 @@ export interface JunctionSnapshot {
   exchange?: SnapshotExchange;
   /** Local-only: tracks received from the remote performer. Never on the wire. */
   junctionTracks?: JunctionTrack[];
+  /** A Lite DJ performs; this computer's decks are local preparation only. */
+  localPrep?: boolean;
+  /** The JUNCTION deck: another DJ's audio as a local mixer channel. */
+  junctionInput?: JunctionInputState;
+}
+export type JunctionDeckName = 'A' | 'B' | 'C' | 'D';
+/** What the remote Lite DJ reports for one of its decks. */
+export interface JunctionInputDeck {
+  deck: JunctionDeckName;
+  role: 'current' | 'next';
+  title: string;
+  artist: string;
+  bpm: number;
+  positionMs: number;
+  durationMs: number;
+  rate: number;
+  /** Channel fader x crossfader gain on the remote mixer, 0..1. */
+  audibility: number;
+  playing: boolean;
+  /** Beat grid anchor; absent from Lite builds that do not send it. */
+  firstBeatMs?: number;
+  beatsPerBar: number;
+}
+export interface JunctionInputChannel {
+  available: boolean;
+  volume?: number;
+  /** Crossfader assign: 0 left, 1 thru, 2 right. */
+  orientation?: 0 | 1 | 2;
+  pfl?: boolean;
+  pflAvailable?: boolean;
+  eqLow?: number;
+  eqMid?: number;
+  eqHigh?: number;
+  vu?: number;
+  /** False once the fader or crossfader has removed it from the mix. */
+  audible?: boolean;
+}
+export interface JunctionInputState {
+  /** Source peer; empty when nobody feeds the JUNCTION deck. */
+  peerId: string;
+  /** Previous performer still sounding here until faded out. */
+  releasingPeerId: string;
+  receiving: boolean;
+  latencyMs: number;
+  underruns: string;
+  channel: JunctionInputChannel;
+  djName?: string;
+  decks?: JunctionInputDeck[];
+  audibleDeck?: JunctionDeckName | '';
+  /** Recent peaks, oldest first, with the remote deck that was loudest then. */
+  lane: { bucketMs: number; peaks: number[]; decks: (JunctionDeckName | '')[] };
+}
+export interface JunctionInputSettings {
+  volume?: number;
+  orientation?: 0 | 1 | 2;
+  pfl?: boolean;
+  eqLow?: number;
+  eqMid?: number;
+  eqHigh?: number;
 }
 export type JunctionTrackState = 'pending' | 'receiving' | 'verifying' | 'ready' | 'failed';
 export type JunctionTrackRole = 'current' | 'next';
@@ -166,7 +227,9 @@ export type JunctionOp =
   | 'lite.peer.answer'
   | 'lite.peer.remove'
   | 'lite.owner.set'
-  | 'lite.roster.set';
+  | 'lite.roster.set'
+  | 'input.set'
+  | 'input.release';
 export interface JunctionLease { sessionId: string; epoch: string; actorPeerId: string }
 
 /** Sanitized result of exchange.inspect. No secrets, bounded fields. */

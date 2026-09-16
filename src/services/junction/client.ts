@@ -36,6 +36,11 @@ export async function junctionCommand(op: JunctionOp, params: Record<string, unk
     const s = reply.data as JunctionSnapshot;
     if (!s || typeof s.active !== 'boolean' || !Array.isArray(s.participants)) throw new Error('Junctionの状態を確認できません');
     junctionState.set(s);
+  } else if (op === 'input.set') {
+    const current = junctionState.get();
+    if (current && reply.data && typeof reply.data === 'object') {
+      junctionState.set({...current, junctionInput: reply.data as JunctionSnapshot['junctionInput']});
+    }
   } else await junctionCommand('snapshot');
   return reply.data;
 }

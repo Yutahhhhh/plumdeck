@@ -15,7 +15,7 @@ QString Authority::authorize(const QString& op,const QJsonObject& ticket,quint64
     if(ticket["sessionId"].toString()!=sessionId || ticket["actorPeerId"].toString()!=local) return "共有セッションの操作情報が更新されています";
     const auto requested=parseU64(ticket["epoch"]);
     if(!requested || *requested!=epoch) return "交代前の操作は適用できません";
-    if(local!=owner) return "現在のプレイ担当者だけが操作できます";
+    if(local!=owner&&(!localPrep||sending)) return "現在のプレイ担当者だけが操作できます";
     if(phase=="recovery") return "配信を復旧中です";
     if((phase=="fenced" || phase=="committed") && frame>=fenceFrame && (!committed || frame<cutoverFrame)) return "引き継ぎ中です。操作をもう一度行ってください";
     return {};

@@ -25,6 +25,14 @@ public:
     virtual QString alignJunctionGraph(quint64) { return "Graph alignment unavailable"; }
     virtual QString privatePreviewCommand(const QString&,const QJsonObject&) { return "Private preview unavailable"; }
     virtual QJsonObject privatePreviewState() const { return {}; }
+    /// The JUNCTION deck: another DJ's audio as a local mixer channel.
+    virtual QJsonObject junctionInputState() const { return {{"available", false}}; }
+    virtual QString junctionInputSet(const QJsonObject&) { return "JUNCTIONデッキはこの音声エンジンでは使えません"; }
+    /// Taking over from the deck's DJ: unity level, THRU, flat EQ.
+    virtual void junctionInputTakeOver() {}
+    /// Route the JUNCTION input to main only while the local operator is
+    /// actively mixing it out. PFL remains independent.
+    virtual void junctionInputMainMix(bool) {}
     virtual bool available() const = 0;
     virtual QString implementation() const { return "unavailable"; }
     virtual void start() {}

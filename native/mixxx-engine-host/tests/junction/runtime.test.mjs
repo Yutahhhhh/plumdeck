@@ -35,7 +35,11 @@ function native(directory) {
   async function raw(op,params={}) {
     const key=++id;
     const result=new Promise((resolve,reject)=>{
-      const timer=setTimeout(()=>{pending.delete(key);reject(new Error(`Native ${op} timed out: ${stderr.replace(/plumdeck-junction:\/\/\S+/g,'[invite redacted]')}`));},12000);
+      // Two full Mixxx engines initialise their audio graphs concurrently in this
+      // test. Cold plugin/device discovery can exceed 12 seconds on otherwise
+      // healthy machines, so keep command I/O bounded without mistaking startup
+      // work for a Junction deadlock.
+      const timer=setTimeout(()=>{pending.delete(key);reject(new Error(`Native ${op} timed out: ${stderr.replace(/plumdeck-junction:\/\/\S+/g,'[invite redacted]')}`));},30000);
       pending.set(key,{resolve,reject,timer});
     });
     child.stdin.write(JSON.stringify({id:key,op,params,...(hello?{sessionId:hello.sessionId,engineId:hello.engineId}:{})})+'\n');
