@@ -496,7 +496,7 @@ def junction_configure_input(
     eq_high: Optional[JunctionInputEq] = None,
     cue: Optional[bool] = None,
 ) -> Dict[str, Any]:
-    """受信中のJUNCTIONデッキの音量、クロスフェーダー割当、3バンドEQ、ヘッドホンCUEを変更する。少なくとも1項目を指定する。"""
+    """受信中のJUNCTION MASTER（前のDJの現在の音を受ける仮想入力チャンネル）の音量、クロスフェーダー割当、3バンドEQ、ヘッドホンCUEを変更する。少なくとも1項目を指定する。"""
     arguments: Dict[str, Any] = {}
     for source, target in (
         (volume, "volume"),
@@ -519,5 +519,5 @@ def junction_configure_input(
 
 @mcp.tool()
 def junction_release_input() -> Dict[str, Any]:
-    """JUNCTIONデッキを解放し、フェード済みの前任DJへ送出停止を通知する。"""
+    """JUNCTION MASTERから前のDJを解放し、フェード済みの前任DJへ送出停止を通知する。"""
     return _call("input.release")

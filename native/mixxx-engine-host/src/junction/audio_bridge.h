@@ -10,6 +10,15 @@ struct AudioBridge {
     After after=nullptr;
     static constexpr unsigned maxFrames=16384;
     std::array<float,maxFrames*2> idleMaster{},idlePfl{};
+    /// LOCAL NEXT return bus, written by EngineMixer::process: the post-fader
+    /// local channels as they enter the crossfader buses, times main gain.
+    /// Never the channel named by `localReturnExcluded` (JUNCTION MASTER) and
+    /// never a microphone, so the return can echo neither the remote DJ nor
+    /// the room. Owned by whichever driver currently processes the graph.
+    std::array<float,maxFrames*2> localReturn{};
+    std::atomic<int> localReturnExcluded{-1};
+    std::atomic<bool> localReturnWritten{false};
+    float localReturnGainOld=0;
     std::atomic<bool> idle{false};
     std::atomic<bool> inputsEnabled{true};
     std::atomic<unsigned> inputReaders{0};

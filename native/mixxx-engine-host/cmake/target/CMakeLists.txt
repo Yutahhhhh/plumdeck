@@ -78,6 +78,31 @@ if(PLUMDECK_CLOCK_MATCH EQUAL -1)
 endif()
 string(REPLACE "${PLUMDECK_CLOCK_NEEDLE}" "${PLUMDECK_CLOCK_NEEDLE}
     deckclock::beginAudio(iBufferSize / 2, m_sampleRate.value()); deckclock::CallbackScope plumdeckCallbackScope;" PLUMDECK_MIXER "${PLUMDECK_MIXER}")
+# LOCAL NEXT return bus. Channel buffers already carry their post-fader,
+# post-crossfader main contribution here, so the sum is exactly what each local
+# channel adds to main -- minus Auxiliary1 (JUNCTION MASTER) and microphones.
+set(PLUMDECK_RETURN_NEEDLE "    // Process crossfader orientation bus channel effects")
+string(FIND "${PLUMDECK_MIXER}" "${PLUMDECK_RETURN_NEEDLE}" PLUMDECK_RETURN_MATCH)
+if(PLUMDECK_RETURN_MATCH EQUAL -1)
+  message(FATAL_ERROR "Pinned EngineMixer local return hook no longer matches")
+endif()
+string(REPLACE "${PLUMDECK_RETURN_NEEDLE}" "    if (auto* plumdeckBridge = junction::audioBridge.load(std::memory_order_acquire)) {
+        const int plumdeckExcluded = plumdeckBridge->localReturnExcluded.load(std::memory_order_relaxed);
+        const int plumdeckSamples = std::min(iBufferSize, static_cast<int>(plumdeckBridge->localReturn.size()));
+        CSAMPLE* plumdeckLocal = plumdeckBridge->localReturn.data();
+        SampleUtil::clear(plumdeckLocal, plumdeckSamples);
+        for (int o = EngineChannel::LEFT; o <= EngineChannel::RIGHT; o++) {
+            for (auto* pChannelInfo : m_activeBusChannels[o]) {
+                if (pChannelInfo->m_handle.handle() == plumdeckExcluded || pChannelInfo->m_pChannel->isTalkoverChannel()) continue;
+                SampleUtil::add(plumdeckLocal, pChannelInfo->m_pBuffer.data(), plumdeckSamples);
+            }
+        }
+        const auto plumdeckGain = static_cast<CSAMPLE_GAIN>(m_pMainGain->get());
+        SampleUtil::applyRampingGain(plumdeckLocal, plumdeckBridge->localReturnGainOld, plumdeckGain, plumdeckSamples);
+        plumdeckBridge->localReturnGainOld = plumdeckGain;
+        plumdeckBridge->localReturnWritten.store(true, std::memory_order_relaxed);
+    }
+${PLUMDECK_RETURN_NEEDLE}" PLUMDECK_MIXER "${PLUMDECK_MIXER}")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/plumdeck_enginemixer.cpp" "#include \"${PLUMDECK_ROOT}/src/junction/audio_bridge.h\"\n#include \"${PLUMDECK_ROOT}/src/deck_telemetry.h\"\n${PLUMDECK_MIXER}")
 get_target_property(PLUMDECK_MIXXX_SOURCES mixxx-lib SOURCES)
 list(FILTER PLUMDECK_MIXXX_SOURCES EXCLUDE REGEX "engine/enginemixer\\.cpp$")

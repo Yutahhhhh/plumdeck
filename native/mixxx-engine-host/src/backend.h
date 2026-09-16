@@ -27,12 +27,16 @@ public:
     virtual QJsonObject privatePreviewState() const { return {}; }
     /// The JUNCTION deck: another DJ's audio as a local mixer channel.
     virtual QJsonObject junctionInputState() const { return {{"available", false}}; }
-    virtual QString junctionInputSet(const QJsonObject&) { return "JUNCTIONデッキはこの音声エンジンでは使えません"; }
+    virtual QString junctionInputSet(const QJsonObject&) { return "JUNCTION MASTERはこの音声エンジンでは使えません"; }
     /// Taking over from the deck's DJ: unity level, THRU, flat EQ.
     virtual void junctionInputTakeOver() {}
     /// Route the JUNCTION input to main only while the local operator is
     /// actively mixing it out. PFL remains independent.
     virtual void junctionInputMainMix(bool) {}
+    /// The engine renders a LOCAL NEXT bus (local channels only, never the
+    /// JUNCTION input or a microphone) for the return feed. Without it a local
+    /// return must be refused whenever JUNCTION MASTER is in main.
+    virtual bool junctionLocalReturnBus() const { return false; }
     virtual bool available() const = 0;
     virtual QString implementation() const { return "unavailable"; }
     virtual void start() {}

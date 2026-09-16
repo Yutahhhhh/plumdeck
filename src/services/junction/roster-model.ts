@@ -27,8 +27,17 @@ export interface QualityPresentation {
   detail?: string;
 }
 
+/**
+ * Every connected DJ is a candidate: a turn request only joins the queue, and a
+ * DJ who already played may be chosen again.
+ */
 export function coordinatorCanSelect(state: RosterVisualState): boolean {
-  return state === 'ready' || state === 'requested';
+  return state === 'ready' || state === 'requested' || state === 'finished';
+}
+
+/** Only the performer keeps a fixed position; played DJs can be queued again. */
+export function rosterPositionLocked(state: RosterVisualState): boolean {
+  return state === 'playing';
 }
 
 /** Only the coordinator withdraws a pending (not yet committed) turn. */
@@ -37,7 +46,7 @@ export function handoffCancelAvailable(state: RosterVisualState, coordinator: bo
 }
 
 export function turnRequestAvailable(state: RosterVisualState, coordinator: boolean, self: boolean): boolean {
-  return !coordinator && self && state === 'ready';
+  return !coordinator && self && (state === 'ready' || state === 'finished');
 }
 
 const EXCHANGE_PROBLEM = new Set<ExchangeState>([

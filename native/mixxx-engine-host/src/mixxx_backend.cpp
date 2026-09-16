@@ -243,10 +243,11 @@ public:
         mixer_->addChannel(junctionAux_);
         effects_->addDeck(junctionHandle); // EQ and filter like a deck.
         junctionAux_->onInputConfigured(junctionAuxInput_);
+        // The LOCAL NEXT return bus skips this channel by handle.
+        audioBridge_.localReturnExcluded.store(junctionHandle.handle().handle(), std::memory_order_release);
         // Received audio is CUE-only until this computer takes ownership.
         // This is also the hard feedback boundary for the return capture.
         ControlObject::set(ConfigKey(kJunctionGroup, "main_mix"), 0);
-        junctionAuxInMain_.store(false, std::memory_order_relaxed);
         ControlObject::set(ConfigKey(kJunctionGroup, "volume"), 1);
         ControlObject::set(ConfigKey(kJunctionGroup, "pregain"), 1);
         ControlObject::set(ConfigKey(kJunctionGroup, "orientation"), 1);
@@ -352,12 +353,16 @@ public:
             const auto frame=self->renderDriver_.clock().renderFrame();
             auto* runtime=self->junctionRuntime_.load(std::memory_order_acquire);
             if(self->blockGrant_.mayProcess){
+                // The return is LOCAL NEXT only: the engine's local-channel bus,
+                // never main, so JUNCTION MASTER cannot reach it even while it
+                // is mixed into Program.
+                const bool localWritten=self->audioBridge_.localReturnWritten.exchange(false,std::memory_order_relaxed);
+                const float* local=localWritten?self->audioBridge_.localReturn.data():nullptr;
                 if(runtime&&master){
                     runtime->capture(master,frames,frame,44100);
-                    // The local-return producer is only fed while Auxiliary1
-                    // is excluded from main, so it can never echo JUNCTION IN.
-                    if(!self->junctionAuxInMain_.load(std::memory_order_relaxed))runtime->captureLocalReturn(master,frames,frame,44100);
+                    if(local)runtime->captureLocalReturn(local,frames,frame,44100);
                 }
+                self->meterBlock(master,pfl,local,frames);
                 // SoundManager caches these device-sink addresses at open.
                 // Finish all reads from graph PCM before releasing ownership.
                 if(master)std::copy_n(master,frames*2,self->audioBridge_.idleMaster.data());
@@ -889,11 +894,17 @@ public:
         const double volume = get("volume"), crossfader = ControlObject::get(ConfigKey("[Master]", "crossfader"));
         const int side = int(std::lround(get("orientation")));
         const bool faded = volume <= .001 || (side == 0 && crossfader >= .999) || (side == 2 && crossfader <= -.999);
+        const auto peak = [](const std::atomic<float>& value) { return std::round(double(value.load(std::memory_order_relaxed)) * 10000) / 10000; };
         return {{"available", true}, {"volume", volume}, {"orientation", side}, {"pfl", get("pfl") > 0}, {"pflAvailable", pflAvailable_},
-                {"eqLow", get("filterLow")}, {"eqMid", get("filterMid")}, {"eqHigh", get("filterHigh")}, {"vu", get("vu_meter")}, {"audible", !faded}};
+                {"eqLow", get("filterLow")}, {"eqMid", get("filterMid")}, {"eqHigh", get("filterHigh")}, {"vu", get("vu_meter")}, {"audible", !faded},
+                {"mainMix", get("main_mix") > 0},
+                // Peaks of the last ~200 ms of what the engine actually rendered:
+                // Program Master before venue gating, the headphone bus, and the
+                // LOCAL NEXT return bus that excludes JUNCTION MASTER.
+                {"meters", QJsonObject{{"programPeak", peak(programPeak_)}, {"pflPeak", peak(pflPeak_)}, {"localReturnPeak", peak(localReturnPeak_)}}}};
     }
     QString junctionInputSet(const QJsonObject& params) override {
-        if (!available_ || !junctionAux_) return "JUNCTIONデッキは音声出力の準備後に使えます";
+        if (!available_ || !junctionAux_) return "JUNCTION MASTERは音声出力の準備後に使えます";
         const auto number = [&](const char* key, double low, double high, double* out) {
             if (!params.contains(key)) return true;
             const auto value = params[key];
@@ -902,7 +913,7 @@ public:
         };
         double volume = -1, orientation = -1, low = -1, mid = -1, high = -1;
         if (!number("volume", 0, 1, &volume) || !number("orientation", 0, 2, &orientation) || !number("eqLow", 0, 4, &low) || !number("eqMid", 0, 4, &mid) || !number("eqHigh", 0, 4, &high))
-            return "JUNCTIONデッキの値が範囲外です";
+            return "JUNCTION MASTERの値が範囲外です";
         if (orientation >= 0 && orientation != std::floor(orientation)) return "クロスフェーダーの割り当ては0・1・2で指定してください";
         if (params.contains("pfl") && (!params["pfl"].isBool() || (params["pfl"].toBool() && !pflAvailable_))) return "ヘッドホン出力のあるデバイスでCUEを使ってください";
         if (volume >= 0) ControlObject::set(ConfigKey(kJunctionGroup, "volume"), volume);
@@ -923,7 +934,26 @@ public:
     void junctionInputMainMix(bool enabled) override {
         if (!junctionAux_) return;
         ControlObject::set(ConfigKey(kJunctionGroup, "main_mix"), enabled ? 1 : 0);
-        junctionAuxInMain_.store(enabled, std::memory_order_release);
+    }
+    bool junctionLocalReturnBus() const override { return junctionAux_ != nullptr; }
+    /// Audio thread. Windowed peaks, published once per window so a reader
+    /// never sees a half-built value and never has to reset anything.
+    void meterBlock(const float* master, const float* pfl, const float* local, unsigned frames) noexcept {
+        const auto blockPeak = [frames](const float* samples) {
+            float value = 0;
+            if (samples) for (size_t i = 0; i < size_t(frames) * 2; ++i) value = std::max(value, std::abs(samples[i]));
+            return value;
+        };
+        meterWindow_[0] = std::max(meterWindow_[0], blockPeak(master));
+        meterWindow_[1] = std::max(meterWindow_[1], blockPeak(pfl));
+        meterWindow_[2] = std::max(meterWindow_[2], blockPeak(local));
+        meterFrames_ += frames;
+        if (meterFrames_ < 8820) return;
+        programPeak_.store(meterWindow_[0], std::memory_order_relaxed);
+        pflPeak_.store(meterWindow_[1], std::memory_order_relaxed);
+        localReturnPeak_.store(meterWindow_[2], std::memory_order_relaxed);
+        meterWindow_ = {};
+        meterFrames_ = 0;
     }
     void pfl(int index, bool enabled) override { ControlObject::set(ConfigKey(groups[index], "pfl"), enabled ? 1 : 0); }
     void masterGain(double value) override { ControlObject::set(ConfigKey("[Master]", "gain"), value); }
@@ -1227,7 +1257,10 @@ private:
     EngineAux* junctionAux_ = nullptr;
     const AudioInput junctionAuxInput_{AudioPathType::Auxiliary, 0, mixxx::audio::ChannelCount::stereo(), 0};
     std::array<float, junction::AudioBridge::maxFrames * 2> junctionAuxBuffer_{};
-    std::atomic<bool> junctionAuxInMain_{false};
+    // Audio-thread meter window and the peaks it publishes.
+    std::array<float, 3> meterWindow_{};
+    unsigned meterFrames_ = 0;
+    std::atomic<float> programPeak_{0}, pflPeak_{0}, localReturnPeak_{0};
     QString micDevice_, micDeviceKey_, micProblem_;
     int micChannel_ = 0;
     double micGain_ = 1, micDuckingStrength_ = 0.65;

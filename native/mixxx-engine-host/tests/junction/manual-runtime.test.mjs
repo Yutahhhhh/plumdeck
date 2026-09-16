@@ -10,8 +10,8 @@ const binary=process.env.PLUMDECK_TEST_HOST||path.resolve(import.meta.dirname,'.
 const previousBinary=process.env.PLUMDECK_PREVIOUS_HOST;
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(read,predicate,label,timeout=40000){const end=Date.now()+timeout;let last;while(Date.now()<end){last=await read();if(predicate(last))return last;await pause(60);}throw Error(`${label}: timed out; phase=${last?.handoffState}, connection=${last?.connection?.state}`);}
-function native(directory,executable=binary){
- const child=spawn(executable,[],{env:{...process.env,PLUMDECK_JUNCTION_EPHEMERAL_NETWORK:'1',PLUMDECK_MIXXX_OUTPUT_DEVICE:process.env.PLUMDECK_MIXXX_OUTPUT_DEVICE||'BlackHole 2ch',PLUMDECK_MIXXX_RECORDING_DIR:directory}});
+function native(directory,executable=binary,extraEnv={}){
+ const child=spawn(executable,[],{env:{...process.env,...extraEnv,PLUMDECK_JUNCTION_EPHEMERAL_NETWORK:'1',PLUMDECK_MIXXX_OUTPUT_DEVICE:process.env.PLUMDECK_MIXXX_OUTPUT_DEVICE||'BlackHole 2ch',PLUMDECK_MIXXX_RECORDING_DIR:directory}});
  let hello,id=0,stderr='';const pending=new Map();child.stderr.on('data',b=>{stderr=(stderr+b).slice(-3000);});
  const reject=reason=>{for(const p of pending.values()){clearTimeout(p.timer);p.reject(reason);}pending.clear();};child.on('error',reject);child.on('exit',code=>reject(Error(`Native exited: ${code}`)));
  createInterface({input:child.stdout}).on('line',line=>{let reply;try{reply=JSON.parse(line);}catch{return;}const p=pending.get(reply.id);if(p){clearTimeout(p.timer);pending.delete(reply.id);p.resolve(reply);}});
@@ -41,6 +41,19 @@ test('Junction Live stays local display state: wire announcements never carry pa
  assert(announcement.length>0);assert.doesNotMatch(announcement,/"path"/);
  assert.doesNotMatch(runtime,/importJunctionTrack|tryMirror|junction\.tracks\.load/,'remote tracks are never auto-loaded into coordinator decks');
  assert.doesNotMatch(host,/loadJunctionTrack|junction\.tracks\.load/,'the monitor has no native deck-load command');
+});
+test('Program Mixer routing is published locally and guards the local return feed',async()=>{
+ const runtime=await readFile(path.resolve(import.meta.dirname,'../../src/junction/runtime.cpp'),'utf8');
+ assert.match(runtime,/if\(!wire\)\{state\["localPrep"\]=localPrep\(\);state\["junctionInput"\]=inputState\(\);\n\s*state\["operatorPeerId"\][^\n]*\n\s*state\["programMixer"\]=programMixer\(\)\.toJson/,'routing is local-only snapshot state, never on the wire');
+ assert.match(runtime,/if\(previous==auth\.local\)\{if\(programMixer\(true,false\)\.localReturnAllowed\(\)\)/,'a local return is refused while JUNCTION MASTER is in main');
+ assert.doesNotMatch(runtime,/backend->junctionInputMainMix\((true|false)\)/,'every main-mix change goes through the mirrored setter');
+});
+test('connected Lite DJs are candidates and a played DJ can request again',async()=>{
+ const runtime=await readFile(path.resolve(import.meta.dirname,'../../src/junction/runtime.cpp'),'utf8');
+ const status=runtime.slice(runtime.indexOf('QString rosterStatus('),runtime.indexOf('void enrichRosterRow('));
+ assert.match(status,/if\(manual&&peer&&!peer->lite\)/,'a Lite row never reports the idle manual exchange as invited');
+ assert(status.indexOf('"requested"')<status.indexOf('"finished"'),'a new request outranks the played state');
+ assert.doesNotMatch(runtime,/演奏中・演奏済みのDJは移動できません/,'played DJs can be queued again');
 });
 test('additive Junction Live negotiation is independent from the compatible baseline',async()=>{
  const runtime=await readFile(path.resolve(import.meta.dirname,'../../src/junction/runtime.cpp'),'utf8');
@@ -121,12 +134,58 @@ test('Lite return audio is bidirectional, per-recipient, and excluded from JUNCT
  assert.match(transport,/Description::Direction::SendRecv/,'the native Lite offer negotiates return audio');
  assert.doesNotMatch(transport,/Description::Direction::RecvOnly/,'the old receive-only Lite offer is gone');
  assert.match(runtime,/std::map<QString,std::unique_ptr<PcmRing>> liteReturnRings/,'each Lite recipient has one bounded SPSC return ring');
- assert.match(runtime,/if\(previous==auth\.local\)localReturnTarget\.store\(ring/,'a local previous owner uses the local-master return tap');
+ assert.match(runtime,/if\(previous==auth\.local\)\{if\(programMixer\(true,false\)\.localReturnAllowed\(\)\)\{localReturnTarget\.store\(ring/,'a local previous owner uses the local-master return tap');
  assert.match(runtime,/else if\(litePeer\(previous\)\)\{returnRelaySource=previous;returnRelayTarget=target;/,'a Lite previous owner is relayed only to the new operator');
  assert.match(runtime,/hosting\|\|\(liteSession&&id==auth\.host\)\)route\(p->transport->decodedRing\(\),id\)/,'a native Lite guest consumes the host return stream');
  assert.match(backend,/ControlObject::set\(ConfigKey\(kJunctionGroup, "main_mix"\), 0\)/,'received audio starts CUE-only');
- assert.match(backend,/if\(!self->junctionAuxInMain_\.load[\s\S]*captureLocalReturn/,'the return tap is fed only while Auxiliary1 is absent from main');
- assert.match(runtime,/backend->junctionInputMainMix\(true\)/,'Auxiliary1 enters main only for local takeover');
+ assert.match(backend,/if\(local\)runtime->captureLocalReturn\(local,frames,frame,44100\)/,'the return tap reads the LOCAL NEXT bus');
+ assert.doesNotMatch(backend,/captureLocalReturn\(master/,'the return tap never reads main (Program Master)');
+ const mixerHook=await readFile(path.resolve(import.meta.dirname,'../../cmake/target/CMakeLists.txt'),'utf8');
+ assert.match(mixerHook,/pChannelInfo->m_handle\.handle\(\) == plumdeckExcluded \|\| pChannelInfo->m_pChannel->isTalkoverChannel\(\)\) continue;/,'the LOCAL NEXT bus skips Auxiliary1 and microphones');
+ assert.match(backend,/audioBridge_\.localReturnExcluded\.store\(junctionHandle\.handle\(\)\.handle\(\)/,'Auxiliary1 is the excluded channel');
+ assert.match(runtime,/if\(takeOver\)\{backend->junctionInputTakeOver\(\);setInputMainMix\(true\);\}/,'Auxiliary1 enters main only for local takeover');
+ assert.equal(runtime.match(/setInputMainMix\(true\)/g)?.length,1,'no other path puts JUNCTION MASTER into main');
+});
+test('JUNCTION MASTER is real engine audio: Program Master mixes it with LOCAL NEXT, the return never carries it',{timeout:120000},async()=>{
+ const directory=await mkdtemp('/tmp/plumdeck-junction-master-');const host=native(directory,binary,{PLUMDECK_JUNCTION_AUDIO_PROBE:'1'});
+ try{
+  await host.start();
+  const probe=async(params={})=>(await host.command('junction.input.probe',params));
+  const meters=async()=>(await probe()).channel.meters;
+  const settle=async(label,predicate)=>until(meters,predicate,label,10000);
+  const steady=async(label,predicate)=>{await pause(500);const m=await meters();assert(predicate(m),`${label}: ${JSON.stringify(m)}`);return m;};
+  // A synthetic JUNCTION MASTER through the same JunctionInput a decoded P2P stream uses.
+  let state=await probe({tone:{amplitude:.5,frequencyHz:1000},mainMix:false,channel:{volume:1,orientation:1,eqLow:1,eqMid:1,eqHigh:1}});
+  assert.equal(state.channel.mainMix,false);
+  await until(async()=>(await probe()).channel.vu,vu=>vu>.05,'Auxiliary1 receives the input',10000);
+  await steady('CUE-only JUNCTION MASTER stays off Program Master',m=>m.programPeak<.001&&m.localReturnPeak<.001);
+  state=await probe({mainMix:true});assert.equal(state.channel.mainMix,true);assert.equal(state.programMixer.returnFeed.tap,'local-next-bus');
+  const mixed=await settle('main_mix puts JUNCTION MASTER into Program Master',m=>m.programPeak>.1);
+  await steady('JUNCTION MASTER in Program never reaches the return bus',m=>m.localReturnPeak<.001);
+  await probe({channel:{volume:0}});await settle('LEVEL 0 silences JUNCTION MASTER on Program',m=>m.programPeak<.001);
+  await probe({channel:{volume:1}});await settle('LEVEL restores it',m=>m.programPeak>.1);
+  await probe({channel:{eqMid:0}});const cut=await settle('mid EQ kill cuts a 1 kHz JUNCTION MASTER',m=>m.programPeak<mixed.programPeak/4);
+  await probe({channel:{eqMid:1}});await settle('mid EQ restores it',m=>m.programPeak>cut.programPeak*3);
+  await probe({channel:{orientation:0}});await host.command('mixer.crossfader',{position:1});
+  await settle('crossfader to the far side silences a left-assigned JUNCTION MASTER',m=>m.programPeak<.001);
+  await probe({channel:{orientation:1}});await settle('THRU ignores the crossfader',m=>m.programPeak>.1);
+  await host.command('mixer.crossfader',{position:0});
+  const pfl=await host.raw('junction.input.probe',{channel:{pfl:true}});
+  if(state.channel.pflAvailable){assert(!denied(pfl));await probe({mainMix:false});await settle('CUE sends JUNCTION MASTER to headphones only',m=>m.pflPeak>.05&&m.programPeak<.001);await probe({mainMix:true,channel:{pfl:false}});}
+  else assert(denied(pfl),'CUE is refused without a headphone output instead of pretending');
+  // LOCAL NEXT joins the same Program Master; only it is returned.
+  const source=path.join(directory,'local-next.wav');await writeFile(source,tone());
+  await host.command('deck.load',{deck:'A',track:{trackId:'local-next',path:source,title:'LOCAL NEXT tone'}});
+  await until(()=>host.command('state.snapshot'),s=>['ready','paused'].includes(s.decks.A.status),'LOCAL NEXT decode');await host.command('deck.play',{deck:'A'});
+  const both=await settle('LOCAL NEXT reaches the return bus',m=>m.localReturnPeak>.05);
+  assert(both.programPeak>both.localReturnPeak+.05,`Program Master carries JUNCTION MASTER on top of LOCAL NEXT: ${JSON.stringify(both)}`);
+  await probe({channel:{volume:0}});
+  const localOnly=await steady('Program without JUNCTION MASTER',m=>m.localReturnPeak>.05);
+  assert(Math.abs(localOnly.localReturnPeak-both.localReturnPeak)<.02,`the return is unchanged by JUNCTION MASTER: ${JSON.stringify({both,localOnly})}`);
+  assert(Math.abs(localOnly.programPeak-localOnly.localReturnPeak)<.02,`with JUNCTION MASTER down, Program Master equals LOCAL NEXT: ${JSON.stringify(localOnly)}`);
+  await probe({tone:{amplitude:0},mainMix:false});
+  await host.command('deck.pause',{deck:'A'});
+ }finally{await host.close();await rm(directory,{recursive:true,force:true});}
 });
 test('Lite takeover starts the JUNCTION deck audible and measures its Program seam once',{timeout:120000},async()=>{
  const directory=await mkdtemp('/tmp/plumdeck-lite-takeover-');const host=native(directory);
@@ -139,6 +198,11 @@ test('Lite takeover starts the JUNCTION deck audible and measures its Program se
   const performing=await host.command('junction.lite.owner.set',{ownerPeerId:liteId});
   assert.equal(performing.performerPeerId,liteId);assert.equal(performing.localPrep,false,'the outgoing Mac stays locked while its master is still returned');
   assert.equal(performing.junctionInput.releasingPeerId,created.localPeerId);
+  assert.equal(performing.programMixer.venueSource,'direct-stream','a remote operator still reaches the venue without this mixer');
+  assert.equal(performing.programMixer.localNext.cueOnly,true,'LOCAL NEXT never reaches Program before takeover');
+  assert.equal(performing.programMixer.junctionMaster.inProgram,false);
+  assert.notEqual(performing.programMixer.returnFeed.source,'relayed-peer','the Mac returns only its own local play');
+  assert.equal(performing.operatorPeerId,liteId);
   // Simulate the new Lite operator fading the Mac return and releasing it.
   await host.command('junction.input.release');
   await until(host.snapshot,s=>s.localPrep&&s.junctionInput.peerId===liteId,'the released Mac can prepare while Lite performs');
@@ -147,6 +211,10 @@ test('Lite takeover starts the JUNCTION deck audible and measures its Program se
   const takeover=async()=>{const s=await host.command('junction.lite.owner.set',{ownerPeerId:created.localPeerId});assert.equal(s.performerPeerId,created.localPeerId);assert.equal(s.localPrep,false);assert.equal(s.junctionInput.releasingPeerId,liteId,'the outgoing Lite DJ keeps sounding');return s;};
   const taken=await takeover();
   assert.equal(taken.junctionInput.channel.volume,1);assert.equal(taken.junctionInput.channel.orientation,1,'THRU');assert.equal(taken.junctionInput.channel.audible,true);
+  assert.equal(taken.programMixer.venueSource,'local-mix','Program Master is this mixer after takeover');
+  assert.equal(taken.programMixer.junctionMaster.inProgram,true,'JUNCTION MASTER is mixed, not bypassed');
+  assert.equal(taken.programMixer.localNext.inProgram,true);
+  assert.equal(taken.programMixer.returnFeed.source,'none','nothing is returned while JUNCTION MASTER is in main');
   // The seam is measured by the first captured block, not timed: the one-shot
   // is already spent and the boundary is real by the time the next snapshot
   // is answered. This peer sends no audio, so the deck reported nothing to
@@ -168,6 +236,7 @@ test('Lite takeover starts the JUNCTION deck audible and measures its Program se
   await host.command('junction.input.release');
   await takeover();const released=await host.command('junction.input.release');
   assert.equal(released.junctionInput.releasingPeerId,'','an explicit release ends the hold at once');
+  assert.equal(released.programMixer.junctionMaster.inProgram,false,'a released JUNCTION MASTER leaves Program');
   await host.command('junction.end');await until(host.snapshot,s=>!s.active,'host end');
  }finally{await host.close();await rm(directory,{recursive:true,force:true});}
 });

@@ -22,8 +22,8 @@ export function JunctionTrackList({ tracks }: { tracks: JunctionBrowserTrack[] }
 function TrackCard({ track, next }: { track?: JunctionBrowserTrack; next?: JunctionBrowserTrack }) {
   return <section className="dj-junction-live-card" data-role={track?.role ?? "empty"}>
     <div className="dj-junction-live-card-icon">{track?.state === "receiving" || track?.state === "verifying" ? <Loader2 className="animate-spin" /> : <Disc3 />}</div>
-    <div><small>再生中</small><strong>{track?.title || "セットされていません"}</strong><span>{track ? [track.artist, track.sourceDjName, `Deck ${track.sourceDeck}`].filter(Boolean).join(" · ") : "前のDJがセットすると自動で先読みします"}</span>
-      {next && <span>次：{next.title || "タイトル未設定"}（{junctionTrackStatus(next)}）</span>}</div>
+    <div><small>演奏中DJのデッキ</small><strong>{track?.title || "セットされていません"}</strong><span>{track ? [track.artist, track.sourceDjName, `Deck ${track.sourceDeck}`].filter(Boolean).join(" · ") : "演奏中のDJが曲をセットすると自動で受信します"}</span>
+      {next && <span>演奏中DJが別デッキに準備中：{next.title || "タイトル未設定"}（{junctionTrackStatus(next)}）</span>}</div>
     {track && <div className="dj-junction-live-card-state"><b>{junctionTrackStatus(track)}</b><span>{formatTime(track.positionMs)} / {formatTime(track.duration * 1000)}</span></div>}
   </section>;
 }

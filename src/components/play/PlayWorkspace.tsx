@@ -7,6 +7,7 @@ import { useJunctionTracks } from '@/hooks/useJunctionTracks';
 import { useJunction } from '@/hooks/useJunction';
 import { junctionCommand } from '@/services/junction/client';
 import { JunctionInputDeck } from "./JunctionInputDeck";
+import { JunctionPerformanceStrip } from "./JunctionPerformanceStrip";
 import { BeatFxPanel } from "./BeatFxPanel";
 import { memoryAction } from "@/services/dj-engine/memory-cues";
 import { jogWeight } from "@/services/dj-engine/jog-weight";
@@ -935,6 +936,10 @@ export function PlayWorkspace() {
     </div>}
     <section className="dj-performance" aria-label="Software DJ controller">
       {waveformLayout === "horizontal" && <div className="dj-scrolling-waves">{visibleDecks.map((id) => lane(id, "horizontal"))}</div>}
+      {junctionSession?.active && <JunctionPerformanceStrip snapshot={junctionSession} decks={visibleDecks} connected={connected}
+        deckState={(deck) => snapshot?.decks[deck]} channelState={(deck) => snapshot?.mixer.channels[deck]}
+        onSelectDeck={setActiveDeck} onTogglePlay={togglePlay}
+        onPfl={(deck, enabled) => void run(() => client.setPfl(deck, enabled))} />}
       {junctionInput?.peerId && <JunctionInputDeck state={junctionInput}
         performerName={junctionSession?.participants.find((participant) => participant.peerId === junctionInput.peerId)?.djName}
         onSet={(settings) => junctionCommand('input.set', { ...settings })}

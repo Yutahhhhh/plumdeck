@@ -109,12 +109,12 @@ export function JunctionInputDeck({ state, performerName, onSet, onRelease }: Pr
   const releasing = Boolean(state.releasingPeerId);
   const stage = releasing ? "MIXING" : state.receiving ? "CUEING" : "WAITING";
   const vu = Math.max(0, Math.min(1, state.channel.vu ?? 0));
-  const source = state.djName || performerName || "相手のDJ";
+  const source = state.djName || performerName || "前のDJ";
   const run = (task: () => Promise<unknown>) => void task().then(() => setError(null), (cause) => setError(cause instanceof Error ? cause.message : String(cause)));
 
-  return <section className={cn("dj-junction-input", releasing && "is-releasing")} aria-label="JUNCTIONデッキ">
+  return <section className={cn("dj-junction-input", releasing && "is-releasing")} aria-label="JUNCTION MASTER">
     <div className="dj-junction-input-head">
-      <span className="dj-junction-input-badge"><Radio />JUNCTION</span>
+      <span className="dj-junction-input-badge"><Radio />JUNCTION MASTER</span>
       <strong title={source}>{source}</strong>
       <span className={cn("dj-junction-input-status", state.receiving && "is-live")}>{state.receiving ? `${stage} · 遅延 ${Math.round(state.latencyMs)}ms` : `${stage} · 音声を待っています`}</span>
     </div>
@@ -122,7 +122,7 @@ export function JunctionInputDeck({ state, performerName, onSet, onRelease }: Pr
       {deck ? <><i style={{ background: `var(${DECK_COLOR[deck.deck] ?? "--dj-blue"})` }} /><b title={deck.title}>{deck.title || "タイトル未設定"}</b><span>{[deck.artist, deck.bpm ? `${(deck.bpm * deck.rate).toFixed(1)} BPM` : "", `${formatTime(deck.positionMs)} / ${formatTime(deck.durationMs)}`].filter(Boolean).join(" · ")}</span></>
         : <span>曲の情報はまだ届いていません</span>}
     </div>
-    <canvas ref={canvasRef} className="dj-junction-input-lane" aria-label="JUNCTIONデッキの波形。色は相手のどのデッキが鳴っていたかを表します" />
+    <canvas ref={canvasRef} className="dj-junction-input-lane" aria-label="JUNCTION MASTERの波形。色は前のDJのどのデッキが鳴っていたかを表します" />
     <div className="dj-junction-input-controls">
       <div className="dj-junction-input-eq">
         {(["eqHigh", "eqMid", "eqLow"] as const).map((key) => <RotaryKnob key={key} label={key === "eqHigh" ? "HIGH" : key === "eqMid" ? "MID" : "LOW"} min={0} max={4} step={.04} fineStep={.01} defaultValue={1} center={1}
@@ -130,15 +130,15 @@ export function JunctionInputDeck({ state, performerName, onSet, onRelease }: Pr
       </div>
       <div className="dj-junction-input-level">
         <span>LEVEL</span>
-        <Fader label="JUNCTIONデッキのレベル" min={0} max={1} value={value("volume", 1)} disabled={!channel.available} onChange={(volume) => change({ volume })} />
-        <span className="dj-junction-input-vu" aria-label={`JUNCTION入力レベル ${Math.round(vu * 100)}%`}><i style={{ width: `${vu * 100}%` }} /></span>
+        <Fader label="JUNCTION MASTERのレベル" min={0} max={1} value={value("volume", 1)} disabled={!channel.available} onChange={(volume) => change({ volume })} />
+        <span className="dj-junction-input-vu" aria-label={`JUNCTION MASTERの入力レベル ${Math.round(vu * 100)}%`}><i style={{ width: `${vu * 100}%` }} /></span>
       </div>
       <div className="dj-segmented dj-junction-input-assign" role="group" aria-label="クロスフェーダーの割り当て">
         {ASSIGN.map((option) => <button key={option.value} type="button" aria-pressed={value("orientation", 1) === option.value} className={value("orientation", 1) === option.value ? "is-on" : ""} disabled={!channel.available} onClick={() => change({ orientation: option.value })}>{option.label}</button>)}
       </div>
       <button type="button" className={cn("dj-mixer-cue", value("pfl", false) && "is-on")} aria-pressed={value("pfl", false)} disabled={!channel.available || !channel.pflAvailable}
-        title={channel.pflAvailable ? "ヘッドホンでJUNCTIONデッキをモニターする" : "ヘッドホン出力のあるデバイスでCUEを使えます"} onClick={() => change({ pfl: !value("pfl", false) })}>CUE</button>
-      {releasing && <button type="button" className="dj-button dj-junction-input-release" title="前のDJの音声を止めます。レベルを0にして1.5秒たつと自動で解放します" onClick={() => run(onRelease)}>前のDJを解放</button>}
+        title={channel.pflAvailable ? "ヘッドホンでJUNCTION MASTERをモニターする" : "ヘッドホン出力のあるデバイスでCUEを使えます"} onClick={() => change({ pfl: !value("pfl", false) })}>CUE</button>
+      {releasing && <button type="button" className="dj-button dj-junction-input-release" title="前のDJの送出を止めます。JUNCTION MASTERのレベルを0にして1.5秒たつと自動で解放します" onClick={() => run(onRelease)}>前のDJを解放</button>}
     </div>
     {releasing && <p className="dj-junction-input-note">{source}の音はここで鳴り続けています。フェーダーで下げ切ると自動で解放されます。</p>}
     {error && <p role="alert" className="dj-junction-input-error">{error}</p>}

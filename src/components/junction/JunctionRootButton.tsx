@@ -48,7 +48,7 @@ export function JunctionRootButton({ snapshot, open, onToggle }: Props) {
           {snapshot?.performerPeerId
             ? <span>演奏：{nameOf(snapshot.performerPeerId)}</span>
             : <span>{status}</span>}
-          {snapshot?.nextPeerId && <span className="junction-root-dim">次：{nameOf(snapshot.nextPeerId)}</span>}
+          {snapshot?.nextPeerId && <span className="junction-root-dim">次のDJ：{nameOf(snapshot.nextPeerId)}</span>}
           {pending > 0 && <span className="junction-root-badge" aria-label={`未対応 ${pending} 件`}>{pending}</span>}
         </>
       ) : (

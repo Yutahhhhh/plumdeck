@@ -27,6 +27,7 @@ import {
   participantVisualState,
   qualityPresentation,
   reorderPeerIds,
+  rosterPositionLocked,
   safeAvatarDataUrl,
   stableThemeColor,
   turnRequestAvailable,
@@ -39,11 +40,11 @@ const STATE_LABEL: Record<RosterVisualState, string> = {
   invited: '招待中',
   response: '返答あり',
   connecting: '接続中',
-  ready: '待機中',
-  requested: '交代希望',
+  ready: '接続済み',
+  requested: '演奏希望',
   next: '次のDJ',
   playing: '演奏中',
-  finished: '演奏済み',
+  finished: '演奏済み・再演奏可',
   reconnecting: '自動再接続中',
   disconnected: '切断',
   problem: '要対応',
@@ -105,10 +106,7 @@ export function JunctionRoster({
     if (!over || active.id === over.id) return;
     const previous = participants.map((participant) => participant.peerId);
     const locked = new Set(participants
-      .filter((participant) => {
-        const state = participantVisualState(participant, snapshot);
-        return state === 'playing' || state === 'finished';
-      })
+      .filter((participant) => rosterPositionLocked(participantVisualState(participant, snapshot)))
       .map((participant) => participant.peerId));
     const next = reorderPeerIds(participants, String(active.id), String(over.id), locked);
     setPeerOrder(next);
@@ -124,7 +122,7 @@ export function JunctionRoster({
       <header className="junction-roster-head">
         <div>
           <h3 id="junction-roster-title">DJ一覧</h3>
-          <p>{participants.length}人 · 上から演奏予定順</p>
+          <p>{participants.length}人 · 上から演奏予定順 · 接続済みのDJは希望がなくても指名できます</p>
         </div>
         {host && participants.length > 1 && <small>ドラッグで順番を変更</small>}
       </header>
@@ -201,7 +199,8 @@ function RosterRow({
   const state = participantVisualState(participant, snapshot);
   const isSelf = participant.peerId === snapshot.localPeerId;
   const isHost = participant.peerId === snapshot.hostPeerId || participant.isHost;
-  const sortable = host && state !== 'playing' && state !== 'finished';
+  const sortable = host && !rosterPositionLocked(state);
+  const sounding = Boolean(snapshot.junctionInput?.releasingPeerId && snapshot.junctionInput.releasingPeerId === participant.peerId);
   const {attributes, listeners, setNodeRef, transform, transition, isDragging} = useSortable({
     id: participant.peerId,
     disabled: !sortable,
@@ -244,7 +243,9 @@ function RosterRow({
           <strong title={participantName(participant)}>{participantName(participant)}</strong>
           <div className="junction-roster-badges">
             {isSelf && <span className="junction-badge junction-badge-self">あなた</span>}
-            {isHost && <span className="junction-badge">管理</span>}
+            {isHost && <span className="junction-badge" title="セッションの管理者。演奏者や操作権とは別です">ホスト</span>}
+            {state === 'playing' && <span className="junction-badge" title="Program Masterを操作しているDJ">操作権</span>}
+            {sounding && <span className="junction-badge" title="操作権は移りました。受け手がJUNCTION MASTERを下げ切るまで音を送り続けます">送出中</span>}
             <span className={`junction-state junction-state-${state}`}>{STATE_LABEL[state]}</span>
           </div>
         </div>
@@ -336,6 +337,6 @@ function primaryAction(
   if (host && !lobby && coordinatorCanSelect(state)) return {label: '次のDJにする', kind: 'next'};
   if (isSelf && state === 'next') return {label: '準備OK・引き継ぐ', kind: 'accept', disabled: !snapshot.readiness.ready};
   if (host && state === 'next' && snapshot.readiness.ready) return {label: '交代を確定', kind: 'accept'};
-  if (turnRequestAvailable(state, host, isSelf)) return {label: '次を希望する', kind: 'request'};
+  if (turnRequestAvailable(state, host, isSelf)) return {label: state === 'finished' ? 'もう一度演奏を希望' : '演奏を希望する', kind: 'request'};
   return undefined;
 }

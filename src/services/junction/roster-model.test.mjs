@@ -16,6 +16,7 @@ import {
   stableThemeColor,
   turnRequestAvailable,
   handoffCancelAvailable,
+  rosterPositionLocked,
 } from './roster-model.ts';
 
 const participant = (peerId, overrides = {}) => ({
@@ -128,6 +129,19 @@ test('a turn request is visible without becoming the next or current performer',
   assert.equal(turnRequestAvailable('requested', false, true), false);
   assert.equal(turnRequestAvailable('ready', false, true), true);
   assert.equal(coordinatorCanSelect('requested'), true);
+});
+
+test('connected DJs are candidates without a request, and played DJs are never locked out', () => {
+  assert.equal(coordinatorCanSelect('ready'), true, 'a connected DJ needs no turn request to be chosen');
+  assert.equal(coordinatorCanSelect('finished'), true, 'a DJ who played may be chosen again');
+  assert.equal(turnRequestAvailable('finished', false, true), true, 'a played DJ may join the queue again');
+  for (const state of ['playing', 'next', 'invited', 'connecting', 'response', 'problem']) assert.equal(coordinatorCanSelect(state), false);
+  assert.equal(rosterPositionLocked('playing'), true);
+  assert.equal(rosterPositionLocked('finished'), false);
+  const lite = participant('phone', {client: 'lite', status: 'connected', rosterStatus: 'waiting'});
+  assert.equal(participantVisualState(lite, snapshot([lite], {lifecycle: 'live', performerPeerId: 'host'})), 'ready');
+  const replay = participant('phone', {rosterStatus: 'requested'});
+  assert.equal(participantVisualState(replay, snapshot([replay], {lifecycle: 'live', performerPeerId: 'host'})), 'requested');
 });
 
 test('a temporary transport interruption is shown as automatic reconnect, not a terminal disconnect', () => {

@@ -99,13 +99,39 @@ export interface JunctionSnapshot {
   junctionTracks?: JunctionTrack[];
   /** A Lite DJ performs; this computer's decks are local preparation only. */
   localPrep?: boolean;
-  /** The JUNCTION deck: another DJ's audio as a local mixer channel. */
+  /** JUNCTION MASTER: the previous DJ's master as a local virtual input channel. */
   junctionInput?: JunctionInputState;
+  /** Who holds the operator role (controls Program). Equal to performer today. */
+  operatorPeerId?: string;
+  /** Local-only routing of Program Master, JUNCTION MASTER, LOCAL NEXT and the return feed. */
+  programMixer?: JunctionProgramMixer;
+}
+/**
+ * - `local-mix`: Program Master = this mixer (JUNCTION MASTER + LOCAL NEXT).
+ * - `direct-stream`: the remote operator's master reaches the venue without
+ *   this mixer (engine path kept until Program Master can carry it).
+ * - `remote-host`: a guest; the host owns the venue output.
+ */
+export type ProgramVenueSource = 'none' | 'remote-host' | 'direct-stream' | 'local-mix';
+export interface JunctionProgramMixer {
+  venueSource: ProgramVenueSource;
+  directStreamBypass: boolean;
+  junctionMaster: { peerId: string; inProgram: boolean; releasingPeerId: string };
+  localNext: { inProgram: boolean; cueOnly: boolean };
+  /** Only local play is ever returned; `relayed-peer` is the host forwarding one Lite DJ to the next. */
+  returnFeed: {
+    source: 'none' | 'local-play' | 'relayed-peer';
+    targetPeerId: string;
+    feedbackBlocked: boolean;
+    /** `local-next-bus`: the engine's local-channel bus, which never contains JUNCTION MASTER. Absent on older runtimes. */
+    tap?: 'local-next-bus' | 'main-bus';
+  };
 }
 export type JunctionDeckName = 'A' | 'B' | 'C' | 'D';
-/** What the remote Lite DJ reports for one of its decks. */
+/** What the remote Lite DJ reports for one of its decks (shown inside JUNCTION MASTER). */
 export interface JunctionInputDeck {
   deck: JunctionDeckName;
+  /** The remote DJ's own deck role; never this computer's LOCAL NEXT. */
   role: 'current' | 'next';
   title: string;
   artist: string;

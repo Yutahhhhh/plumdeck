@@ -1,7 +1,7 @@
 {
   "name": "plumdeck",
   "private": true,
-  "version": "0.5.17",
+  "version": "0.5.18",
   "type": "module",
   "scripts": {
     "docker:start": "colima start plumdeck --cpu 5 --memory 8",
@@ -29,11 +29,11 @@
     "prod:restore-db": "node scripts/project.mjs backend-tool prod-restore",
     "test:backend": "node scripts/project.mjs backend-test",
     "junction:signal:dev": "pnpm --dir services/junction-signaling build && pnpm --dir services/junction-signaling dev",
-    "junction:test:contract": "pnpm --dir services/junction-signaling build && pnpm --dir services/junction-signaling test && node --experimental-strip-types --test src/services/junction/control-boundary.test.mjs src/services/junction/exchange-actions.test.mjs src/services/junction/roster-model.test.mjs src/services/junction/tracks.test.mjs src/services/junction/share-musics/automation.test.mjs src/services/play-drag-routing.test.mjs",
+    "junction:test:contract": "pnpm --dir services/junction-signaling build && pnpm --dir services/junction-signaling test && node --experimental-strip-types --test src/services/junction/control-boundary.test.mjs src/services/junction/exchange-actions.test.mjs src/services/junction/roster-model.test.mjs src/services/junction/program-mixer.test.mjs src/services/junction/tracks.test.mjs src/services/junction/share-musics/automation.test.mjs src/services/play-drag-routing.test.mjs",
     "junction:test:manual": "node --test native/mixxx-engine-host/tests/junction/manual-runtime.test.mjs",
     "junction:test:integration": "pnpm --dir services/junction-signaling build && node --test native/mixxx-engine-host/tests/junction/runtime.test.mjs",
     "junction:test:audio": "node scripts/project.mjs junction-test program-output",
-    "junction:test:ui": "tsc --noEmit && node --experimental-strip-types --test src/services/junction/control-boundary.test.mjs src/services/junction/exchange-actions.test.mjs src/services/junction/roster-model.test.mjs src/services/junction/tracks.test.mjs src/services/junction/share-musics/automation.test.mjs src/services/play-drag-routing.test.mjs",
+    "junction:test:ui": "tsc --noEmit && node --experimental-strip-types --test src/services/junction/control-boundary.test.mjs src/services/junction/exchange-actions.test.mjs src/services/junction/roster-model.test.mjs src/services/junction/program-mixer.test.mjs src/services/junction/tracks.test.mjs src/services/junction/share-musics/automation.test.mjs src/services/play-drag-routing.test.mjs",
     "junction:test:network": "pnpm --dir services/junction-signaling build && node scripts/project.mjs junction-test media-transport && pnpm --dir services/junction-signaling test",
     "package": "node scripts/project.mjs package",
     "backend:build": "node scripts/project.mjs backend-build"
