@@ -359,11 +359,13 @@ public:
                 // is mixed into Program.
                 const bool localWritten=self->audioBridge_.localReturnWritten.exchange(false,std::memory_order_relaxed);
                 const float* local=localWritten?self->audioBridge_.localReturn.data():nullptr;
+                const bool programWritten=self->audioBridge_.programPreWritten.exchange(false,std::memory_order_relaxed);
                 if(runtime&&master){
-                    runtime->capture(master,local,frames,frame,44100);
+                    runtime->capture(programWritten?self->audioBridge_.programPre.data():master,local,frames,frame,44100);
                     if(local)runtime->captureLocalReturn(local,frames,frame,44100);
                 }
-                self->meterBlock(master,pfl,local,frames);
+                // Metered as the venue receives it: before the booth (master) knob.
+                self->meterBlock(programWritten?self->audioBridge_.programPre.data():master,pfl,local,frames);
                 // SoundManager caches these device-sink addresses at open.
                 // Finish all reads from graph PCM before releasing ownership.
                 if(master)std::copy_n(master,frames*2,self->audioBridge_.idleMaster.data());
@@ -947,7 +949,9 @@ public:
         }
         // A tail whose decks cannot be named keeps nothing: never the full bus.
         if (!decks.isEmpty() && !mask) mask = quint64(1) << 63;
-        audioBridge_.localReturnFixedGain.store(decks.isEmpty() ? -1.f : float(ControlObject::get(ConfigKey("[Master]", "gain"))), std::memory_order_relaxed);
+        // J and Program are both taken before main gain, so the tail level is
+        // fixed by construction: the outgoing DJ's master knob is booth only.
+        audioBridge_.localReturnFixedGain.store(1.f, std::memory_order_relaxed);
         audioBridge_.localReturnMask.store(mask, std::memory_order_relaxed);
     }
     /// Audio thread. Windowed peaks, published once per window so a reader

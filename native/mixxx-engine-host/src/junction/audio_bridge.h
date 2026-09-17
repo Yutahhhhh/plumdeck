@@ -19,10 +19,14 @@ struct AudioBridge {
     std::array<float,maxFrames*2> localReturn{};
     std::atomic<int> localReturnExcluded{-1};
     /// OUTGOING tail: when nonzero only these channel handles (bits 0..63)
-    /// reach the bus, and `localReturnFixedGain` (>= 0) replaces main gain so
-    /// the tail never follows the outgoing DJ's master or booth knobs.
+    /// reach the bus. `localReturnFixedGain` (>= 0) replaces main gain; it is
+    /// unity so J, like Program, never follows a DJ's master (booth) knob.
     std::atomic<quint64> localReturnMask{0};
-    std::atomic<float> localReturnFixedGain{-1};
+    std::atomic<float> localReturnFixedGain{1};
+    /// Program: the main mix before main gain, written by EngineMixer::process.
+    /// The master knob stays the DJ's booth volume and never moves the venue.
+    std::array<float,maxFrames*2> programPre{};
+    std::atomic<bool> programPreWritten{false};
     std::atomic<bool> localReturnWritten{false};
     float localReturnGainOld=0;
     std::atomic<bool> idle{false};

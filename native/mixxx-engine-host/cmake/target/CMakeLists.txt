@@ -106,6 +106,21 @@ string(REPLACE "${PLUMDECK_RETURN_NEEDLE}" "    if (auto* plumdeckBridge = junct
         plumdeckBridge->localReturnWritten.store(true, std::memory_order_relaxed);
     }
 ${PLUMDECK_RETURN_NEEDLE}" PLUMDECK_MIXER "${PLUMDECK_MIXER}")
+# Program tap: the main mix before main gain, in every mic monitor mode. The
+# master knob is the DJ's booth volume; the venue never follows it.
+set(PLUMDECK_PROGRAM_NEEDLE "            // Apply main gain
+            CSAMPLE_GAIN mainGain = static_cast<CSAMPLE_GAIN>(m_pMainGain->get());")
+string(REGEX MATCHALL "// Apply main gain\n            CSAMPLE_GAIN mainGain" PLUMDECK_PROGRAM_MATCHES "${PLUMDECK_MIXER}")
+list(LENGTH PLUMDECK_PROGRAM_MATCHES PLUMDECK_PROGRAM_COUNT)
+if(NOT PLUMDECK_PROGRAM_COUNT EQUAL 3)
+  message(FATAL_ERROR "Pinned EngineMixer program tap hook no longer matches (${PLUMDECK_PROGRAM_COUNT})")
+endif()
+string(REPLACE "${PLUMDECK_PROGRAM_NEEDLE}" "            if (auto* plumdeckBridge = junction::audioBridge.load(std::memory_order_acquire)) {
+                const int plumdeckSamples = std::min(iBufferSize, static_cast<int>(plumdeckBridge->programPre.size()));
+                SampleUtil::copy(plumdeckBridge->programPre.data(), m_main.data(), plumdeckSamples);
+                plumdeckBridge->programPreWritten.store(true, std::memory_order_relaxed);
+            }
+${PLUMDECK_PROGRAM_NEEDLE}" PLUMDECK_MIXER "${PLUMDECK_MIXER}")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/plumdeck_enginemixer.cpp" "#include \"${PLUMDECK_ROOT}/src/junction/audio_bridge.h\"\n#include \"${PLUMDECK_ROOT}/src/deck_telemetry.h\"\n${PLUMDECK_MIXER}")
 get_target_property(PLUMDECK_MIXXX_SOURCES mixxx-lib SOURCES)
 list(FILTER PLUMDECK_MIXXX_SOURCES EXCLUDE REGEX "engine/enginemixer\\.cpp$")

@@ -570,6 +570,7 @@ struct Runtime::Impl {
     /// always one DJ; an outgoing Lite DJ stays a sender until released.
     QJsonObject liteOwnerMessage() const {
         QJsonArray senders{auth.owner};if(!releasingPeer.isEmpty()&&releasingPeer!=auth.owner)senders.append(releasingPeer);
+        if(!auth.next.isEmpty()&&auth.next!=auth.owner)senders.append(auth.next);
         return {{"type","owner"},{"ownerPeerId",auth.owner},{"senderPeerIds",senders},{"turn",turnJson(true)},{"capabilities",QJsonArray{QString::fromLatin1(turn::kCapability)}}};
     }
     PcmRing* returnRing(const QString& id) {
@@ -841,7 +842,8 @@ struct Runtime::Impl {
     void goOnAir() {
         if(auth.sessionId.isEmpty()||lifecycle!="live"||auth.next!=auth.local||auth.owner==auth.local||!releasingPeer.isEmpty()||onAirPending)return;
         if(hosting){selectOwner(auth.local);return;}
-        auto host=peers.find(auth.host);if(host==peers.end()||host->second->lite||!host->second->producing)return;
+        auto host=peers.find(auth.host);if(host==peers.end()||!host->second->producing)return;
+        if(host->second->lite){sendLite(*host->second,{{"type","onair"}});onAirSentAt=monotonicNanos();return;}
         seamFrame.store(0,std::memory_order_release);q->setCaptureAnchor(UINT64_MAX,0);takeoverAnchor.store(true,std::memory_order_release);
         onAirPending=true;onAirArmedAt=monotonicNanos();
     }
@@ -918,16 +920,19 @@ struct Runtime::Impl {
         localBlocker=isNext&&!going?turn::readyBlocker(in):turn::Blocker::None;
         localReady=isNext&&localBlocker==turn::Blocker::None;
         if(!isNext)onAirSentAt=0;
-        if(hosting||!hostKnown||hostPeer->second->lite||!hostPeer->second->transport)return;
+        if(hosting||!hostKnown||!hostPeer->second->transport)return;
+        const bool liteHost=hostPeer->second->lite;
         // Tell the host how this DJ's preparation looks, for the ON AIR DJ.
         if(isNext){
             const auto status=localStatus();
             const auto signature=QStringLiteral("%1|%2|%3").arg(localReady).arg(turn::blockerCode(localBlocker),status);
-            if(signature!=lastReportSignature||nowNanos-reportSentAt>=1000000000LL){lastReportSignature=signature;reportSentAt=nowNanos;queue(*hostPeer->second,"turn",{{"kind","report"},{"ready",localReady},{"blocker",turn::blockerCode(localBlocker)},{"status",status}});}
+            if(signature!=lastReportSignature||nowNanos-reportSentAt>=1000000000LL){lastReportSignature=signature;reportSentAt=nowNanos;
+                if(liteHost)sendLite(*hostPeer->second,{{"type","report"},{"ready",localReady},{"blocker",turn::blockerCode(localBlocker)},{"status",status}});
+                else queue(*hostPeer->second,"turn",{{"kind","report"},{"ready",localReady},{"blocker",turn::blockerCode(localBlocker)},{"status",status}});}
         }else lastReportSignature.clear();
         // J metadata for whoever mixes this DJ's sound next.
         const bool source=live&&((auth.owner==auth.local&&!auth.next.isEmpty())||releasingPeer==auth.local);
-        if(source&&nowNanos-decksSentAt>=500000000LL){decksSentAt=nowNanos;queue(*hostPeer->second,"turn",{{"kind","decks"},{"decks",localDecksJson()}});}
+        if(source&&nowNanos-decksSentAt>=500000000LL){decksSentAt=nowNanos;if(liteHost)sendLite(*hostPeer->second,{{"type","decks"},{"decks",localDecksJson()}});else queue(*hostPeer->second,"turn",{{"kind","decks"},{"decks",localDecksJson()}});}
     }
     void turnMessage(Peer& p,const QJsonObject& m) {
         const auto kind=m["kind"].toString();const auto id=p.id;
@@ -996,7 +1001,23 @@ struct Runtime::Impl {
         if(type=="owner"&&!hosting&&id==auth.host){
             const auto owner=message["ownerPeerId"].toString();if(!validOpaqueId(owner))return;
             QSet<QString> senders{owner};if(message["senderPeerIds"].isArray())for(const auto& value:message["senderPeerIds"].toArray())if(validOpaqueId(value.toString()))senders.insert(value.toString());
-            liteSenders=senders;selectOwner(owner);
+            liteSenders=senders;
+            const bool withTurn=message["turn"].isObject();
+            if(withTurn){hostTurn=message["turn"].toObject();if(message["capabilities"].isArray()&&message["capabilities"].toArray().contains(QString::fromLatin1(turn::kCapability)))found->second->faderStartV1=true;}
+            const auto previousNext=auth.next;
+            selectOwner(owner);
+            if(withTurn){
+                // The Lite host owns the timetable: its next and outgoing DJs are authoritative.
+                auth.next=hostTurn["nextPeerId"].toString();
+                const auto outgoing=hostTurn["outgoingPeerId"].toString();
+                if(outgoing!=releasingPeer){releasingPeer=outgoing;if(!outgoing.isEmpty()&&auth.owner==auth.local)inputRelease.begin(monotonicNanos(),onAirSentAt!=0);else inputRelease.clear();}
+                applyTail(!releasingPeer.isEmpty()&&releasingPeer==auth.local&&auth.owner!=auth.local);
+                const bool isNext=auth.next==auth.local&&auth.owner!=auth.local;
+                if(isNext&&previousNext!=auth.local){faderStart.reset();backend->junctionInputTakeOver();setInputMainMix(true);}
+                if(!isNext&&!(auth.owner==auth.local&&!releasingPeer.isEmpty())&&inputMainMix)setInputMainMix(false);
+                if(liteSenders.contains(auth.local)&&!found->second->producing&&found->second->transport){found->second->transport->setBrowserSendEpoch(auth.epoch,now());found->second->transport->startProducer(&tap.networkRing());found->second->producing=true;captureEnabled.store(true);tap.enable(true,true);}
+                ++auth.revision;
+            }
             // Released after the new operator faded this computer out.
             if(owner!=auth.local&&!liteSenders.contains(auth.local)&&found->second->producing){found->second->transport->startProducer(nullptr);found->second->producing=false;captureEnabled.store(false);tap.enable(false,false);++auth.revision;}
         }
@@ -1005,7 +1026,7 @@ struct Runtime::Impl {
         if(p.transport)return {};
         QPointer<Runtime> safe=q;const auto id=p.id;MediaTransport::Callbacks callbacks;
         callbacks.localDescription=[safe,id](bool,QString sdp,QString type,QString){if(safe)QMetaObject::invokeMethod(safe,[safe,id,sdp,type]{if(!safe)return;auto it=safe->d->peers.find(id);if(it==safe->d->peers.end()||!it->second->lite)return;it->second->liteSdp=sdp;it->second->liteSdpType=type;++safe->d->auth.revision;},Qt::QueuedConnection);};
-        callbacks.linkState=[safe,id](bool,LinkState state){if(safe)QMetaObject::invokeMethod(safe,[safe,id,state]{if(!safe)return;auto it=safe->d->peers.find(id);if(it==safe->d->peers.end()||!it->second->lite)return;it->second->hello=state==LinkState::Connected;if(it->second->hello){safe->d->connection="connected";safe->d->problem.clear();safe->d->sendLiteOwner();}++safe->d->auth.revision;},Qt::QueuedConnection);};
+        callbacks.linkState=[safe,id](bool,LinkState state){if(safe)QMetaObject::invokeMethod(safe,[safe,id,state]{if(!safe)return;auto it=safe->d->peers.find(id);if(it==safe->d->peers.end()||!it->second->lite)return;it->second->hello=state==LinkState::Connected;if(it->second->hello){safe->d->connection="connected";safe->d->problem.clear();safe->d->sendLiteOwner();if(!safe->d->hosting)safe->d->sendLite(*it->second,{{"type","hello"},{"capabilities",QJsonArray{QString::fromLatin1(turn::kCapability)}}});}++safe->d->auth.revision;},Qt::QueuedConnection);};
         callbacks.control=[safe,id](QByteArray bytes){if(safe)QMetaObject::invokeMethod(safe,[safe,id,bytes]{if(safe)safe->d->liteControl(id,bytes);},Qt::QueuedConnection);};
         callbacks.error=[safe,id](QString failure){if(safe)QMetaObject::invokeMethod(safe,[safe,id,failure]{if(!safe)return;auto it=safe->d->peers.find(id);if(it!=safe->d->peers.end()){it->second->hello=false;safe->d->problem=failure;++safe->d->auth.revision;}},Qt::QueuedConnection);};
         auto transport=std::make_unique<MediaTransport>(p.id,QStringList{QStringLiteral("stun:stun.l.google.com:19302")},std::move(callbacks),identity,false);QString error;
@@ -1918,7 +1939,7 @@ struct Runtime::Impl {
             bool playing=false;for(int deck:tailDecks)playing|=backend->playing(deck);
             if(tailEnded.observe(playing,backend->junctionLocalPeak(),monotonicNanos())){
                 tailEnded.reset();
-                if(hosting)releaseInput();else{auto host=peers.find(auth.host);if(host!=peers.end()&&!host->second->lite)queue(*host->second,"turn",{{"kind","tail_ended"}});}
+                if(hosting)releaseInput();else{auto host=peers.find(auth.host);if(host!=peers.end()){if(host->second->lite)sendLite(*host->second,{{"type","tail-ended"}});else queue(*host->second,"turn",{{"kind","tail_ended"}});}}
             }
         }
         // Host: J metadata for a remote receiver, relayed from its source.

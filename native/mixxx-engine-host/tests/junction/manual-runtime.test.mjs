@@ -154,8 +154,9 @@ test('Lite return audio is bidirectional, per-recipient, and excluded from JUNCT
  // reset to unity there and nowhere else, so a takeover never undoes the mix move.
  assert.match(runtime,/if\(id==auth\.local\)\{faderStart\.reset\(\);backend->junctionInputTakeOver\(\);setInputMainMix\(true\);\}/,'host STANDBY');
  assert.match(runtime,/if\(isNext&&previousNext!=auth\.local\)\{faderStart\.reset\(\);backend->junctionInputTakeOver\(\);setInputMainMix\(true\);\}/,'guest STANDBY');
- assert.equal(runtime.match(/backend->junctionInputTakeOver\(\)/g)?.length,2,'unity only when STANDBY begins');
- assert.equal(runtime.match(/setInputMainMix\(true\)/g)?.length,2,'no other path puts JUNCTION MASTER into main');
+ assert.equal(runtime.match(/if\(isNext&&previousNext!=auth\.local\)\{faderStart\.reset\(\);backend->junctionInputTakeOver\(\);setInputMainMix\(true\);\}/g)?.length,2,'guest STANDBY under a desktop host and under a Lite host');
+ assert.equal(runtime.match(/backend->junctionInputTakeOver\(\)/g)?.length,3,'unity only when STANDBY begins');
+ assert.equal(runtime.match(/setInputMainMix\(true\)/g)?.length,3,'no other path puts JUNCTION MASTER into main');
  const tailHook=await readFile(path.resolve(import.meta.dirname,'../../cmake/target/CMakeLists.txt'),'utf8');
  assert.match(tailHook,/if \(plumdeckMask && [^\n]*\) continue;/,'the OUTGOING tail restricts the bus to its decks');
  assert.match(tailHook,/plumdeckFixedGain >= 0 \? plumdeckFixedGain : m_pMainGain->get\(\)/,'the tail level is fixed at the turn change');
@@ -198,6 +199,11 @@ test('JUNCTION MASTER is real engine audio: Program Master mixes it with LOCAL N
   const localOnly=await steady('Program without JUNCTION MASTER',m=>m.localReturnPeak>.05);
   assert(Math.abs(localOnly.localReturnPeak-both.localReturnPeak)<.02,`the return is unchanged by JUNCTION MASTER: ${JSON.stringify({both,localOnly})}`);
   assert(Math.abs(localOnly.programPeak-localOnly.localReturnPeak)<.02,`with JUNCTION MASTER down, Program Master equals LOCAL NEXT: ${JSON.stringify(localOnly)}`);
+  // The master knob is the DJ's booth volume: neither Program nor the J feed follows it.
+  await host.command('mixer.master.gain',{gain:.2});
+  const booth=await steady('booth volume down',m=>m.localReturnPeak>.05);
+  assert(Math.abs(booth.programPeak-localOnly.programPeak)<.02&&Math.abs(booth.localReturnPeak-localOnly.localReturnPeak)<.02,`the venue and J never follow the master knob: ${JSON.stringify({localOnly,booth})}`);
+  await host.command('mixer.master.gain',{gain:1});
   await probe({tone:{amplitude:0},mainMix:false});
   await host.command('deck.pause',{deck:'A'});
  }finally{await host.close();await rm(directory,{recursive:true,force:true});}
@@ -432,6 +438,8 @@ test('manual multi-DJ admission, cancellation, handoff and same-peer re-exchange
   const query=await second.raw('engine.clock.probe');assert(!denied(query),'waiting DJ can inspect timing');assert(!denied(await second.raw('mixer.channel.gain',{deck:'A',gain:0})),'a waiting DJ prepares freely on their own mixer');
   const retry=await newInvite(host,one.peerId);assert.notEqual(retry.text,one.text);await first.command('junction.exchange.import',{text:retry.text});const newAnswer=await until(first.snapshot,s=>s.exchange?.responseText?.length>0,'replacement response');await host.command('junction.exchange.import',{text:newAnswer.exchange.responseText});await host.command('junction.peer.approve',{peerId:one.peerId,accept:true});await until(first.snapshot,s=>s.connection.state==='connected','second independent guest');
   await until(host.snapshot,s=>participant(s,one.peerId).exchange.state==='connected','both first guest channels connected');
+  // Program plays one venue delay (1 s) behind the session start; record once it carries sound.
+  await until(host.snapshot,s=>Number(s.program.rms)>.001,'Program carries the host before recording',10000);
   const recordedAt=Date.now();const recording=path.join(directory,'program.wav');await host.command('junction.program.record.start',{path:recording});first.suspend();await pause(5000);first.resume();await pause(600);assert.equal(participant(await host.snapshot(),one.peerId).exchange.state,'connected','a screen-sharing-sized scheduling pause stays connected');first.suspend();await until(host.snapshot,s=>participant(s,one.peerId).exchange.state==='interrupted','detect a real transient interruption',15000);first.resume();await until(host.snapshot,s=>participant(s,one.peerId).exchange.state==='connected','transient communication returns');assert.equal((await host.snapshot()).performerPeerId,created.localPeerId,'transient interruption never transfers ownership');
   assert(denied(await host.raw('junction.handoff.request',{targetPeerId:two.peerId})),'the nomination handoff is retired');
   // Fader start: the second DJ is next in the timetable, prepares with the fader down, then raises it.
