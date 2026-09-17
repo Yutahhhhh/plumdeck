@@ -44,7 +44,7 @@ jobs:
       - name: Verify signed release artifacts and incomplete-release rejection
         run: python scripts/test-release-artifacts.py
       - name: MIDI and audio recovery regression tests
-        run: node --experimental-strip-types --test src/services/midi/generic-midi.test.mjs src/services/dj-engine/audio-ready.test.mjs src/lib/path-breadcrumbs.test.mjs src/components/docs/topics.test.mjs src/services/junction/control-boundary.test.mjs src/services/junction/exchange-actions.test.mjs src/services/junction/roster-model.test.mjs src/services/junction/tracks.test.mjs
+        run: node --experimental-strip-types --test src/services/midi/generic-midi.test.mjs src/services/dj-engine/audio-ready.test.mjs src/lib/path-breadcrumbs.test.mjs src/components/docs/topics.test.mjs src/services/junction/control-boundary.test.mjs src/services/junction/exchange-actions.test.mjs src/services/junction/roster-model.test.mjs src/services/junction/turn-state.test.mjs src/services/junction/tracks.test.mjs
       - name: Junction signaling contract tests
         working-directory: services/junction-signaling
         run: npm ci && npm test

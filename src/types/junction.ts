@@ -105,6 +105,34 @@ export interface JunctionSnapshot {
   operatorPeerId?: string;
   /** Local-only routing of Program Master, JUNCTION MASTER, LOCAL NEXT and the return feed. */
   programMixer?: JunctionProgramMixer;
+  /** Fader-start turn state for this DJ. */
+  turn?: JunctionTurnState;
+}
+export type TurnSignal = 'off' | 'standby' | 'ready' | 'onair' | 'outgoing';
+export type JunctionTurnBlocker =
+  | 'update_required' | 'program_closed' | 'waiting_junction' | 'junction_unstable' | 'latency_unknown'
+  | 'latency_budget' | 'host_waiting_stream' | 'junction_not_unity' | 'already_audible';
+export type TurnCueKind = 'one_more' | 'go_ahead' | 'hold' | 'ok';
+/** Next DJ's preparation as the ON AIR DJ sees it. */
+export type TurnNextStatus = '' | 'receiving' | 'loaded' | 'cueing' | 'ready';
+export interface JunctionTurnState {
+  signal: TurnSignal;
+  nextPeerId: string;
+  outgoingPeerId: string;
+  blocker: { code: JunctionTurnBlocker | ''; text: string };
+  nextStatus: TurnNextStatus;
+  /** Decks this DJ still sends as the tail while OUTGOING. */
+  tailDecks: JunctionDeckName[];
+  /** B2B: DJs who finish rejoin the end of the timetable. */
+  repeat: boolean;
+  /** Out of the queue until they join again. */
+  outOfQueue: string[];
+  /** Peers that cannot negotiate fader start. */
+  incompatiblePeerIds: string[];
+  cue?: { kind: TurnCueKind; fromPeerId: string; at: number };
+  latency?: { pathMs: number; budgetMs: number };
+  /** A READY DJ replaces a disconnected ON AIR DJ without asking the host. */
+  autoFailover: boolean;
 }
 /**
  * - `local-mix`: Program Master = this mixer (JUNCTION MASTER + LOCAL NEXT).
