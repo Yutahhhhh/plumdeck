@@ -63,7 +63,6 @@ void ClockEstimator::refit() {
     if (samples_.empty()) return;
     bestRttNanos_ = samples_.front().rtt;
     for (const Sample& sample : samples_) bestRttNanos_ = std::min(bestRttNanos_, sample.rtt);
-    uncertaintyNanos_ = bestRttNanos_ / 2;
 
     // Keep only the rounds whose RTT is close to the best observed one. A
     // packet that waited in a queue carries that wait straight into its offset
@@ -114,7 +113,6 @@ void ClockEstimator::reset() {
     samples_.clear();
     drift_ = 1.0;
     offsetNanos_ = 0;
-    uncertaintyNanos_ = 0;
     bestRttNanos_ = 0;
     anchorLocal_ = 0;
 }

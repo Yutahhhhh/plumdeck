@@ -17,8 +17,6 @@ import type { LoopRegion, ScratchPhase } from "@/types/dj-engine";
 export type WaveformLayout = "horizontal" | "vertical";
 type Props = {
   assetId?: string; remoteWaveform?: AssetWaveform;
-  /** Content-addressed Junction asset used without loading the real deck. */
-  monitorAssetId?: string;
   trackId: number | null; positionMs: number; durationMs: number;
   layout: WaveformLayout; side: "left" | "right"; color: "cyan" | "fuchsia";
   onSeek?: (ms: number) => void; mode?: "overview" | "scroll";
@@ -54,7 +52,7 @@ type DragGesture = {
   /** 0 より大きければ、このジェスチャーはスクラッチではなくプリロール調整に切り替わっている。 */
 };
 
-export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform, monitorAssetId, trackId, positionMs, durationMs, layout, side, color, onSeek, mode = "overview", bpm, beatgridOffsetMs = 0, beatsPerBar = 4, hotCues = NO_CUES, label, compact, playing = false, rate = 1, beatTimesMs, beatNumbers, gridAvailable = true, onGridShift, onScratch, onScratchError, onBackspin, onScratchGrab, scratching = false, loopRegion = null }: Props) {
+export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform, trackId, positionMs, durationMs, layout, side, color, onSeek, mode = "overview", bpm, beatgridOffsetMs = 0, beatsPerBar = 4, hotCues = NO_CUES, label, compact, playing = false, rate = 1, beatTimesMs, beatNumbers, gridAvailable = true, onGridShift, onScratch, onScratchError, onBackspin, onScratchGrab, scratching = false, loopRegion = null }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sizeRef = useRef({ width: 0, height: 0 });
   const paintRef = useRef<() => void>(() => undefined);
@@ -88,7 +86,7 @@ export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform
   const lastSeekAt = useRef(0);
   const span = mode === "scroll" ? zoomSeconds * 1000 : durationMs;
   const [physicalPixels,setPhysicalPixels]=useState(2000);
-  const nativeWaveform = useNativeWaveform(label, positionMs, span, mode === "overview", physicalPixels, monitorAssetId);
+  const nativeWaveform = useNativeWaveform(label, positionMs, span, mode === "overview", physicalPixels);
   useEffect(()=>{const size=sizeRef.current;setPhysicalPixels((layout==='vertical'?size.height:size.width)*(window.devicePixelRatio||1));},[layout]);
   const remoteBands = useMemo(() => assetWaveform(remoteWaveform), [remoteWaveform]);
   const bands = remoteBands ?? detail.data;
@@ -146,7 +144,7 @@ export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform
     telemetry.current = { position: positionMs, receivedAt: performance.now() };
     if (pendingSeek.current) clearTimeout(pendingSeek.current);
     return () => { releaseDrag.current(); if (pendingSeek.current) clearTimeout(pendingSeek.current); };
-  }, [trackId,assetId,monitorAssetId]);
+  }, [trackId,assetId]);
 
   const floor = mode === "scroll" ? Number.NEGATIVE_INFINITY : 0;
   const visualPosition = () => deckRealtimeStore.position(label, performance.now())?.positionMs ?? (drag.current?.kind === "scratch" || scratching

@@ -2,8 +2,6 @@
 #include "harness.h"
 #include "junction/audio_clock.h"
 #include "junction/pcm_ring.h"
-#include "junction/render_clock.h"
-#include "junction/replay_driver.h"
 #include <thread>
 #include <vector>
 
@@ -282,89 +280,4 @@ JTEST("pcm-ring", "survives a real concurrent producer and consumer") {
     }
     producer.join();
     CHECK_EQ(expected, static_cast<quint64>(kBlocks));
-}
-
-// --- render clock and graph ownership -------------------------------------
-
-JTEST("render-clock", "maps 44.1 kHz render frames onto 48 kHz media frames") {
-    RenderClock clock(44100, 1000000);
-    CHECK_EQ(clock.mediaFrame(), 1000000ULL);
-    clock.advance(44100);
-    CHECK_EQ(clock.mediaFrame(), 1000000ULL + 48000ULL);
-    CHECK_EQ(clock.virtualNanos(), 1000000000LL);
-}
-
-JTEST("render-clock", "virtual time follows processed frames, not wall time") {
-    RenderClock clock(44100, 0);
-    for (int block = 0; block < 8 * 172; ++block) clock.advance(256);
-    // ~8 seconds of history replayed as fast as the CPU allows.
-    CHECK_NEAR(clock.virtualNanos() / 1.0e9, 8.0, 0.05);
-}
-
-JTEST("replay-driver", "grants an unowned graph immediately") {
-    ReplayDriver driver(44100, 0);
-    CHECK_EQ(driver.owner(), GraphDriver::None);
-    const quint64 generation = driver.requestTransfer(GraphDriver::Replay, RenderMode::WarmOffline);
-    CHECK(driver.transferComplete(generation));
-    CHECK_EQ(driver.owner(), GraphDriver::Replay);
-    CHECK_EQ(driver.mode(), RenderMode::WarmOffline);
-}
-
-JTEST("replay-driver", "only one driver may process, and handover waits for the ACK") {
-    ReplayDriver driver(44100, 0);
-    driver.requestTransfer(GraphDriver::Replay, RenderMode::WarmOffline);
-    CHECK(driver.beginBlock(GraphDriver::Replay).mayProcess);
-    // The realtime callback is running the whole time and must never touch the
-    // graph while the replay worker owns it.
-    CHECK(!driver.beginBlock(GraphDriver::Realtime).mayProcess);
-
-    const quint64 generation = driver.requestTransfer(GraphDriver::Realtime, RenderMode::ArmedRealtime);
-    CHECK(!driver.transferComplete(generation));
-    // Ownership does not move until the outgoing owner acknowledges, so there
-    // is no window where both drivers believe they own the graph.
-    CHECK(!driver.beginBlock(GraphDriver::Realtime).mayProcess);
-    const DriveGrant grant = driver.beginBlock(GraphDriver::Replay);
-    CHECK(grant.mayProcess);
-    CHECK(grant.releaseRequested);
-    driver.clock().advance(256);
-    driver.acknowledgeRelease(GraphDriver::Replay, driver.clock().renderFrame(), grant.generation);
-    CHECK(driver.transferComplete(generation));
-    CHECK(driver.beginBlock(GraphDriver::Realtime).mayProcess);
-    CHECK(!driver.beginBlock(GraphDriver::Replay).mayProcess);
-    CHECK_EQ(driver.releasedAtRenderFrame(), 256ULL);
-}
-
-JTEST("replay-driver", "arming to performing is an input gate, not a handover") {
-    ReplayDriver driver(44100, 0);
-    driver.requestTransfer(GraphDriver::Realtime, RenderMode::ArmedRealtime);
-    const quint64 before = driver.transfers();
-    CHECK(driver.promoteToPerforming());
-    CHECK_EQ(driver.mode(), RenderMode::Performing);
-    CHECK_EQ(driver.transfers(), before);
-    CHECK_EQ(driver.owner(), GraphDriver::Realtime);
-    CHECK(driver.demoteToArmed());
-    CHECK_EQ(driver.mode(), RenderMode::ArmedRealtime);
-}
-
-JTEST("replay-driver", "a performing graph is never handed back to offline replay by promote/demote") {
-    ReplayDriver driver(44100, 0);
-    driver.requestTransfer(GraphDriver::Realtime, RenderMode::Performing);
-    // Only an explicit transfer request can move it, and that still needs an
-    // ACK, so audio already broadcast cannot be rewound behind our back.
-    CHECK(!driver.promoteToPerforming() == false);
-    const quint64 generation = driver.requestTransfer(GraphDriver::Replay, RenderMode::WarmOffline);
-    CHECK(!driver.transferComplete(generation));
-    CHECK_EQ(driver.mode(), RenderMode::Performing);
-}
-
-JTEST("replay-driver", "a stale ACK from a previous owner does not move ownership") {
-    ReplayDriver driver(44100, 0);
-    driver.requestTransfer(GraphDriver::Replay, RenderMode::WarmOffline);
-    // Nothing is pending, so an unsolicited ACK must be ignored.
-    driver.acknowledgeRelease(GraphDriver::Replay, 10, driver.requestGeneration());
-    CHECK_EQ(driver.owner(), GraphDriver::Replay);
-    driver.requestTransfer(GraphDriver::Realtime, RenderMode::ArmedRealtime);
-    // An ACK from a driver that is not the current owner is ignored too.
-    driver.acknowledgeRelease(GraphDriver::Realtime, 20, driver.requestGeneration());
-    CHECK_EQ(driver.owner(), GraphDriver::Replay);
 }

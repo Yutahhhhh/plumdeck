@@ -128,10 +128,6 @@
 .dj-chip--state[data-state='playing'] { color: #9ed184; background: #1b2418; }
 .dj-chip--state[data-state='master'] { color: #f0d59a; background: #2a2418; }
 .dj-chip--state[data-state='error'] { color: #efa7a1; background: #2c1b1a; }
-.dj-chip--state[data-state='junction'] { min-width: 72px; color: #b8ddff; background: #17304a; }
-.dj-deck--junction-monitor { box-shadow: inset 0 0 0 1px #478aca, inset 0 3px #5babf5; }
-.dj-deck--junction-monitor .dj-deck-controls { opacity: .48; }
-.dj-deck--junction-monitor .dj-eject--deck { opacity: 1; }
 
 .dj-overview { height: var(--d-overview); flex-shrink: 0; background: #050607; border-top: 1px solid #000; border-bottom: 1px solid var(--dj-line-soft); }
 

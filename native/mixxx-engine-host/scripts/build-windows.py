@@ -170,20 +170,19 @@ def main():
     for name, url, filename in [
         ("soundtouch", "https://codeberg.org/soundtouch/soundtouch/archive/2.4.1.tar.gz", "source.tar.gz"),
         ("rubberband", "https://breakfastquay.com/files/releases/rubberband-4.0.0.tar.bz2", "source.tar.bz2"),
-        ("rubberband", "https://github.com/libsndfile/libsamplerate/releases/download/0.2.2/libsamplerate-0.2.2.tar.xz", "samplerate.tar.xz"),
     ]:
         download(url, DEPS / name / filename)
     # These preparation scripts check the source archive hashes before extraction.
-    run(sys.executable, ROOT / "scripts/prepare-soundtouch-checkpoint.py", DEPS / "soundtouch")
+    run(sys.executable, ROOT / "scripts/prepare-soundtouch.py", DEPS / "soundtouch")
     st = DEPS / "soundtouch"
     configure(st / "source", st / "build", "-DBUILD_SHARED_LIBS=OFF", "-DSOUNDSTRETCH=OFF", "-DSOUNDTOUCH_DLL=OFF", "-DOPENMP=OFF", "-DNEON=OFF")
     build(st / "build")
     rb = DEPS / "rubberband"
-    run(sys.executable, ROOT / "scripts/prepare-rubberband-checkpoint.py", rb, ROOT / "src/junction")
+    run(sys.executable, ROOT / "scripts/prepare-rubberband.py", rb)
     (rb / "build-config").mkdir(exist_ok=True)
     shutil.copy2(ROOT / "cmake/rubberband-source.cmake", rb / "build-config/CMakeLists.txt")
     configure(rb / "build-config", rb / "build", f"-DCMAKE_PREFIX_PATH={prefixes}",
-        f"-DRB_SOURCE={(rb / 'source').as_posix()}", f"-DRB_PRIVATE={(rb / 'private').as_posix()}", f"-DRB_ADAPTER={(ROOT / 'src/junction').as_posix()}")
+        f"-DRB_SOURCE={(rb / 'source').as_posix()}")
     build(rb / "build")
     patch = ROOT / "patches/recording-frame-clock.patch"
     applied = subprocess.run(["git", "-C", str(upstream), "apply", "--reverse", "--check", str(patch)], capture_output=True).returncode == 0

@@ -94,7 +94,6 @@ struct ProgramMixerRoute {
     QJsonObject toJson(const QString& junctionMasterPeer,const QString& releasingPeer,const QString& returnTarget) const {
         return {
             {"venueSource",venueName(venue)},
-            {"directStreamBypass",venue==VenueSource::DirectStream},
             {"junctionMaster",QJsonObject{{"peerId",junctionMasterPeer},{"inProgram",junctionMasterInProgram},{"releasingPeerId",releasingPeer}}},
             {"localNext",QJsonObject{{"inProgram",localNextInProgram},{"cueOnly",localNextCueOnly}}},
             {"returnFeed",QJsonObject{{"source",returnName(returnSource)},{"targetPeerId",returnSource==ReturnSource::None?QString{}:returnTarget},{"feedbackBlocked",feedbackBlocked},

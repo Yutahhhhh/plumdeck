@@ -107,7 +107,6 @@ public:
     quint16 channels() const { return channels_; }
     quint32 maxBlockFrames() const { return maxBlockFrames_; }
     quint32 blockSlots() const { return blockSlots_; }
-    quint32 capacityFrames() const { return blockSlots_ * maxBlockFrames_; }
 
     // ---- producer (audio thread) -----------------------------------------
 
@@ -143,10 +142,6 @@ public:
     quint32 availableFrames() {
         sync();
         return availableFrames_;
-    }
-    quint32 availableBlocks() {
-        sync();
-        return static_cast<quint32>(knownWrite_ - read_.load(std::memory_order_relaxed));
     }
 
     /// Frames available before the next seam. This is the number a caller may
@@ -238,7 +233,6 @@ public:
     quint64 underruns() const { return underruns_.load(std::memory_order_relaxed); }
     quint64 rejected() const { return rejected_.load(std::memory_order_relaxed); }
     quint64 discontinuities() const { return discontinuities_.load(std::memory_order_relaxed); }
-    quint64 consumedFrames() const { return consumedFrames_; }
     /// Bytes actually reserved, so the RSS budget in 08 §7 is measured rather
     /// than estimated.
     size_t reservedBytes() const { return samples_.size() * sizeof(float) + infos_.size() * sizeof(PcmBlockInfo); }
@@ -271,7 +265,6 @@ private:
                 static_cast<size_t>(take) * channels_ * sizeof(float));
         headOffset_ += take;
         availableFrames_ -= take;
-        consumedFrames_ += take;
         if (headOffset_ == stored.frameCount) {
             headOffset_ = 0;
             read_.store(read + 1, std::memory_order_release);
@@ -298,7 +291,6 @@ private:
     std::atomic<quint64> overflows_{0}, underruns_{0}, rejected_{0}, discontinuities_{0};
     // Consumer-private. Only the single consumer thread touches these.
     quint64 knownWrite_ = 0;
-    quint64 consumedFrames_ = 0;
     quint32 headOffset_ = 0;
     quint32 availableFrames_ = 0;
 };

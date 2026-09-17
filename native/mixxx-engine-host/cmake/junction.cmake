@@ -1,7 +1,7 @@
 # plumdeck Junction native subsystem.
 #
-# The bulk of Junction (protocol, clocks, authority, handoff state machine,
-# program routing, asset cache, codec, transport) has no Mixxx dependency. It
+# The bulk of Junction (protocol, clocks, authority, turn state,
+# program routing, codec, transport) has no Mixxx dependency. It
 # is compiled into `plumdeck-junction-core` so it can be unit tested without an
 # audio device or the pinned engine, and linked into both the real Mixxx host
 # and the protocol seam. Mixxx-specific glue lives outside this library.
@@ -16,10 +16,7 @@ set(JUNCTION_CORE_SOURCES
   "${JUNCTION_DIR}/runtime.cpp"
   "${JUNCTION_DIR}/manual_exchange.cpp"
   "${JUNCTION_DIR}/network_settings.cpp"
-  "${JUNCTION_DIR}/validation_capture.cpp"
   "${JUNCTION_DIR}/media_transport.cpp"
-  "${JUNCTION_DIR}/asset_cache.cpp"
-  "${JUNCTION_DIR}/shared_tracks.cpp"
   "${JUNCTION_DIR}/program_output.cpp"
   "${JUNCTION_DIR}/junction_input.cpp"
   "${JUNCTION_DIR}/producer_tap.cpp"
@@ -27,7 +24,6 @@ set(JUNCTION_CORE_SOURCES
   "${JUNCTION_DIR}/authority.cpp"
   "${JUNCTION_DIR}/ids.cpp"
   "${JUNCTION_DIR}/audio_clock.cpp"
-  "${JUNCTION_DIR}/replay_driver.cpp"
   "${JUNCTION_DIR}/session_protocol.cpp"
 )
 
@@ -107,8 +103,3 @@ if(APPLE)
   find_library(JUNCTION_SECURITY_FRAMEWORK Security REQUIRED)
   target_link_libraries(plumdeck-junction-core PUBLIC "${JUNCTION_SECURITY_FRAMEWORK}" "${JUNCTION_IOKIT_FRAMEWORK}" "${JUNCTION_COREFOUNDATION_FRAMEWORK}")
 endif()
-
-include("${CMAKE_CURRENT_LIST_DIR}/soundtouch-checkpoint.cmake")
-target_link_libraries(plumdeck-junction-core PUBLIC plumdeck-soundtouch-state)
-include("${CMAKE_CURRENT_LIST_DIR}/rubberband-checkpoint.cmake")
-target_link_libraries(plumdeck-junction-core PUBLIC plumdeck-rubberband-state)

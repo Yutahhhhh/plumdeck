@@ -12,7 +12,6 @@ export type RosterVisualState =
   | 'response'
   | 'connecting'
   | 'ready'
-  | 'requested'
   | 'next'
   | 'nextReady'
   | 'playing'
@@ -31,7 +30,7 @@ export interface QualityPresentation {
 
 /** Any connected DJ, including one who already played, can open the session. */
 export function coordinatorCanSelect(state: RosterVisualState): boolean {
-  return state === 'ready' || state === 'requested' || state === 'finished';
+  return state === 'ready' || state === 'finished';
 }
 
 /** Only the ON AIR DJ keeps a fixed position; played DJs can be queued again. */
@@ -75,7 +74,7 @@ export function rosterTurnActions(participant: JunctionParticipant, snapshot: Ju
   }
   if (state === 'playing' || incompatible || (!host && !self)) return [];
   if (state === 'finished') return [{label: self ? '順番に入る' : '順番に入れる', op: 'turn.join', params, primary: self, title: '順番の最後に入ります'}];
-  if (state === 'ready' || state === 'requested') return [{label: self ? '順番から外れる' : '順番から外す', op: 'turn.leave', params, primary: false}];
+  if (state === 'ready') return [{label: self ? '順番から外れる' : '順番から外す', op: 'turn.leave', params, primary: false}];
   return [];
 }
 
@@ -94,13 +93,6 @@ export function participantName(participant: JunctionParticipant): string {
 
 export function limitDjName(value: string): string {
   return value.slice(0, DJ_NAME_MAX_LENGTH);
-}
-
-export function compactReadinessReasons(reasons: string[], limit = 2): string | undefined {
-  const unique = [...new Set(reasons.map((reason) => reason.trim()).filter(Boolean))];
-  if (!unique.length) return undefined;
-  const shown = unique.slice(0, limit).join('・');
-  return unique.length > limit ? `${shown}（ほか${unique.length - limit}件）` : shown;
 }
 
 export function connectionAlert(snapshot: JunctionSnapshot): string | undefined {
@@ -136,7 +128,6 @@ export function participantVisualState(
   if (explicit === 'performing' || explicit === 'playing') return 'playing';
   if (explicit === 'next') return 'next';
   if (explicit === 'finished') return 'finished';
-  if (explicit === 'requested') return 'requested';
   if (explicit === 'ready' || explicit === 'waiting') return 'ready';
   if (explicit === 'unstable' || explicit === 'reconnecting') return 'reconnecting';
   if (explicit === 'disconnected' || explicit === 'offline') return 'disconnected';

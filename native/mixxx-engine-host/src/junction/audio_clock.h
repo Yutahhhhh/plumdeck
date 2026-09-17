@@ -76,10 +76,6 @@ public:
     double drift() const { return drift_; }
     /// Offset in nanoseconds at the last accepted round.
     qint64 offsetNanos() const { return offsetNanos_; }
-    /// Half the best observed RTT: the irreducible uncertainty of the offset.
-    qint64 uncertaintyNanos() const { return uncertaintyNanos_; }
-    qint64 bestRttNanos() const { return bestRttNanos_; }
-    size_t sampleCount() const { return samples_.size(); }
 
     /// Maps a local monotonic instant onto the host's timeline.
     qint64 toHostNanos(qint64 localNanos) const;
@@ -98,7 +94,6 @@ private:
     std::deque<Sample> samples_;
     double drift_ = 1.0;
     qint64 offsetNanos_ = 0;
-    qint64 uncertaintyNanos_ = 0;
     qint64 bestRttNanos_ = 0;
     qint64 anchorLocal_ = 0;
 };
@@ -111,12 +106,9 @@ public:
     /// Called once per audio callback with the cumulative frame count and the
     /// monotonic time at that callback. Cheap: no allocation, no locking.
     void observe(quint64 deviceFrames, qint64 monotonicNs);
-    /// Measured frames per second, or the nominal rate before enough data.
-    double measuredRateHz() const { return measuredRateHz_; }
     /// Deviation from nominal in parts per million.
     double driftPpm() const;
     quint32 nominalRateHz() const { return nominalRateHz_; }
-    quint64 observations() const { return observations_; }
     void reset();
 
 private:
@@ -160,7 +152,6 @@ public:
     /// result is < 1.0.
     double update(double fillFrames);
     double ratio() const { return ratio_; }
-    double integrator() const { return integrator_; }
     void reset();
     const Config& config() const { return config_; }
 

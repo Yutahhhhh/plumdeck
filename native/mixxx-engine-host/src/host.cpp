@@ -120,8 +120,8 @@ Host::Host(std::unique_ptr<PlaybackBackend> backend) : backend_(std::move(backen
     performanceInput_=std::make_unique<PerformanceInput>(backend_.get(),[this](int i){return slots_[i].state;},[this]{return backend_->available()&&!junction_->active()&&!sessionId_.isEmpty();},this);
     clock_.start();
     for (int index = 0; index < 4; ++index) resetDeck(index);
-    // Junction performer: candidate tracks for the current/next monitor pair.
-    // The runtime chooses at most two and hashes paths off the audio thread.
+    // Junction: this computer's loaded decks, for J metadata, READY status
+    // and the OUTGOING tail. Never a path.
     junction_->localDeckTracks = [this] {
         QJsonArray rows;
         const auto mixer = backend_->mixer();
@@ -130,37 +130,19 @@ Host::Host(std::unique_ptr<PlaybackBackend> backend) : backend_(std::move(backen
         for (int index = 0; index < 4; ++index) {
             const auto& slot = slots_[index];
             const auto track = slot.state["track"].toObject();
-            const auto path = slot.descriptor["path"].toString();
-            if (track.isEmpty() || path.isEmpty() || slot.state["status"] == "loading") continue;
+            if (track.isEmpty() || slot.descriptor["path"].toString().isEmpty() || slot.state["status"] == "loading") continue;
             const auto channel = channels[deckNames[index]].toObject();
             const double orientation = channel["orientation"].toDouble();
             const double crossGain = orientation < 0.5 ? (1.0 - crossfader) * 0.5
                     : orientation > 1.5 ? (1.0 + crossfader) * 0.5 : 1.0;
             const double audibility = qMax(0.0, channel["gain"].toDouble() * channel["trim"].toDouble(1.0) * crossGain);
-            rows.append(QJsonObject{{"deck", deckNames[index]}, {"path", path}, {"title", track["title"].toString()}, {"artist", track["artist"].toString()},
-                {"durationMs", track["durationMs"].toDouble()}, {"bpm", track["bpm"].toDouble()}, {"musicalKey", track["musicalKey"].toString()},
+            rows.append(QJsonObject{{"deck", deckNames[index]}, {"title", track["title"].toString()}, {"artist", track["artist"].toString()},
+                {"durationMs", track["durationMs"].toDouble()}, {"bpm", track["bpm"].toDouble()},
                 {"positionMs", backend_->positionMs(index)}, {"rate", backend_->playbackRate(index)}, {"audibility", audibility},
-                {"loadGeneration", double(slot.generation)}, {"playing", backend_->playing(index)},
+                {"playing", backend_->playing(index)},
                 {"firstBeatMs", track.contains("beatgridOffsetMs") ? track["beatgridOffsetMs"] : QJsonValue(QJsonValue::Null)}, {"pfl", channel["pfl"].toBool()}});
         }
         return rows;
-    };
-    backend_->junctionTrackPresentation = [this](int index) {
-        const auto& descriptor=slots_[index].descriptor;
-        return QJsonObject{{"title",descriptor["title"]},{"artist",descriptor["artist"]}};
-    };
-    backend_->graphDeckRestoring = [this](int index,quint64 generation,QJsonObject graph) {
-        if(index<0||index>=4)return;
-        auto& slot=slots_[index];resetDeck(index);
-        slot.generation=generation;generation_=std::max(generation_,generation);
-        slot.descriptor={};
-        if(!graph["path"].toString().isEmpty()){
-            slot.descriptor={{"path",graph["path"]},{"trackId",QString(QStringLiteral("asset:")+graph["assetId"].toString())},{"assetId",graph["assetId"]},{"localTrackId",QJsonValue::Null},
-                {"title",graph["title"].toString(QStringLiteral("Shared track"))},{"artist",graph["artist"]},
-                {"sampleRateHz",graph["sourceSampleRateHz"]},{"hotCues",graph["performance"].toObject()["hotCues"]}};
-            slot.state["status"]="loading";slot.state["loadId"]=static_cast<qint64>(generation);
-        }
-        ++rev_;event("deck.state",slot.state);
     };
     backend_->loaded = [this](int index, quint64 generation, QJsonObject metadata, QString error) {
         // Even immediate decoder failures are delivered after the accepted reply.
@@ -227,7 +209,6 @@ Host::~Host() {
     junction_.reset();
 }
 void Host::result(const QJsonObject& cmd, const QJsonObject& data) {
-    if (junction_ && !cmd["op"].toString().startsWith("junction.")) junction_->applied(cmd["op"].toString(), cmd["params"].toObject());
     auto message = envelope("result");
     message.insert("id", cmd["id"]); message.insert("op", cmd["op"]); message.insert("sessionId", sessionId_); message.insert("data", data); send(message);
 }
@@ -342,21 +323,11 @@ void Host::line(const QByteArray& bytes) {
         return;
     }
     if (junction_->active()) {
-        auto params = cmd["params"].toObject();
-        const auto failure = junction_->authorize(op,params);
+        const auto failure = junction_->authorize(op,cmd["params"].toObject());
         if (!failure.isEmpty()) { error(cmd,"junction_rejected",failure); return; }
-        params.remove("_junction"); cmd["params"] = params;
     }
     if (op.startsWith("waveform.")) {
-        auto params=cmd["params"].toObject();
-        if(params["junctionAssetId"].isString()){
-            QString failure;const auto monitor=junction_->monitorTrack(params.take("junctionAssetId").toString(),&failure);
-            if(!failure.isEmpty()){error(cmd,"junction_rejected",failure);return;}
-            const auto assetId=monitor["assetId"].toString();
-            params["sourcePath"]=monitor["path"];
-            params["sourceGeneration"]=double(assetId.left(13).toULongLong(nullptr,16));
-        }
-        result(cmd, backend_->waveformCommand(op, params)); return;
+        result(cmd, backend_->waveformCommand(op, cmd["params"].toObject())); return;
     }
     if (op == "performance.endpoint") { result(cmd,performanceInput_->endpoint());return; }
     if (op == "engine.audioHealth") {
@@ -759,15 +730,6 @@ void Host::completed(int index, quint64 generation, QJsonObject metadata, QStrin
             }
             track["beatTimesMs"] = times;
             if (track.contains("beatNumbers")) track["beatNumbers"] = numbers;
-        }
-        if(metadata["junctionRestore"].toBool()){
-            // The backend restores graph semantics at a single paused boundary.
-            // Host mirrors metadata only; ordinary load defaults would overwrite
-            // authoritative cues, key, loop, tempo, and variable beat markers.
-            track.remove("junctionRestore");
-            deck_["track"]=track;deck_["status"]="ready";
-            event("deck.loaded",{{"deck",deckNames[index]},{"loadId",static_cast<qint64>(generation)},{"track",track}});
-            event("deck.state",deck_);return;
         }
         const auto beatTimes = descriptorBeatTimes(track, duration);
         const bool hasConstantGrid = !hasBeatTimes && validGrid(track.value("bpm"), track.value("beatgridOffsetMs"), track.value("beatsPerBar"), duration);

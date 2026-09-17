@@ -8,20 +8,19 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
-use tauri::{AppHandle, Emitter, State};
+use tauri::AppHandle;
 
 use crate::dj_engine::supervisor::{EngineReply, EngineSupervisor};
 
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 const MAX_BODY_BYTES: usize = 160 * 1024;
 const MAX_CONNECTIONS: usize = 8;
-const LIVE_MONITOR_EVENT: &str = "junction://live-monitor";
 
 #[derive(Deserialize)]
 struct BridgeRequest {
@@ -34,10 +33,6 @@ fn empty_object() -> Value {
     Value::Object(Map::new())
 }
 
-struct BridgeShared {
-    monitor_deck: Mutex<Option<String>>,
-}
-
 /// Managed for the lifetime of the app. Dropping it closes the accept loop;
 /// the bearer token is deliberately not exposed through a Tauri command.
 pub struct JunctionMcpBridge {
@@ -45,7 +40,6 @@ pub struct JunctionMcpBridge {
     token: String,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
-    shared: Arc<BridgeShared>,
 }
 
 impl JunctionMcpBridge {
@@ -65,13 +59,9 @@ impl JunctionMcpBridge {
             None => random_token()?,
         };
         let stop = Arc::new(AtomicBool::new(false));
-        let shared = Arc::new(BridgeShared {
-            monitor_deck: Mutex::new(None),
-        });
         let active_connections = Arc::new(AtomicUsize::new(0));
 
         let thread_stop = Arc::clone(&stop);
-        let thread_shared = Arc::clone(&shared);
         let thread_token = token.clone();
         let thread = thread::Builder::new()
             .name("junction-mcp-bridge".into())
@@ -102,7 +92,6 @@ impl JunctionMcpBridge {
                                 continue;
                             }
                             let child_supervisor = Arc::clone(&supervisor);
-                            let child_shared = Arc::clone(&thread_shared);
                             let child_token = thread_token.clone();
                             let child_app = app.clone();
                             let child_active = Arc::clone(&active_connections);
@@ -113,7 +102,6 @@ impl JunctionMcpBridge {
                                     &child_token,
                                     &child_app,
                                     &child_supervisor,
-                                    &child_shared,
                                 );
                             });
                         }
@@ -134,7 +122,6 @@ impl JunctionMcpBridge {
             token,
             stop,
             thread: Some(thread),
-            shared,
         })
     }
 
@@ -144,18 +131,6 @@ impl JunctionMcpBridge {
 
     pub fn token(&self) -> &str {
         &self.token
-    }
-
-    fn monitor_deck(&self) -> Option<String> {
-        self.shared.monitor_deck.lock().ok()?.clone()
-    }
-
-    fn set_monitor_deck(
-        &self,
-        app: &AppHandle,
-        deck: Option<String>,
-    ) -> Result<Option<String>, String> {
-        set_monitor_deck(app, &self.shared, deck)
     }
 }
 
@@ -173,20 +148,6 @@ impl Drop for ConnectionGuard {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::AcqRel);
     }
-}
-
-#[tauri::command]
-pub fn junction_live_monitor_deck(state: State<'_, JunctionMcpBridge>) -> Option<String> {
-    state.monitor_deck()
-}
-
-#[tauri::command]
-pub fn junction_live_monitor_set(
-    app: AppHandle,
-    state: State<'_, JunctionMcpBridge>,
-    deck: Option<String>,
-) -> Result<Option<String>, String> {
-    state.set_monitor_deck(&app, deck)
 }
 
 fn random_token() -> Result<String, String> {
@@ -235,7 +196,6 @@ fn handle_connection(
     token: &str,
     app: &AppHandle,
     supervisor: &Arc<EngineSupervisor>,
-    shared: &Arc<BridgeShared>,
 ) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
@@ -270,7 +230,7 @@ fn handle_connection(
             return;
         }
     };
-    let response = dispatch_request(request, app, supervisor, shared);
+    let response = dispatch_request(request, app, supervisor);
     let _ = write_json(stream, 200, &response);
 }
 
@@ -376,7 +336,6 @@ fn dispatch_request(
     request: BridgeRequest,
     app: &AppHandle,
     supervisor: &Arc<EngineSupervisor>,
-    shared: &Arc<BridgeShared>,
 ) -> Value {
     if request.action.len() > 64 {
         return bridge_error("invalid_action", "Junction操作名が不正です", false);
@@ -391,7 +350,7 @@ fn dispatch_request(
             )
         }
     };
-    dispatch_action(&request.action, arguments, app, supervisor, shared)
+    dispatch_action(&request.action, arguments, app, supervisor)
 }
 
 fn dispatch_action(
@@ -399,7 +358,6 @@ fn dispatch_action(
     mut arguments: Map<String, Value>,
     app: &AppHandle,
     supervisor: &Arc<EngineSupervisor>,
-    shared: &Arc<BridgeShared>,
 ) -> Value {
     if matches!(action, "join" | "exchange.inspect" | "exchange.import") {
         if let Some(text) = arguments.get("text").and_then(Value::as_str) {
@@ -423,76 +381,6 @@ fn dispatch_action(
             Err(message) => bridge_error("prepare_failed", &message, true),
         },
         "exchange.export" => export_exchange(arguments, supervisor),
-        "live.attach" => {
-            let deck = arguments
-                .get("deck")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            let asset_id = arguments.get("assetId").and_then(Value::as_str);
-            if !asset_id.is_some_and(valid_asset_id) {
-                return bridge_error(
-                    "invalid_asset",
-                    "asset_idはJunction Liveの現在曲から指定してください",
-                    false,
-                );
-            }
-            let snapshot = match raw_snapshot(supervisor) {
-                Ok(snapshot) => snapshot,
-                Err(message) => return bridge_error("engine_unavailable", &message, true),
-            };
-            let current = snapshot
-                .get("junctionTracks")
-                .and_then(Value::as_array)
-                .and_then(|tracks| {
-                    tracks
-                        .iter()
-                        .find(|track| track.get("role").and_then(Value::as_str) == Some("current"))
-                });
-            let current_asset = current
-                .and_then(|track| track.get("assetId"))
-                .and_then(Value::as_str);
-            if current_asset != asset_id {
-                return bridge_error(
-                    "stale_asset",
-                    "Junction Liveの現在曲が更新されています。状態を再取得してください",
-                    true,
-                );
-            }
-            if current
-                .and_then(|track| track.get("state"))
-                .and_then(Value::as_str)
-                != Some("ready")
-            {
-                return bridge_error(
-                    "asset_not_ready",
-                    "Junction Liveの現在曲はまだ受信・検証中です",
-                    true,
-                );
-            }
-            match set_monitor_deck(app, shared, deck) {
-                Ok(deck) => json!({"ok": true, "result": {"deck": deck}}),
-                Err(message) => bridge_error("invalid_deck", &message, false),
-            }
-        }
-        "live.detach" => {
-            let requested = arguments.get("deck").and_then(Value::as_str);
-            let current = shared
-                .monitor_deck
-                .lock()
-                .ok()
-                .and_then(|deck| deck.clone());
-            if current.as_deref() != requested {
-                return bridge_error(
-                    "monitor_mismatch",
-                    "指定したデッキにはJunction Liveが割り当てられていません",
-                    false,
-                );
-            }
-            match set_monitor_deck(app, shared, None) {
-                Ok(deck) => json!({"ok": true, "result": {"deck": deck}}),
-                Err(message) => bridge_error("monitor_failed", &message, true),
-            }
-        }
         "mic.enabled" => {
             let Some(enabled) = arguments.get("enabled").and_then(Value::as_bool) else {
                 return bridge_error(
@@ -501,20 +389,12 @@ fn dispatch_action(
                     false,
                 );
             };
-            let mut params = json!({"microphone": {"enabled": enabled}});
-            if let Ok(snapshot) = raw_snapshot(supervisor) {
-                if snapshot.get("active").and_then(Value::as_bool) == Some(true) {
-                    params["_junction"] = json!({
-                        "sessionId": snapshot.get("sessionId").cloned().unwrap_or(Value::Null),
-                        "epoch": snapshot.get("epoch").cloned().unwrap_or(Value::Null),
-                        "actorPeerId": snapshot.get("localPeerId").cloned().unwrap_or(Value::Null),
-                    });
-                }
-            }
             engine_response(
-                supervisor.send_current("audio.config.set", params),
+                supervisor.send_current(
+                    "audio.config.set",
+                    json!({"microphone": {"enabled": enabled}}),
+                ),
                 &[],
-                shared,
             )
         }
         _ => {
@@ -557,13 +437,6 @@ fn dispatch_action(
                 "turn.cue" => ("junction.turn.cue", &[]),
                 "input.set" => ("junction.input.set", &[]),
                 "input.release" => ("junction.input.release", &[]),
-                "handoff.request" | "handoff.cancel" | "handoff.accept" => {
-                    return bridge_error(
-                        "retired_action",
-                        "この操作は廃止されました。次のDJがフェーダーを上げると交代します",
-                        false,
-                    )
-                }
                 "recovery.resume" => ("junction.recovery.resume", &[]),
                 "leave" => ("junction.leave", &[]),
                 "end" => ("junction.end", &[]),
@@ -589,7 +462,6 @@ fn dispatch_action(
             engine_response(
                 supervisor.send_current(operation, Value::Object(arguments)),
                 revealed_exchange_fields,
-                shared,
             )
         }
     }
@@ -678,24 +550,11 @@ fn raw_snapshot(supervisor: &Arc<EngineSupervisor>) -> Result<Value, String> {
 fn engine_response(
     reply: Result<EngineReply, String>,
     revealed_exchange_fields: &[&str],
-    shared: &Arc<BridgeShared>,
 ) -> Value {
     match reply {
         Ok(reply) if reply.ok => {
             let mut result = reply.data.unwrap_or(Value::Null);
             redact_value(&mut result, revealed_exchange_fields);
-            if let Value::Object(object) = &mut result {
-                object.insert(
-                    "liveMonitorDeck".into(),
-                    shared
-                        .monitor_deck
-                        .lock()
-                        .ok()
-                        .and_then(|deck| deck.clone())
-                        .map(Value::String)
-                        .unwrap_or(Value::Null),
-                );
-            }
             json!({"ok": true, "result": result, "revision": reply.rev})
         }
         Ok(reply) => json!({
@@ -745,33 +604,6 @@ fn redact_value(value: &mut Value, revealed_exchange_fields: &[&str]) {
     }
 }
 
-fn set_monitor_deck(
-    app: &AppHandle,
-    shared: &Arc<BridgeShared>,
-    deck: Option<String>,
-) -> Result<Option<String>, String> {
-    if let Some(value) = deck.as_deref() {
-        if !matches!(value, "A" | "B" | "C" | "D") {
-            return Err("デッキはA、B、C、Dのいずれかで指定してください".into());
-        }
-    }
-    if let Ok(mut current) = shared.monitor_deck.lock() {
-        *current = deck.clone();
-    } else {
-        return Err("Junction Liveの表示状態を更新できません".into());
-    }
-    app.emit(LIVE_MONITOR_EVENT, json!({"deck": deck}))
-        .map_err(|error| format!("Junction Liveの表示を通知できません: {error}"))?;
-    Ok(deck)
-}
-
-fn valid_asset_id(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
 fn bridge_error(code: &str, message: &str, retryable: bool) -> Value {
     json!({"ok": false, "error": {"code": code, "message": message, "retryable": retryable}})
 }
@@ -792,7 +624,7 @@ mod tests {
         let mut value = json!({
             "invite": "packet",
             "participants": [{"avatarDataUrl": "data:image/png;base64,x", "exchange": {"inviteText": "packet"}}],
-            "junctionTracks": [{"path": "/private/cache.wav", "title": "Current"}],
+            "privatePreview": {"tracks": [{"path": "/private/cache.wav", "title": "Current"}]},
             "turn": {"credential": "secret", "hasSecret": true},
         });
         redact_value(&mut value, &[]);
@@ -804,7 +636,7 @@ mod tests {
         assert_eq!(value.pointer("/turn/hasSecret"), Some(&Value::Bool(true)));
         assert_eq!(
             value
-                .pointer("/junctionTracks/0/title")
+                .pointer("/privatePreview/tracks/0/title")
                 .and_then(Value::as_str),
             Some("Current")
         );
@@ -830,13 +662,6 @@ mod tests {
         assert!(value.get("responseText").is_none());
         assert!(value.get("path").is_none());
         assert!(value.pointer("/nested/token").is_none());
-    }
-
-    #[test]
-    fn live_asset_ids_are_lowercase_sha256_hex() {
-        assert!(valid_asset_id(&"a".repeat(64)));
-        assert!(!valid_asset_id(&"A".repeat(64)));
-        assert!(!valid_asset_id("../../etc/passwd"));
     }
 
     #[test]

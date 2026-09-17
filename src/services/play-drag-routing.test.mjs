@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readJunctionLiveDrag, readPlayTrackDrag, routePlayTrackDrop } from './play-drag-routing.ts';
+import { readPlayTrackDrag, routePlayTrackDrop } from './play-drag-routing.ts';
 
 const track = { id: 7, filepath: 'C:\\Music\\track.mp3', duration: 180, title: 'Track' };
 const active = { kind: 'play-track', track };
@@ -22,22 +22,4 @@ test('routes playlist and sampler action targets once', () => {
   const accepted = [];
   assert.equal(routePlayTrackDrop(active, { kind: 'action', accept: value => accepted.push(value.id) }, () => assert.fail()), true);
   assert.deepEqual(accepted, [7]);
-});
-
-const junctionDrag = { kind: 'junction-live', title: 'Junction Live' };
-
-test('Junction Live binds any deck display without invoking the library loader', () => {
-  const monitored = [];
-  for (const deck of ['A', 'B', 'C', 'D']) assert.equal(routePlayTrackDrop(junctionDrag, { kind: 'deck', deck }, () => assert.fail('never load a track'), id => monitored.push(id)), true);
-  assert.deepEqual(monitored, ['A', 'B', 'C', 'D']);
-  assert.equal(routePlayTrackDrop(junctionDrag, { kind: 'action', accept: () => assert.fail('never expose a cache file') }, () => assert.fail(), () => assert.fail()), false);
-  assert.equal(routePlayTrackDrop(junctionDrag, { kind: 'deck', deck: 'A' }, () => assert.fail()), false, 'no monitor callback, no drop');
-});
-
-test('Junction Live is never a library track and carries no path or asset id', () => {
-  assert.equal(readPlayTrackDrag(junctionDrag), null);
-  assert.deepEqual(readJunctionLiveDrag(junctionDrag), junctionDrag);
-  for (const value of [{ kind: 'junction-live', title: 'Other' }, { kind: 'junction-track', title: 'Junction Live' }, null]) assert.equal(readJunctionLiveDrag(value), null);
-  assert.equal('filepath' in junctionDrag, false);
-  assert.equal('assetId' in junctionDrag, false);
 });

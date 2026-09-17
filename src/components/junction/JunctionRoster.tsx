@@ -39,7 +39,6 @@ const STATE_LABEL: Record<RosterVisualState, string> = {
   response: '返答あり',
   connecting: '接続中',
   ready: '接続済み',
-  requested: '順番待ち',
   next: 'STANDBY',
   nextReady: 'READY',
   playing: 'ON AIR',

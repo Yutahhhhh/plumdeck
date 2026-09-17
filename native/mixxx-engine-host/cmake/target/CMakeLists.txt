@@ -36,14 +36,8 @@ string(FIND "${PLUMDECK_SOUND}" "${PLUMDECK_SOUND_NEEDLE}" PLUMDECK_SOUND_MATCH)
 if(PLUMDECK_SOUND_MATCH EQUAL -1)
   message(FATAL_ERROR "Pinned SoundManager audio hook no longer matches")
 endif()
-string(REPLACE "${PLUMDECK_SOUND_NEEDLE}" "if (junction::beforeAudio(iFramesPerBuffer)) m_pEngineMixer->process(iFramesPerBuffer * 2);
+string(REPLACE "${PLUMDECK_SOUND_NEEDLE}" "junction::beforeAudio(iFramesPerBuffer); m_pEngineMixer->process(iFramesPerBuffer * 2);
     junction::afterAudio(const_cast<float*>(m_pEngineMixer->getMainBuffer()), const_cast<float*>(m_pEngineMixer->getHeadphoneBuffer()), iFramesPerBuffer);" PLUMDECK_SOUND "${PLUMDECK_SOUND}")
-set(PLUMDECK_INPUT_NEEDLE "const SINT iFramesPerBuffer) {\n   for (QList<AudioInputBuffer>::ConstIterator")
-string(FIND "${PLUMDECK_SOUND}" "${PLUMDECK_INPUT_NEEDLE}" PLUMDECK_INPUT_MATCH)
-if(PLUMDECK_INPUT_MATCH EQUAL -1)
-  message(FATAL_ERROR "Pinned SoundManager input ownership hook no longer matches")
-endif()
-string(REPLACE "${PLUMDECK_INPUT_NEEDLE}" "const SINT iFramesPerBuffer) {\n   junction::InputGuard inputGuard;\n   if (!inputGuard) return;\n   for (QList<AudioInputBuffer>::ConstIterator" PLUMDECK_SOUND "${PLUMDECK_SOUND}")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/plumdeck_soundmanager.cpp" "#include \"${PLUMDECK_ROOT}/src/junction/audio_bridge.h\"\n${PLUMDECK_SOUND}")
 get_target_property(PLUMDECK_MIXXX_SOURCES mixxx-lib SOURCES)
 list(FILTER PLUMDECK_MIXXX_SOURCES EXCLUDE REGEX "soundio/soundmanager\\.cpp$")
@@ -69,7 +63,7 @@ if(PLUMDECK_SINK_MATCH EQUAL -1)
 endif()
 string(REPLACE "const CSAMPLE* EngineMixer::buffer(const AudioOutput& output) const {" "const CSAMPLE* EngineMixer::buffer(const AudioOutput& output) const {
     if (output.getType() == AudioPathType::Main || output.getType() == AudioPathType::Headphones) {
-        if (const auto* idle = junction::idleOutput(output.getType() == AudioPathType::Headphones)) return idle;
+        if (const auto* device = junction::deviceOutput(output.getType() == AudioPathType::Headphones)) return device;
     }" PLUMDECK_MIXER "${PLUMDECK_MIXER}")
 set(PLUMDECK_CLOCK_NEEDLE "m_sampleRate = mixxx::audio::SampleRate::fromDouble(m_pSampleRate->get());")
 string(FIND "${PLUMDECK_MIXER}" "${PLUMDECK_CLOCK_NEEDLE}" PLUMDECK_CLOCK_MATCH)
@@ -209,4 +203,5 @@ list(FILTER PLUMDECK_MIXXX_SOURCES EXCLUDE REGEX "soundio/sounddeviceportaudio\\
 set_property(TARGET mixxx-lib PROPERTY SOURCES "${PLUMDECK_MIXXX_SOURCES}")
 target_sources(mixxx-lib PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/plumdeck_sounddeviceportaudio.cpp")
 
-include("${PLUMDECK_ROOT}/cmake/keylock-checkpoint.cmake")
+include("${PLUMDECK_ROOT}/cmake/soundtouch.cmake")
+include("${PLUMDECK_ROOT}/cmake/rubberband.cmake")

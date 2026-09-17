@@ -14,9 +14,6 @@ namespace junction {
 
 /// Wire sample rate for the shared media timeline. Frames, not milliseconds.
 inline constexpr quint32 kWireSampleRate = 48000;
-inline constexpr int kWireChannels = 2;
-/// 20 ms at 48 kHz. One Opus frame, one RTP packet.
-inline constexpr quint32 kPacketFrames = 960;
 /// Junction's own protocol version, independent of the local engine's protocol=1.
 inline constexpr int kJunctionProtocolVersion = 1;
 /// Control messages above this are rejected with a reason, never truncated.

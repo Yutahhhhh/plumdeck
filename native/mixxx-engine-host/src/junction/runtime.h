@@ -19,26 +19,18 @@ public:
     QJsonObject snapshot() const;
     bool active() const;
     quint64 currentMediaFrame() const;
-    quint64 currentAppliedSequence() const;
     void setCaptureAnchor(quint64 sourceFrame,quint64 mediaFrame);
     quint64 mediaFrameForSource(quint64 sourceFrame,unsigned rate=44100) const;
     QString authorize(const QString&,const QJsonObject&) const;
-    void applied(const QString&,const QJsonObject&);
     /// `local`: the LOCAL NEXT bus of the same callback (may be null).
     void capture(const float* master,const float* local,unsigned frames,quint64 sourceFrame,unsigned rate) noexcept;
     void captureLocalReturn(const float*,unsigned frames,quint64 sourceFrame,unsigned rate) noexcept;
-    bool sharedAudible() const noexcept;
     bool localMasterAudible() const noexcept;
     /// Audio thread: the JUNCTION deck's next `frames` stereo frames at 44.1 kHz.
     void readJunctionInput(float* out,unsigned frames) noexcept;
-    std::function<QJsonObject()> graphSnapshot;
-    std::function<QString(const QJsonObject&)> restoreGraph;
     /// Performer side: candidate local decks. Runtime selects current + next;
     /// paths are hashed here and never announced.
     std::function<QJsonArray()> localDeckTracks;
-    /// Resolves a verified Junction presentation asset for waveform analysis.
-    /// It never loads, seeks or changes a real deck.
-    QJsonObject monitorTrack(const QString& assetId,QString* error) const;
 private:
     struct Impl; std::unique_ptr<Impl> d;
 };

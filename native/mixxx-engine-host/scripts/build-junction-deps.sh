@@ -39,6 +39,6 @@ for library in libdatachannel.a deps/libsrtp/libsrtp2.a deps/usrsctp/usrsctplib/
   test -f "$source_dir/build-static/$library"
 done
 
-bash "$host_root/scripts/build-soundtouch-checkpoint.sh"
+bash "$host_root/scripts/build-soundtouch.sh"
 
-bash "$host_root/scripts/build-rubberband-checkpoint.sh"
+bash "$host_root/scripts/build-rubberband.sh"

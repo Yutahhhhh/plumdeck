@@ -27,18 +27,6 @@ public:
         ControlObject::set(ConfigKey(group(), "enabled"), 0);
     }
     QJsonObject state() const { QJsonObject parameters; for(const auto& map : {getEffectSlots()[0]->getLoadedParameters(),getEffectSlots()[0]->getHiddenParameters()}) for(const auto& values:map) for(const auto& value:values) parameters[value->manifest()->id()]=value->getValue(); QJsonArray routes; for(const auto& channel:getActiveChannels()) routes.append(channel.name()); return {{"releaseActive",releaseActive_},{"releaseRestore",releaseRestore_},{"parameters",parameters},{"processor",getEffectSlots()[0]->id()},{"slotEnabled",ControlObject::get(ConfigKey(slotGroup(),"enabled"))},{"routes",routes}, {"nativeEnabled",ControlObject::get(ConfigKey(group(),"enabled"))}, {"bpm",manualBpm_}, {"auto",manualBpm_==0}, {"effect", effect_}, {"target", target_}, {"enabled", enabled_}, {"mix", mix_}, {"beats", beats_}}; }
-    QString restoreSemantic(const QJsonObject& state) {
-        auto request=state;if(request["auto"].toBool())request.remove("bpm");
-        const auto error=configure(request);if(!error.isEmpty())return error;
-        const auto parameters=state["parameters"].toObject();
-        for(const auto& map:{getEffectSlots()[0]->getLoadedParameters(),getEffectSlots()[0]->getHiddenParameters()})for(const auto& values:map)for(const auto& parameter:values){
-            const auto value=parameters[parameter->manifest()->id()];if(value.isUndefined())continue;
-            if(!value.isDouble()||!std::isfinite(value.toDouble())||value.toDouble()<parameter->manifest()->getMinimum()||value.toDouble()>parameter->manifest()->getMaximum())return "Invalid Beat FX snapshot parameter";
-            parameter->setValue(value.toDouble());parameter->updateEngineState();
-        }
-        releaseActive_=state["releaseActive"].toBool();releaseRestore_=state["releaseRestore"].toObject();
-        return {};
-    }
     QString configure(const QJsonObject& p) {
         if (p.contains("release")) {
             if (!p["release"].isBool()) return "Expected release boolean";

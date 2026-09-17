@@ -175,8 +175,6 @@ pub fn run() {
             waveform::dj_waveform_pcm,
             waveform::dj_waveform_manifest,
             dj_engine::commands::junction_command,
-            junction_mcp_bridge::junction_live_monitor_deck,
-            junction_mcp_bridge::junction_live_monitor_set,
             share_musics::share_musics_status,
             share_musics::share_musics_login,
             share_musics::share_musics_cancel_login,

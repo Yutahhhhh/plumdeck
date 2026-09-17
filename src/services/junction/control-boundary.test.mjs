@@ -1,19 +1,15 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {junctionState, captureJunctionLease} from './state.ts';
+import {junctionState} from './state.ts';
 import {routePerformanceCommand} from '../performance-command-router.ts';
-const base = {active:true,sessionId:'room',revision:1,epoch:'1',localPeerId:'self',hostPeerId:'self',performerPeerId:'other',handoffState:'IDLE',participants:[],readiness:{ready:false,reasons:[]},program:{state:'preparing'},connection:{state:'connected'}};
-test('host authority does not grant performer controls; PFL stays local',()=>{
+const base = {active:true,sessionId:'room',revision:1,epoch:'1',localPeerId:'self',hostPeerId:'self',performerPeerId:'other',handoffState:'IDLE',participants:[],program:{state:'preparing'},connection:{state:'connected'}};
+test('PFL stays local',()=>{
   junctionState.set(base);
-  assert.throws(()=>routePerformanceCommand('deck.play',{deck:'A'}));
   assert.deepEqual(routePerformanceCommand('mixer.channel.pfl',{deck:'A',enabled:true}),{deck:'A',enabled:true});
-  assert.throws(()=>routePerformanceCommand('sampler.play',{slot:0}));
 });
-test('while a Lite DJ performs, this computer prepares its own decks with a lease',()=>{
-  junctionState.set({...base,performerPeerId:'phone',localPrep:true});
-  const routed = routePerformanceCommand('deck.load',{deck:'B'});
-  assert.equal(routed.deck,'B');
-  assert.equal(routed._junction.actorPeerId,'self');
+test('while a Lite DJ performs, this computer prepares its own decks',()=>{
+  junctionState.set({...base,performerPeerId:'phone'});
+  assert.deepEqual(routePerformanceCommand('deck.load',{deck:'B'}),{deck:'B'});
   assert.throws(()=>routePerformanceCommand('unknown.raw',{}));
 });
 test('fader start: a waiting DJ plays their own decks and only the OUTGOING tail is refused',()=>{
@@ -26,11 +22,10 @@ test('fader start: a waiting DJ plays their own decks and only the OUTGOING tail
   assert.equal(routePerformanceCommand('deck.load',{deck:'B'}).deck,'B');
   assert.throws(()=>routePerformanceCommand('mixer.crossfader',{position:0}),/マスター系/);
 });
-test('queued lease is not promoted after handoff and unknown raw operations fail closed',()=>{
+test('no authority ticket is attached and unknown raw operations fail closed',()=>{
   junctionState.set({...base,performerPeerId:'self'});
-  const lease = captureJunctionLease();
-  junctionState.set({...base,performerPeerId:'self',epoch:'2'});
-  assert.deepEqual(routePerformanceCommand('mixer.beatfx.set',{enabled:false},lease)._junction,lease);
+  assert.deepEqual(routePerformanceCommand('mixer.beatfx.set',{enabled:false}),{enabled:false});
+  assert.deepEqual(routePerformanceCommand('audio.config.set',{microphone:{enabled:true}}),{microphone:{enabled:true}});
   assert.throws(()=>routePerformanceCommand('unknown.raw',{}));
 });
 

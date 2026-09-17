@@ -11,19 +11,6 @@
 #include "engine/enginemixer.h"
 #include "track/track.h"
 
-class JunctionSamplerDeck final : public EngineDeck {
-public:
-    using EngineDeck::EngineDeck;
-    std::atomic<double> exactFrames{0};
-    std::atomic<quint64> audioBlocks{0};
-    void postProcess(int samples) override {
-        EngineDeck::postProcess(samples);
-        const auto value=getEngineBuffer()->getExactPlayPos();
-        exactFrames.store(value.isValid()?value.value():0,std::memory_order_release);
-        audioBlocks.fetch_add(1,std::memory_order_release);
-    }
-};
-
 // Main-thread commands, native audio callbacks. EngineMixer owns the channels;
 // this bank owns their metadata and uses a QObject context for async load guards.
 class SamplerBank final : public QObject {
@@ -32,7 +19,7 @@ public:
         for (int i = 0; i < 64; ++i) {
             auto& s = slots_[i];
             s.group = QStringLiteral("[Sampler%1]").arg(i + 1);
-            s.deck = new JunctionSamplerDeck(mixer->registerChannelGroup(s.group), settings, mixer, effects, EngineChannel::CENTER, false);
+            s.deck = new EngineDeck(mixer->registerChannelGroup(s.group), settings, mixer, effects, EngineChannel::CENTER, false);
             mixer->addChannel(s.deck);
             ControlObject::set(ConfigKey(s.group, "main_mix"), 1);
             ControlObject::set(ConfigKey(s.group, "volume"), gain_);
@@ -58,46 +45,6 @@ public:
                 {"error", s.error}, {"durationMs", s.ready ? s.track->getDuration() * 1000 : 0}, {"revision", static_cast<double>(s.revision)}});
         }
         return {{"slots", items}, {"gain", gain_}, {"pfl", pfl_}, {"bank", bank_}};
-    }
-    QJsonObject junctionState() const {
-        QJsonArray items;
-        for(int i=0;i<64;++i){const auto& s=slots_[i];items.append(QJsonObject{
-            {"slot",i},{"path",s.path},{"positionFrames",s.deck->exactFrames.load(std::memory_order_acquire)},
-            {"sourceSampleRateHz",s.track?int(s.track->getSampleRate().value()):0},
-            {"play",ControlObject::get(ConfigKey(s.group,"play"))>0},{"ready",s.path.isEmpty()||s.ready},
-            {"revision",QString::number(s.revision)}});}
-        return {{"bank",bank_},{"gain",gain_},{"slots",items}};
-    }
-    bool junctionLoaded() const {
-        for(const auto& s:slots_)if(!s.path.isEmpty()&&(!s.ready||!s.error.isEmpty()))return false;return true;
-    }
-    QString finalizeJunctionRestore() {
-        for(auto& s:slots_)if(!s.restore.isEmpty()){
-            if(s.restore["sourceSampleRateHz"].toDouble()!=s.track->getSampleRate().value()||s.restore["positionFrames"].toDouble()>s.track->getDuration()*s.track->getSampleRate().value()){s.error="Sampler asset differs from graph";return s.error;}
-            s.deck->getEngineBuffer()->queueNewPlaypos(mixxx::audio::FramePos(s.restore["positionFrames"].toDouble()),EngineBuffer::SEEK_EXACT);
-            ControlObject::set(ConfigKey(s.group,"play"),s.restore["play"].toBool()?1:0);
-            s.restoreAfter=s.deck->audioBlocks.load()+2;s.restore={};
-        }
-        return {};
-    }
-    bool junctionReady() const {
-        for(const auto& s:slots_)if(!s.path.isEmpty()&&(!s.ready||!s.error.isEmpty()||!s.restore.isEmpty()||s.deck->audioBlocks.load()<s.restoreAfter))return false;
-        return true;
-    }
-    QString restoreJunction(const QJsonObject& snapshot) {
-        const auto bank=snapshot["bank"].toDouble(-1),gain=snapshot["gain"].toDouble(-1);
-        if(bank<0||bank>3||bank!=std::floor(bank)||gain<0||gain>1||!std::isfinite(gain))return "Invalid sampler bank or gain";
-        const auto items=snapshot["slots"].toArray();if(items.size()!=64)return "Expected all 64 sampler slots";
-        for(int i=0;i<64;++i){const auto row=items[i].toObject();const auto path=row["path"].toString();
-            if(row["slot"].toInt(-1)!=i||(!path.isEmpty()&&(!QFileInfo(path).isAbsolute()||!QFileInfo(path).isFile()))||!std::isfinite(row["positionFrames"].toDouble(-1))||row["positionFrames"].toDouble(-1)<0)return "Invalid resolved sampler graph";
-        }
-        stopAll();
-        for(int i=0;i<64;++i){const auto row=items[i].toObject();auto& s=slots_[i];s.restore={};s.restoreAfter=0;
-            if(row["path"].toString().isEmpty()){command("sampler.eject",{{"slot",i%16},{"bank",i/16}});continue;}
-            const auto error=command("sampler.load",{{"slot",i%16},{"bank",i/16},{"path",row["path"]}});if(!error.isEmpty())return error;s.restore=row;
-        }
-        command("sampler.bank",{{"bank",snapshot["bank"]}});
-        return command("sampler.gain",{{"gain",snapshot["gain"]}});
     }
     QString command(const QString& op, const QJsonObject& params) {
         if (op == "sampler.state") return {};
@@ -153,7 +100,7 @@ public:
     }
     void stopAll() { for (const auto& s : slots_) ControlObject::set(ConfigKey(s.group, "play"), 0); }
 private:
-    struct Slot { QString group, path, error; JunctionSamplerDeck* deck = nullptr; TrackPointer track; bool ready = false; quint64 revision = 0, restoreAfter = 0; QJsonObject restore; };
+    struct Slot { QString group, path, error; EngineDeck* deck = nullptr; TrackPointer track; bool ready = false; quint64 revision = 0; };
     std::array<Slot, 64> slots_;
     int bank_ = 0;
     double gain_ = 0.7;

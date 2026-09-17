@@ -397,7 +397,6 @@
 .junction-state-playing { color: #bae6fd; background: #075985; }
 .junction-state-next { color: #ddd6fe; background: #5b21b6; }
 .junction-state-ready { color: #bbf7d0; background: #166534; }
-.junction-state-requested { color: #e9d5ff; background: #7e22ce; }
 .junction-state-response { color: #fde68a; background: #92400e; }
 .junction-state-disconnected,
 .junction-state-problem { color: #fecaca; background: #991b1b; }

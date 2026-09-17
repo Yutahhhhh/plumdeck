@@ -22,7 +22,6 @@ JTEST("program_mixer","operator Program Master carries JUNCTION MASTER and LOCAL
     CHECK(!r.localNextCueOnly);
     CHECK(r.releasing);
     CHECK_EQ(r.toJson("lite","lite","")["venueSource"].toString(),QString("local-mix"));
-    CHECK(!r.toJson("lite","lite","")["directStreamBypass"].toBool());
 }
 JTEST("program_mixer","a JUNCTION MASTER channel outside main never reaches Program"){
     auto in=host();in.localOperator=true;in.junctionMasterPresent=true;in.junctionMasterInMain=false;

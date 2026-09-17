@@ -3,44 +3,17 @@
 #include "effects/backends/effectprocessor.h"
 #include "engine/effects/engineeffectparameter.h"
 #include "control/controlobject.h"
-#include "junction/ddj_checkpoint.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
 #include <vector>
-#include <bit>
-#include <cstdint>
 #include "effects/backends/builtin/echoeffect.h"
 #include "effects/backends/builtin/reverbeffect.h"
 #include "effects/backends/builtin/tremoloeffect.h"
 #include "effects/backends/builtin/flangereffect.h"
 #include "effects/backends/builtin/phasereffect.h"
 #include "effects/backends/builtin/pitchshifteffect.h"
-
-// Trans uses the pinned Tremolo DSP with host-owned per-route state so its
-// current LFO frame, ramp gain, and quantize/triplet latches survive handoff.
-class DdjTremoloCheckpointProcessor final : public EffectProcessor, public junction::ddj::Processor {
-    struct Route {int input,output;unsigned rate;std::unique_ptr<TremoloState> state;bool restored=false;};
-    std::vector<Route> routes_;
-    std::atomic<size_t> published_{0};
-    QSet<ChannelHandleAndGroup> outputs_;
-    TremoloEffect renderer_;
-public:
-    DdjTremoloCheckpointProcessor(){routes_.reserve(1024);}
-    QString checkpointId() const override{return "org.plumdeck.effects.tremolo";}
-    void initialize(const QSet<ChannelHandleAndGroup>& inputs,const QSet<ChannelHandleAndGroup>& outputs,const mixxx::EngineParameters& p) override {outputs_=outputs;for(const auto& input:inputs)initializeInputChannel(input.handle(),p);}
-    void initializeInputChannel(ChannelHandle input,const mixxx::EngineParameters& p) override {for(const auto& output:outputs_){if(routes_.size()>=1024)return;routes_.push_back({input.handle(),output.handle().handle(),unsigned(p.sampleRate()),std::make_unique<TremoloState>(p)});published_.store(routes_.size(),std::memory_order_release);}}
-    bool hasStatesForInputChannel(ChannelHandle input) const override {for(const auto& route:routes_)if(route.input==input.handle())return true;return false;}
-    void loadEngineEffectParameters(const QMap<QString,EngineEffectParameterPointer>& parameters) override {renderer_.loadEngineEffectParameters(parameters);}
-    SINT getGroupDelayFrames() override{return 0;}
-    void process(const ChannelHandle& input,const ChannelHandle& output,const CSAMPLE* in,CSAMPLE* out,const mixxx::EngineParameters& p,EffectEnableState enabled,const GroupFeatureState& features) override {
-        const auto count=published_.load(std::memory_order_acquire);for(size_t i=0;i<count;++i){auto& route=routes_[i];if(route.input!=input.handle()||route.output!=output.handle())continue;if(route.restored){if(enabled==EffectEnableState::Enabling)enabled=EffectEnableState::Enabled;route.restored=false;}renderer_.processChannel(route.state.get(),in,out,p,enabled,features);return;}std::copy_n(in,p.samplesPerBuffer(),out);
-    }
-    junction::ddj::Snapshot prepare(const std::function<QString(int)>& name) const override {junction::ddj::Snapshot snapshot;snapshot.processor=checkpointId();if(routes_.size()>8)return snapshot;for(const auto& route:routes_)snapshot.routes.push_back({name(route.input),name(route.output),route.rate,{}});return snapshot;}
-    bool captureInto(junction::ddj::Snapshot& snapshot) const override {if(snapshot.routes.size()!=routes_.size())return false;for(size_t i=0;i<routes_.size();++i){const auto& state=*routes_[i].state;auto& target=snapshot.routes[i].state;target.low[0]=state.gain;target.loopRead=state.currentFrame;target.captured=state.quantizeEnabled?1:0;target.loopLength=state.tripletEnabled?1:0;}return true;}
-    bool restore(const junction::ddj::Snapshot& snapshot,const std::function<int(const QString&)>& handle) override {if(snapshot.processor!=checkpointId())return false;for(const auto& item:snapshot.routes){const auto& s=item.state;if(!s.ring.empty()||s.loopRead>UINT32_MAX||s.captured>1||s.loopLength>1||!junction::ddj::finite(s.low[0])||s.low[0]<0||s.low[0]>1)return false;bool found=false;for(auto& route:routes_)if(route.input==handle(item.input)&&route.output==handle(item.output)&&route.rate==item.rate){route.state->gain=s.low[0];route.state->currentFrame=unsigned(s.loopRead);route.state->quantizeEnabled=s.captured!=0;route.state->tripletEnabled=s.loopLength!=0;route.restored=true;found=true;break;}if(!found)return false;}return true;}
-};
 
 // A host-only timing adapter. AUTO forwards source beat information unchanged;
 // TAP supplies a fixed beat length to the same processor, including on master.
@@ -66,7 +39,6 @@ public:
     bool hasStatesForInputChannel(ChannelHandle c) const override { return processor_.hasStatesForInputChannel(c); }
     void loadEngineEffectParameters(const QMap<QString,EngineEffectParameterPointer>& p) override { bpm_=p.value("manual_bpm"); processor_.loadEngineEffectParameters(p); }
     SINT getGroupDelayFrames() override { return processor_.getGroupDelayFrames(); }
-    EffectProcessor* junctionUnderlyingProcessor() { return &processor_; }
     void process(const ChannelHandle& a,const ChannelHandle& b,const CSAMPLE* in,CSAMPLE* out,
             const mixxx::EngineParameters& p,EffectEnableState enabled,const GroupFeatureState& source) override {
         auto features=source;
@@ -90,7 +62,7 @@ public:
         processor_.process(a,b,in,out,p,enabled,features);
     }
 private:
-    std::conditional_t<std::is_same_v<Processor,TremoloEffect>,DdjTremoloCheckpointProcessor,Processor> processor_;
+    Processor processor_;
     EngineEffectParameterPointer bpm_;
     std::array<ControlObject*,4> tempos_{}, playing_{}, leaders_{};
 };
@@ -99,30 +71,6 @@ private:
 // Mixxx. These are independent DSP, not bit-identical Pioneer algorithms.
 struct DdjBeatState : EffectState {
     explicit DdjBeatState(const mixxx::EngineParameters& p) : EffectState(p), ring(size_t(p.sampleRate()) * 8, 0) {}
-    // Typed owned-state adapter. Call only after ReplayDriver has acknowledged
-    // that neither realtime nor offline processing owns the graph. Copying the
-    // bounded delay ring is intentionally never part of processChannel().
-    using Checkpoint=junction::ddj::State;
-    bool restored=false;
-    static bool finite(const double& value) {volatile std::uint64_t bits=std::bit_cast<std::uint64_t>(value);return (bits&0x7ff0000000000000ULL)!=0x7ff0000000000000ULL;}
-    static bool finite(const float& value) {volatile std::uint32_t bits=std::bit_cast<std::uint32_t>(value);return (bits&0x7f800000U)!=0x7f800000U;}
-    Checkpoint captureStoppedGraph() const {
-        return {1,ring,write,captured,loopLength,loopStart,loopRead,phase,delay,lastBeats,low,feedback,oscillators};
-    }
-    bool restoreStoppedGraph(const Checkpoint& state) {
-        const auto capacity=ring.size()/2;
-        if(state.version!=1||state.ring.size()!=ring.size()||capacity<4||state.write>=capacity||state.captured>capacity||state.loopLength>capacity||state.loopStart>=capacity)return false;
-        if(!finite(state.phase)||state.phase<0||state.phase>=1||!finite(state.delay)||state.delay<0||state.delay>capacity||!finite(state.lastBeats)||state.lastBeats<0||state.lastBeats>16)return false;
-        for(const auto& x:state.ring)if(!finite(x))return false;
-        for(const auto& x:state.low)if(!finite(x))return false;
-        for(const auto& x:state.feedback)if(!finite(x))return false;
-        for(const auto& x:state.oscillators)if(!finite(x)||x<0||x>=1)return false;
-        std::copy(state.ring.begin(),state.ring.end(),ring.begin());
-        write=state.write;captured=state.captured;loopLength=state.loopLength;loopStart=state.loopStart;loopRead=state.loopRead;
-        phase=state.phase;delay=state.delay;lastBeats=state.lastBeats;low=state.low;feedback=state.feedback;oscillators=state.oscillators;
-        restored=true;
-        return true;
-    }
     std::vector<float> ring; // Four seconds, stereo, allocated off the audio thread.
     size_t write = 0, captured = 0, loopLength = 0, loopStart = 0, loopRead = 0;
     double phase = 0, delay = 0, lastBeats = 0;
@@ -130,14 +78,13 @@ struct DdjBeatState : EffectState {
     std::array<double, 6> oscillators{};
 };
 
-template<int Mode> class DdjBeatProcessor : public EffectProcessor, public junction::ddj::Processor {
+template<int Mode> class DdjBeatProcessor : public EffectProcessor {
 public:
     struct OwnedRoute {int input,output;unsigned rate;std::unique_ptr<DdjBeatState> state;};
     std::vector<OwnedRoute> routes_;
     std::atomic<size_t> publishedRoutes_{0};
     DdjBeatProcessor(){routes_.reserve(1024);}
     QSet<ChannelHandleAndGroup> outputs_;
-    QString checkpointId() const override {return QString(getId()).replace("org.mixxx.","org.plumdeck.");}
     void initialize(const QSet<ChannelHandleAndGroup>& inputs,const QSet<ChannelHandleAndGroup>& outputs,const mixxx::EngineParameters& parameters) override {outputs_=outputs;for(const auto& input:inputs)initializeInputChannel(input.handle(),parameters);}
     void initializeInputChannel(ChannelHandle input,const mixxx::EngineParameters& parameters) override {for(const auto& output:outputs_){if(routes_.size()>=1024)return;routes_.push_back({input.handle(),output.handle().handle(),unsigned(parameters.sampleRate()),std::make_unique<DdjBeatState>(parameters)});publishedRoutes_.store(routes_.size(),std::memory_order_release);}}
     bool hasStatesForInputChannel(ChannelHandle input) const override {for(const auto& route:routes_)if(route.input==input.handle())return true;return false;}
@@ -145,23 +92,6 @@ public:
     void process(const ChannelHandle& input,const ChannelHandle& output,const CSAMPLE* in,CSAMPLE* out,const mixxx::EngineParameters& parameters,EffectEnableState enabled,const GroupFeatureState& features) override {
         const auto count=publishedRoutes_.load(std::memory_order_acquire);for(size_t i=0;i<count;++i){auto& route=routes_[i];if(route.input==input.handle()&&route.output==output.handle()){processChannel(route.state.get(),in,out,parameters,enabled,features);return;}}
         std::copy_n(in,parameters.samplesPerBuffer(),out);
-    }
-    junction::ddj::Snapshot prepare(const std::function<QString(int)>& name) const override {
-        junction::ddj::Snapshot snapshot;snapshot.processor=checkpointId();
-        if(routes_.size()>8)return snapshot;
-        for(const auto& route:routes_){junction::ddj::Route prepared;prepared.input=name(route.input);prepared.output=name(route.output);prepared.rate=route.rate;prepared.state.ring.resize(route.state->ring.size());snapshot.routes.push_back(std::move(prepared));}
-        return snapshot;
-    }
-    bool captureInto(junction::ddj::Snapshot& snapshot) const override {
-        if(snapshot.routes.size()!=routes_.size())return false;
-        for(size_t i=0;i<routes_.size();++i){const auto& source=*routes_[i].state;auto& target=snapshot.routes[i].state;if(target.ring.size()!=source.ring.size())return false;
-            std::copy(source.ring.begin(),source.ring.end(),target.ring.begin());target.write=source.write;target.captured=source.captured;target.loopLength=source.loopLength;target.loopStart=source.loopStart;target.loopRead=source.loopRead;target.phase=source.phase;target.delay=source.delay;target.lastBeats=source.lastBeats;target.low=source.low;target.feedback=source.feedback;target.oscillators=source.oscillators;
-        }return true;
-    }
-    bool restore(const junction::ddj::Snapshot& snapshot,const std::function<int(const QString&)>& handle) override {
-        if(snapshot.processor!=checkpointId()||snapshot.routes.size()>8)return false;
-        for(const auto& item:snapshot.routes){bool found=false;for(auto& route:routes_)if(route.input==handle(item.input)&&route.output==handle(item.output)&&route.rate==item.rate){if(!route.state->restoreStoppedGraph(item.state))return false;found=true;break;}if(!found)return false;}
-        return true;
     }
     static QString getId() {
         static const char* names[] = {"lowcutecho","mtdelay","spiral","enigmajet","sliproll","roll","mobiussaw","mobiustri"};
@@ -187,7 +117,6 @@ public:
         renderState(s,in,out,p,enabled,features,beats_->value(),depth_->value());
     }
     static void renderState(DdjBeatState* s,const CSAMPLE* in,CSAMPLE* out,const mixxx::EngineParameters& p,EffectEnableState enabled,const GroupFeatureState& features,double beats,double depth) {
-        if(s->restored){if(enabled==EffectEnableState::Enabling)enabled=EffectEnableState::Enabled;s->restored=false;}
         const double rate=p.sampleRate();
         const size_t capacity=s->ring.size()/2;
         const double seconds=features.beat_length.has_value()?features.beat_length->seconds:.5;

@@ -34,8 +34,6 @@ inline constexpr int kMaxExchangeTextBytes = 128 * 1024;
 inline constexpr int kMaxExchangeJsonBytes = 90 * 1024;
 /// A single SDP, including all aggregated non-trickle candidates.
 inline constexpr int kMaxExchangeSdpBytes = 32 * 1024;
-/// Exchanged temporary ICE credentials may not outlive this.
-inline constexpr qint64 kMaxExchangeCredentialMs = 24 * 60 * 60 * 1000;
 /// An invitation may not be minted further ahead than this.
 inline constexpr qint64 kMaxExchangeLifetimeMs = 7LL * 24 * 60 * 60 * 1000;
 

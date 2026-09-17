@@ -14,15 +14,7 @@ namespace junction { class Runtime; }
 class PlaybackBackend {
 public:
     virtual ~PlaybackBackend() = default;
-    std::function<void(int,quint64,QJsonObject)> graphDeckRestoring;
-    std::function<QJsonObject(int)> junctionTrackPresentation;
     virtual void attachJunction(junction::Runtime*) {}
-    virtual QJsonObject junctionGraph() const { return {}; }
-    virtual bool validateDspAsset(const QString&) const { return false; }
-    virtual bool validateAudioAsset(const QString&) const { return false; }
-    virtual QString restoreJunctionGraph(const QJsonObject&) { return "Graph restore unavailable"; }
-    virtual bool junctionGraphReady() const { return false; }
-    virtual QString alignJunctionGraph(quint64) { return "Graph alignment unavailable"; }
     virtual QString privatePreviewCommand(const QString&,const QJsonObject&) { return "Private preview unavailable"; }
     virtual QJsonObject privatePreviewState() const { return {}; }
     /// The JUNCTION deck: another DJ's audio as a local mixer channel.

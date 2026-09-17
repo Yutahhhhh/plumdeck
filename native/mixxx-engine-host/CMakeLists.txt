@@ -18,6 +18,6 @@ if(NODE_EXECUTABLE)
 endif()
 
 include(cmake/junction.cmake)
-add_executable(junction-core-tests tests/junction/harness.cpp tests/junction/clock_test.cpp tests/junction/media_transport_test.cpp tests/junction/asset_cache_test.cpp tests/junction/program_output_test.cpp tests/junction/producer_tap_test.cpp tests/junction/validation_capture_test.cpp tests/junction/authority_test.cpp tests/junction/network_settings_test.cpp tests/junction/manual_exchange_test.cpp tests/junction/shared_tracks_test.cpp tests/junction/junction_input_test.cpp tests/junction/program_mixer_test.cpp tests/junction/turn_state_test.cpp)
+add_executable(junction-core-tests tests/junction/harness.cpp tests/junction/clock_test.cpp tests/junction/media_transport_test.cpp tests/junction/program_output_test.cpp tests/junction/producer_tap_test.cpp tests/junction/authority_test.cpp tests/junction/network_settings_test.cpp tests/junction/manual_exchange_test.cpp tests/junction/junction_input_test.cpp tests/junction/program_mixer_test.cpp tests/junction/turn_state_test.cpp)
 target_link_libraries(junction-core-tests PRIVATE plumdeck-junction-core)
 add_test(NAME junction-core COMMAND junction-core-tests)

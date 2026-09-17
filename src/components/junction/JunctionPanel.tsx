@@ -619,7 +619,6 @@ function readProfile(): DjProfileValue {
 
 function sessionStatus(snapshot: JunctionSnapshot): string {
   if (snapshot.lifecycle === 'lobby') return `${snapshot.participants.length}人 · 準備中`;
-  if (snapshot.lifecycle === 'starting') return '演奏を開始しています';
   const performer = snapshot.participants.find((participant) => participant.peerId === snapshot.performerPeerId);
   return performer ? `${participantName(performer)}が演奏中` : `${snapshot.participants.length}人が参加`;
 }

@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   orderedParticipants,
-  compactReadinessReasons,
   connectionAlert,
   coordinatorCanSelect,
   DJ_NAME_MAX_LENGTH,
@@ -129,8 +128,6 @@ test('connected DJs are candidates without a request, and played DJs are never l
   assert.equal(rosterPositionLocked('finished'), false);
   const lite = participant('phone', {client: 'lite', status: 'connected', rosterStatus: 'waiting'});
   assert.equal(participantVisualState(lite, snapshot([lite], {lifecycle: 'live', performerPeerId: 'host'})), 'ready');
-  const replay = participant('phone', {rosterStatus: 'requested'});
-  assert.equal(participantVisualState(replay, snapshot([replay], {lifecycle: 'live', performerPeerId: 'host'})), 'requested');
 });
 
 test('a temporary transport interruption is shown as automatic reconnect, not a terminal disconnect', () => {
@@ -165,9 +162,7 @@ test('DJ names follow the native forty-character contract', () => {
   assert.equal(limitDjName('x'.repeat(41)), 'x'.repeat(40));
 });
 
-test('blocking readiness and serious connection reasons stay concise and visible', () => {
-  assert.equal(compactReadinessReasons([' 楽曲を準備中 ', '楽曲を準備中', '音声を確認中', '同期を確認中']), '楽曲を準備中・音声を確認中（ほか1件）');
-  assert.equal(compactReadinessReasons([]), undefined);
+test('serious connection reasons stay concise and visible', () => {
   assert.equal(connectionAlert(snapshot([], {connection: {state: 'interrupted', detail: '相手との通信が中断しました'}})), '相手との通信が中断しました');
   assert.equal(connectionAlert(snapshot([], {connection: {state: 'connected', detail: 'internal detail'}})), undefined);
 });

@@ -77,24 +77,4 @@
 .dj-track-drag-overlay strong, .dj-track-drag-overlay span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dj-track-drag-overlay strong { font-size: 11px; }
 .dj-track-drag-overlay span { color: #98a8ba; font-size: 9px; }
-.dj-junction-live-panel { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 12px; overflow: auto; padding: clamp(14px, 3vw, 32px); background: radial-gradient(circle at 18% 0, #172b3e 0, #0a0b0c 42%); }
-.dj-junction-live-panel > header { display: flex; align-items: center; gap: 10px; }
-.dj-junction-live-panel > header svg { width: 23px; color: #5ca6ff; }
-.dj-junction-live-panel > header div { display: flex; flex-direction: column; }
-.dj-junction-live-panel > header strong { color: #edf5ff; font-size: 16px; }
-.dj-junction-live-panel > header span, .dj-junction-live-panel > p { color: #8fa3b8; font-size: 10px; line-height: 1.55; }
-.dj-junction-live-panel > p { max-width: 680px; }
-.dj-junction-live-card { max-width: 820px; display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 9px; align-items: center; min-height: 64px; border: 1px solid #303943; border-radius: 5px; padding: 9px; background: #14181ddd; }
-.dj-junction-live-card[data-role="current"] { border-color: #376d9e; box-shadow: inset 3px 0 #4ea1ff; }
-.dj-junction-live-card[data-role="next"] { opacity: .65; }
-.dj-junction-live-card-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: #202832; color: #7d9dbd; }
-.dj-junction-live-card-icon svg { width: 16px; }
-.dj-junction-live-card > div:nth-child(2) { display: flex; min-width: 0; flex-direction: column; }
-.dj-junction-live-card small { color: #7192b2; font-size: 8px; font-weight: 700; letter-spacing: .08em; }
-.dj-junction-live-card strong, .dj-junction-live-card span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dj-junction-live-card strong { color: #e4e8ed; font-size: 11px; }
-.dj-junction-live-card span { color: #838d98; font-size: 9px; }
-.dj-junction-live-card-state { display: flex; align-items: flex-end; flex-direction: column; color: #74808d; font-size: 8px; font-variant-numeric: tabular-nums; }
-.dj-junction-live-card-state b { color: #7fcaa3; white-space: nowrap; }
 .dj-tree-row.is-dragging { opacity: .35; cursor: grabbing; }
-.dj-tree-row .dj-junction-spinner { width: 11px; height: 11px; margin-left: auto; color: #3f8cff; }

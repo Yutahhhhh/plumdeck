@@ -4,15 +4,10 @@
 #include "scratch_deck.h"
 #include "sampler_bank.h"
 #include "beat_fx.h"
-#include "junction/ddj_checkpoint.h"
-#include "junction/keylock_checkpoint.h"
-#include "junction/fx_checkpoint.h"
 #include "engine/effects/engineeffectsmanager.h"
-#include <future>
 #include "junction/runtime.h"
 #include "junction/audio_bridge.h"
 #include "junction/private_preview.h"
-#include "junction/replay_driver.h"
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -83,91 +78,6 @@ public:
         return preview_.command(op,params);
     }
     QJsonObject privatePreviewState() const override { auto state=preview_.state();state["available"]=available_&&pflAvailable_;return state; }
-    bool validateDspAsset(const QString& path) const override {return junction::ddj::read(path,nullptr)||junction::keylock::read(path,nullptr)||junction::fx::read(path,nullptr);}
-    bool validateAudioAsset(const QString& path) const override {
-        const auto binding=waveform::ensureSourceBinding(path);
-        return binding.provider&&binding.fingerprint==waveform::sourceFingerprint(path);
-    }
-    QJsonObject junctionGraph() const override {
-        auto* self=const_cast<MixxxBackend*>(this);
-        if(!self->capturedGraph_.isEmpty()){const auto graph=self->capturedGraph_;self->capturedGraph_={};return graph;}
-        if(!self->snapshotPending_&&!self->snapshotWrite_.valid()&&!self->restoring_&&available_)self->snapshotPending_=true;
-        return {};
-    }
-    QJsonObject snapshotStoppedGraph() const {
-
-        QJsonArray items;
-        if(!available_)return {};
-        for(int i=0;i<4;++i){QJsonObject controls;
-            const auto presentation=junctionTrackPresentation?junctionTrackPresentation(i):QJsonObject{};
-            for(const auto* key:graphControls())controls[key]=ControlObject::get(ConfigKey(groups[i],key));
-            items.append(QJsonObject{{"index",i},{"path",tracks_[i]?tracks_[i]->getLocation():QString()},{"title",tracks_[i]?presentation["title"].toString(tracks_[i]->getTitle().isEmpty()?QFileInfo(tracks_[i]->getLocation()).completeBaseName():tracks_[i]->getTitle()):QString()},{"artist",tracks_[i]?presentation["artist"].toString(tracks_[i]->getArtist()):QString()},
-                {"positionFrames",tracks_[i]?decks_[i]->junctionPositionFrames():0},
-                {"sourceSampleRateHz",tracks_[i]?int(tracks_[i]->getSampleRate().value()):0},
-                {"play",playing(i)},{"scratching",scratching(i)},{"tempo",playbackRate(i)},{"speed",decks_[i]->junctionSpeed()},
-                {"controls",controls},{"performance",performanceState(i)},{"beatgrid",beatgridState(i)}});
-        }
-        bool historyRequired=micEnabled_||micDuckingEnabled_||(beatFx_&&beatFx_->state()["enabled"].toBool()&&!capturedDspReady_);
-        for(int i=0;i<4;++i){const auto group=StandardEffectChain::formatEffectChainGroup(i);historyRequired|=ControlObject::get(ConfigKey(group,"enabled"))>0||std::abs(colorAmounts_[i])>.005||scratching(i)||ControlObject::get(ConfigKey(groups[i],"keylock"))>0||ControlObject::get(ConfigKey(groups[i],"slip_enabled"))>0||ControlObject::get(ConfigKey(groups[i],"reverseroll"))>0;}
-        QJsonObject result{{"schema",1},{"decks",items},{"mixer",mixer()},{"sampler",samplers_->junctionState()},
-            {"engineFingerprint",QStringLiteral("mixxx-3ebac449-junction-graph3")},{"microphoneClosed",!micEnabled_},{"microphoneTailSettled",!micEnabled_&&!micDuckingEnabled_},
-            {"dspStateComplete",!historyRequired},{"requiresHistoricalDsp",historyRequired},{"dspStateStrategy","semantic-plus-exclusive-replay"},{"renderFrame",QString::number(renderDriver_.clock().renderFrame())}};
-        if(auto* runtime=junctionRuntime_.load(std::memory_order_acquire))result["throughSeq"]=QString::number(runtime->currentAppliedSequence());
-        return result;
-    }
-    QString restoreJunctionGraph(const QJsonObject& graph) override {
-        if(!available_)return "Mixxx audio graph is unavailable";
-        if(!graph["snapshotError"].toString().isEmpty())return graph["snapshotError"].toString();
-        const auto items=graph["decks"].toArray();
-        if(graph["schema"].toInt()!=1||items.size()!=4)return "Invalid Junction graph schema";
-        // Paths have already been resolved from verified asset IDs by Runtime.
-        // Validate every deck before changing any of the shared graph.
-        for(int i=0;i<4;++i){const auto row=items[i].toObject();const auto path=row["path"].toString();
-            const auto pos=row["positionFrames"].toDouble(-1);
-            if(row["index"].toInt(-1)!=i||!std::isfinite(pos)||(path.isEmpty()?pos!=0:pos < -60.0*row["sourceSampleRateHz"].toDouble())||(!path.isEmpty()&&(!QFileInfo(path).isAbsolute()||!QFileInfo(path).isFile())))return "Invalid resolved Junction deck";
-            const auto grid=row["beatgrid"].toObject();double previous=-1;
-            if(grid["markers"].toArray().size()>100000)return "Junction beatgrid is too large";
-            for(const auto v:grid["markers"].toArray()){const auto marker=v.toObject();const auto frame=marker["positionFrames"].toDouble(-1);const auto count=marker["beatsTillNext"].toDouble(-1);if(!std::isfinite(frame)||frame<0||frame<=previous||frame!=std::floor(frame)||count<1||count>100000||count!=std::floor(count))return "Invalid Junction beat marker";previous=frame;}
-            if((!grid["markers"].toArray().isEmpty()||grid["lastMarkerBpm"].toDouble()>0)&&(!std::isfinite(grid["lastMarkerBpm"].toDouble())||grid["lastMarkerBpm"].toDouble()<=0||grid["lastMarkerBpm"].toDouble()>1000||grid["lastMarkerMs"].toDouble(-1)<0))return "Invalid Junction beatgrid tempo";
-            const auto controls=row["controls"].toObject();for(const auto* key:graphControls())if(controls.contains(key)&&(!controls[key].isDouble()||!std::isfinite(controls[key].toDouble())))return "Invalid Junction deck control";
-        }
-        if(!graph["microphoneClosed"].toBool())return "Close the performing microphone before preparing a handoff";
-        if(micEnabled_)return "Close your local microphone before replacing the shared graph";
-        std::vector<junction::ddj::Snapshot> dspStates;
-        junction::keylock::Snapshot keylockStates;
-        junction::fx::Snapshot fxStates;
-        const auto dspAssets=graph["dspStateAssets"].toArray();if(dspAssets.size()>3)return "Too many Junction DSP checkpoints";
-        for(const auto value:dspAssets){const auto asset=value.toObject();
-            if(asset["format"].toString()==junction::fx::format){if(!fxStates.empty()||asset["fingerprint"].toString()!=junction::fx::fingerprint||!junction::fx::read(asset["path"].toString(),&fxStates))return "Invalid verified FX checkpoint";continue;}
-            if(asset["format"].toString()==junction::keylock::format){if(!keylockStates.empty()||asset["fingerprint"].toString()!=junction::keylock::fingerprint||!junction::keylock::read(asset["path"].toString(),&keylockStates))return "Invalid verified keylock checkpoint";continue;}
-            junction::ddj::Snapshot snapshot;if(asset["format"].toString()!="plumdeck-ddj-dsp-v1"||asset["fingerprint"].toString()!=QString::fromLatin1(junction::ddj::fingerprint)||!junction::ddj::read(asset["path"].toString(),&snapshot)||snapshot.processor!=asset["processor"].toString())return "Invalid verified Junction DSP checkpoint";dspStates.push_back(std::move(snapshot));}
-        pendingDsp_=std::move(dspStates);pendingKeylock_=std::move(keylockStates);pendingFx_=std::move(fxStates);
-        for(int i=0;i<4;++i){restoreDecks_[i]={};restoreAfter_[i]=0;play(i,false);}
-        const auto samplerError=samplers_->restoreJunction(graph["sampler"].toObject());if(!samplerError.isEmpty())return samplerError;
-        originalGraph_=graph;aligning_=false;
-        pendingMixer_=graph["mixer"].toObject();restoring_=true;restoreError_.clear();restoreTransfer_=0;
-        for(int i=0;i<4;++i){const auto row=items[i].toObject();
-            const auto generation=generations_[i]+1;
-            if(graphDeckRestoring)graphDeckRestoring(i,generation,row);
-            if(row["path"].toString().isEmpty()){unload(i);continue;}
-            restoreDecks_[i]=row;load(i,row["path"].toString(),generation);
-        }
-        return {};
-    }
-    QString alignJunctionGraph(quint64 mediaFrame) override {
-        if(!junctionGraphReady()||originalGraph_.isEmpty())return "Wait for Junction graph decoding and restoration";
-        bool valid=false;const auto origin=originalGraph_["atMediaFrame"].toString().toULongLong(&valid);
-        if(!valid||mediaFrame<origin)return "Invalid Junction graph media anchor";
-        const auto items=originalGraph_["decks"].toArray();
-        for(const auto value:items){const auto row=value.toObject();const auto c=row["controls"].toObject();if(c["slip_enabled"].toDouble()>0||c["reverseroll"].toDouble()>0||row["scratching"].toBool())return "Slip and scratch require historical graph replay";}
-        alignTarget_=mediaFrame;aligning_=true;restoring_=true;restoreTransfer_=0;restoreError_.clear();
-        return {};
-    }
-    bool junctionGraphReady() const override {
-        if(!available_||restoring_||!restoreError_.isEmpty()||!samplers_->junctionReady())return false;
-        for(int i=0;i<4;++i)if(!restoreDecks_[i].isEmpty()||!deckErrors_[i].isEmpty()||(tracks_[i]&&!deckReady_[i])||decks_[i]->junctionAudioBlocks()<restoreAfter_[i])return false;
-        return true;
-    }
     QString implementation() const override { return "mixxx"; }
     void start() override {
         if (started_) return;
@@ -278,14 +188,12 @@ public:
             auto* buffer = decks_[index]->getEngineBuffer();
             QObject::connect(buffer, &EngineBuffer::trackLoaded, this, [this, index](TrackPointer track, TrackPointer) {
                 if (!track || track != tracks_[index]) return; // nullptr is eject.
-                deckReady_[index]=true;deckErrors_[index].clear();
-                tryFinalizeGraphRestore();
                 decks_[index]->setLoadGeneration(generations_[index]);
                 releaseScratch(index); // Publish the decoded source rate before accepting gestures.
-                if (loaded) loaded(index, generations_[index], {{"junctionRestore",!restoreDecks_[index].isEmpty()},{"durationMs", track->getDuration() * 1000.0}, {"sampleRateHz", static_cast<int>(track->getSampleRate().value())}, {"channels", track->getChannels()}}, {});
+                if (loaded) loaded(index, generations_[index], {{"durationMs", track->getDuration() * 1000.0}, {"sampleRateHz", static_cast<int>(track->getSampleRate().value())}, {"channels", track->getChannels()}}, {});
             }, Qt::QueuedConnection);
             QObject::connect(buffer, &EngineBuffer::trackLoadFailed, this, [this, index](TrackPointer track, const QString& reason) {
-                if (track == tracks_[index]) { deckErrors_[index]=reason;deckReady_[index]=false;if(loaded)loaded(index, generations_[index], {}, reason); }
+                if (track == tracks_[index]) { if(loaded)loaded(index, generations_[index], {}, reason); }
             }, Qt::QueuedConnection);
         }
         sound_ = std::make_unique<SoundManager>(settings_, mixer_.get());
@@ -342,45 +250,32 @@ public:
             ControlObject::set(ConfigKey("[Master]", "headGain"), 1);
             ControlObject::set(ConfigKey("[Master]", "headMix"), -1);
         }
-        renderDriver_.requestTransfer(junction::GraphDriver::Realtime,junction::RenderMode::Performing);
         audioBridge_.context=this;
-        audioBridge_.before=[](void* context,unsigned frames) -> bool {auto* self=static_cast<MixxxBackend*>(context);self->audioCaptureSequence_.fetch_add(1,std::memory_order_acq_rel);self->blockGrant_=self->renderDriver_.beginBlock(junction::GraphDriver::Realtime);
-            // The JUNCTION deck is live input, never part of the replayable
-            // graph: only a block this callback itself processes may read it.
-            if(self->blockGrant_.mayProcess)self->feedJunctionAux(frames);
-            return self->blockGrant_.mayProcess;};
+        // The JUNCTION deck is live input: fed right before each block.
+        audioBridge_.before=[](void* context,unsigned frames){static_cast<MixxxBackend*>(context)->feedJunctionAux(frames);};
         audioBridge_.after=[](void* context,float* master,float* pfl,unsigned frames){
             auto* self=static_cast<MixxxBackend*>(context);
-            const auto frame=self->renderDriver_.clock().renderFrame();
+            const auto frame=self->renderFrame_;
             auto* runtime=self->junctionRuntime_.load(std::memory_order_acquire);
-            if(self->blockGrant_.mayProcess){
-                // The return is LOCAL NEXT only: the engine's local-channel bus,
-                // never main, so JUNCTION MASTER cannot reach it even while it
-                // is mixed into Program.
-                const bool localWritten=self->audioBridge_.localReturnWritten.exchange(false,std::memory_order_relaxed);
-                const float* local=localWritten?self->audioBridge_.localReturn.data():nullptr;
-                const bool programWritten=self->audioBridge_.programPreWritten.exchange(false,std::memory_order_relaxed);
-                if(runtime&&master){
-                    runtime->capture(programWritten?self->audioBridge_.programPre.data():master,local,frames,frame,44100);
-                    if(local)runtime->captureLocalReturn(local,frames,frame,44100);
-                }
-                // Metered as the venue receives it: before the booth (master) knob.
-                self->meterBlock(programWritten?self->audioBridge_.programPre.data():master,pfl,local,frames);
-                // SoundManager caches these device-sink addresses at open.
-                // Finish all reads from graph PCM before releasing ownership.
-                if(master)std::copy_n(master,frames*2,self->audioBridge_.idleMaster.data());
-                if(pfl)std::copy_n(pfl,frames*2,self->audioBridge_.idlePfl.data());
-                self->renderDriver_.clock().advance(frames);
+            // The return is LOCAL NEXT only: the engine's local-channel bus,
+            // never main, so JUNCTION MASTER cannot reach it even while it
+            // is mixed into Program.
+            const bool localWritten=self->audioBridge_.localReturnWritten.exchange(false,std::memory_order_relaxed);
+            const float* local=localWritten?self->audioBridge_.localReturn.data():nullptr;
+            const bool programWritten=self->audioBridge_.programPreWritten.exchange(false,std::memory_order_relaxed);
+            if(runtime&&master){
+                runtime->capture(programWritten?self->audioBridge_.programPre.data():master,local,frames,frame,44100);
+                if(local)runtime->captureLocalReturn(local,frames,frame,44100);
             }
-            master=self->audioBridge_.idleMaster.data();pfl=self->audioBridge_.idlePfl.data();
-            self->audioCaptureSequence_.fetch_add(1,std::memory_order_release);
-            if(!self->blockGrant_.mayProcess || (runtime&&!runtime->sharedAudible())){
-                if(master)std::fill_n(master,frames*2,0.f);
-                if(pfl)std::fill_n(pfl,frames*2,0.f);
-            }
-            if(runtime&&!runtime->localMasterAudible())std::fill_n(master,frames*2,0.f);
-            self->preview_.mixPfl(pfl,frames);
-            if(self->blockGrant_.mayProcess&&self->blockGrant_.releaseRequested){self->audioBridge_.inputsEnabled.store(false,std::memory_order_release);self->renderDriver_.acknowledgeRelease(junction::GraphDriver::Realtime,frame+frames,self->blockGrant_.generation);}
+            // Metered as the venue receives it: before the booth (master) knob.
+            self->meterBlock(programWritten?self->audioBridge_.programPre.data():master,pfl,local,frames);
+            self->renderFrame_+=frames;
+            // Devices play these copies, so the booth mute and the private
+            // preview never alter the engine's own main or headphone buffers.
+            if(master)std::copy_n(master,frames*2,self->audioBridge_.deviceMaster.data());
+            if(pfl)std::copy_n(pfl,frames*2,self->audioBridge_.devicePfl.data());
+            if(runtime&&!runtime->localMasterAudible())std::fill_n(self->audioBridge_.deviceMaster.data(),frames*2,0.f);
+            self->preview_.mixPfl(self->audioBridge_.devicePfl.data(),frames);
         };
         junction::audioBridge.store(&audioBridge_,std::memory_order_release);
         auto status = sound_->setConfig(config);
@@ -391,7 +286,6 @@ public:
         auto* scratchDiagnostics = new QTimer(this);
         connect(scratchDiagnostics, &QTimer::timeout, this, [this] { saveScratchDiagnostics(); });
         scratchDiagnostics->start(250);
-        auto* graphRestoreTimer=new QTimer(this);connect(graphRestoreTimer,&QTimer::timeout,this,[this]{tryCaptureGraph();tryFinalizeGraphRestore();});graphRestoreTimer->start(5);
     }
     ~MixxxBackend() override {
         for (int index = 0; index < 4; ++index) if (decks_[index]) releaseScratch(index);
@@ -570,7 +464,6 @@ public:
         pitchbend(index, 0);
         releaseScratch(index);
         disableFx(index);
-        deckReady_[index]=false;deckErrors_[index].clear();
         generations_[index] = generation;
         for (const auto& control : {"slip_enabled","reverse","reverseroll","pitch_adjust"}) ControlObject::set(ConfigKey(groups[index],control),0);
         tracks_[index] = Track::newTemporary(path);
@@ -580,7 +473,6 @@ public:
         pitchbend(index, 0);
         releaseScratch(index);
         disableFx(index);
-        deckReady_[index]=false;deckErrors_[index].clear();
         ++generations_[index]; tracks_[index].reset();
         ControlObject::set(ConfigKey(groups[index], "play"), 0);
         decks_[index]->getEngineBuffer()->ejectTrack();
@@ -1050,60 +942,8 @@ public:
     }
 private:
     std::unique_ptr<waveform::Manager> waveforms_;
-    QString channelName(int handle) const {for(const auto& channel:effects_->registeredInputChannels())if(channel.handle().handle()==handle)return channel.name();for(const auto& channel:effects_->registeredOutputChannels())if(channel.handle().handle()==handle)return channel.name();return {};}
-    void tryCaptureGraph(){
-        if(snapshotWrite_.valid()){
-            if(snapshotWrite_.wait_for(std::chrono::seconds(0))==std::future_status::ready){auto result=snapshotWrite_.get();capturedGraph_=result.first;if(!result.second.isEmpty())capturedGraph_["dspStateAssets"]=result.second;else if(capturedDspReady_){capturedGraph_["dspStateComplete"]=false;capturedGraph_["requiresHistoricalDsp"]=true;}}
-            return;
-        }
-        if(!snapshotPending_||restoring_)return;
-        if(!snapshotTransfer_){
-            snapshotProcessor_=nullptr;preparedDsp_={};capturedDspReady_=false;preparedKeylock_.clear();preparedFx_.clear();preparedFxSlots_.clear();
-            for(const auto& slot:activeFxSlots())if(junction::fx::supported(slot->id())){preparedFxSlots_.push_back(slot);preparedFx_.push_back(junction::fx::prepare(*slot,[this](int handle){return channelName(handle);}));}
-            for(int i=0;i<4;i++)if(tracks_[i]&&(ControlObject::get(ConfigKey(groups[i],"keylock"))>0||std::abs(ControlObject::get(ConfigKey(groups[i],"pitch_adjust")))>0.00001)){preparedKeylock_.emplace_back();preparedKeylock_.back().deck=i;}
-            const auto beat=beatFx_->state();if(beat["enabled"].toBool()){snapshotProcessor_=junction::ddj::latest(beat["processor"].toString());if(snapshotProcessor_)preparedDsp_=snapshotProcessor_->prepare([this](int handle){return channelName(handle);});}
-            snapshotTransfer_=renderDriver_.requestTransfer(junction::GraphDriver::None,junction::RenderMode::Cold);return;
-        }
-        if(audioBridge_.inputReaders.load(std::memory_order_acquire)||!renderDriver_.transferComplete(snapshotTransfer_))return;
-        if(snapshotProcessor_&&snapshotProcessor_==junction::ddj::latest(preparedDsp_.processor)&&!preparedDsp_.routes.empty())capturedDspReady_=snapshotProcessor_->captureInto(preparedDsp_);
-        bool keylockFailed=false;for(auto& state:preparedKeylock_){const auto ok=junction::keylock::capture(*decks_[state.deck]->getEngineBuffer(),state);if(!ok)keylockFailed=true;if(qEnvironmentVariableIsSet("PLUMDECK_JUNCTION_TRACE"))qWarning()<<"junction keylock capture"<<state.deck<<ok<<state.position<<state.speed<<state.pitch<<state.processor.virtualPitch<<state.processor.virtualTempo;}
-        bool fxFailed=false;for(size_t i=0;i<preparedFx_.size();i++)if(!junction::fx::capture(*preparedFxSlots_[i],preparedFx_[i]))fxFailed=true;
-        auto graph=snapshotStoppedGraph();if(fxFailed){graph["snapshotError"]="FXの状態をまだ引き継げません";preparedFx_.clear();}if(keylockFailed){graph["snapshotError"]="キー固定処理の状態をまだ引き継げません";preparedKeylock_.clear();}
-        renderDriver_.requestTransfer(junction::GraphDriver::Realtime,junction::RenderMode::Performing);audioBridge_.inputsEnabled.store(true,std::memory_order_release);
-        snapshotPending_=false;snapshotTransfer_=0;snapshotProcessor_=nullptr;
-        if(!capturedDspReady_&&preparedKeylock_.empty()&&preparedFx_.empty()){capturedGraph_=graph;return;}
-        const auto path=profile_.filePath(QStringLiteral("junction-dsp.bin"));
-        auto snapshot=std::move(preparedDsp_);auto keylocks=std::move(preparedKeylock_);const auto keylockPath=profile_.filePath("junction-keylock.bin");
-        auto fxStates=std::move(preparedFx_);const auto fxPath=profile_.filePath("junction-fx.bin");preparedFxSlots_.clear();
-        snapshotWrite_=std::async(std::launch::async,[path,keylockPath,fxPath,graph,snapshot=std::move(snapshot),keylocks=std::move(keylocks),fxStates=std::move(fxStates)]() mutable {
-            QJsonArray assets;
-            if(!snapshot.routes.empty()&&junction::ddj::write(path,snapshot))assets.append(QJsonObject{{"path",path},{"format","plumdeck-ddj-dsp-v1"},{"fingerprint",QString::fromLatin1(junction::ddj::fingerprint)},{"processor",snapshot.processor},{"byteSize",double(QFileInfo(path).size())}});
-            if(!keylocks.empty()&&junction::keylock::write(keylockPath,keylocks))assets.append(QJsonObject{{"path",keylockPath},{"format",junction::keylock::format},{"fingerprint",junction::keylock::fingerprint},{"byteSize",double(QFileInfo(keylockPath).size())}});
-            if(!fxStates.empty()&&junction::fx::write(fxPath,fxStates))assets.append(QJsonObject{{"path",fxPath},{"format",junction::fx::format},{"fingerprint",junction::fx::fingerprint},{"byteSize",double(QFileInfo(fxPath).size())}});
-            const int expected=int(!snapshot.routes.empty())+int(!keylocks.empty())+int(!fxStates.empty());
-            if(assets.size()!=expected)graph["snapshotError"]="FXの引き継ぎ状態を保存できません";
-            return std::make_pair(graph,assets);
-        });
-    }
-    std::vector<EffectSlotPointer> activeFxSlots() const {
-        std::vector<EffectSlotPointer> activeSlots;
-        for(int i=0;i<4;i++){
-            if(std::abs(colorAmounts_[i])>.005)activeSlots.push_back(effects_->getQuickEffectChain(groups[i])->getEffectSlot(0));
-            if(ControlObject::get(ConfigKey(StandardEffectChain::formatEffectChainGroup(i),"enabled"))>0)activeSlots.push_back(effects_->getStandardEffectChain(i)->getEffectSlot(0));
-        }
-        if(beatFx_->state()["enabled"].toBool())activeSlots.push_back(beatFx_->getEffectSlot(0));
-        return activeSlots;
-    }
-    EffectSlotPointer findFxSlot(const QString& group) const {
-        for(int i=0;i<4;i++)for(const auto& slot:{effects_->getQuickEffectChain(groups[i])->getEffectSlot(0),effects_->getStandardEffectChain(i)->getEffectSlot(0)})if(slot->getGroup()==group)return slot;
-        auto beat=beatFx_->getEffectSlot(0);return beat->getGroup()==group?beat:EffectSlotPointer{};
-    }
-    static QJsonObject effectParameters(const EffectSlotPointer& slot){QJsonObject result;for(const auto& map:{slot->getLoadedParameters(),slot->getHiddenParameters()})for(const auto& values:map)for(const auto& parameter:values)result[parameter->manifest()->id()]=parameter->getValue();return result;}
-    bool restoreEffectParameters(const EffectSlotPointer& slot,const QJsonObject& values){
-        for(const auto& map:{slot->getLoadedParameters(),slot->getHiddenParameters()})for(const auto& parameters:map)for(const auto& parameter:parameters){const auto value=values[parameter->manifest()->id()];if(value.isUndefined())continue;if(!value.isDouble()||value.toDouble()<parameter->manifest()->getMinimum()||value.toDouble()>parameter->manifest()->getMaximum()){restoreError_="Invalid Junction FX parameter";return false;}parameter->setValue(value.toDouble());parameter->updateEngineState();}return true;
-    }
-    static const std::array<const char*,20>& graphControls(){static const std::array<const char*,20> keys={"rate","rateRange","keylock","pitch_adjust","slip_enabled","reverse","reverseroll","volume","pregain","filterLow","filterMid","filterHigh","orientation","loop_start_position","loop_end_position","loop_enabled","cue_point","sync_enabled","sync_leader","rate_ratio"};return keys;}
-    /// Audio thread, realtime grant only: no locks, no allocation.
+    static QJsonObject effectParameters(const EffectSlotPointer& slot){QJsonObject result;for(const auto& map:{slot->getLoadedParameters(),slot->getHiddenParameters()})for(const auto& parameter:map)for(const auto& value:parameter)result[value->manifest()->id()]=value->getValue();return result;}
+    /// Audio thread: no locks, no allocation.
     void feedJunctionAux(unsigned frames) noexcept {
         if(!junctionAux_)return;
         const unsigned count=std::min(frames,junction::AudioBridge::maxFrames);
@@ -1111,113 +951,12 @@ private:
         if(runtime)runtime->readJunctionInput(junctionAuxBuffer_.data(),count);else std::fill_n(junctionAuxBuffer_.data(),size_t(count)*2,0.f);
         junctionAux_->receiveBuffer(junctionAuxInput_,junctionAuxBuffer_.data(),count);
     }
-    /// Graph owner released: replay renders neither the microphone nor the
-    /// JUNCTION deck, which the realtime callback no longer touches either.
-    void detachLiveInputs(){
-        if(microphone_)microphone_->receiveBuffer(AudioInput(AudioPathType::Microphone,0,mixxx::audio::ChannelCount::stereo(),0),nullptr,0);
-        if(junctionAux_)junctionAux_->receiveBuffer(junctionAuxInput_,nullptr,0);
-    }
-    void tryFinalizeGraphRestore(){
-        if(!restoring_||!samplers_||!samplers_->junctionLoaded())return;
-        for(int i=0;i<4;++i)if(tracks_[i]&&!deckReady_[i])return;
-        if(!restoreTransfer_){restoreTransfer_=renderDriver_.requestTransfer(aligning_?junction::GraphDriver::Replay:junction::GraphDriver::None,aligning_?junction::RenderMode::WarmOffline:junction::RenderMode::Cold);return;}
-        if(audioBridge_.inputReaders.load(std::memory_order_acquire)!=0)return;
-        if(!renderDriver_.transferComplete(restoreTransfer_))return;
-        // Drop any input-only device pointer queued just before ownership
-        // closed; its hardware memory can be reused while replay is running.
-        detachLiveInputs();
-        // One owner released at a block boundary. All controls and queued
-        // exact seeks become visible together to the next realtime block.
-        if(aligning_){
-            if(auto* runtime=junctionRuntime_.load(std::memory_order_acquire))alignTarget_=std::max(alignTarget_,runtime->currentMediaFrame());
-            const auto origin=originalGraph_["atMediaFrame"].toString().toULongLong();
-            const auto delta=alignTarget_-origin;
-            const auto target=restoreStartRender_+(delta/48000)*44100+(delta%48000)*44100/48000;
-            // Device sinks read their separate idle buffers while Replay owns
-            // the graph. Bound each main-thread burst; decoding and Qt control
-            // delivery continue between bursts, never a second EngineMixer.
-            for(unsigned block=0;block<8&&renderDriver_.clock().renderFrame()<target;++block){
-                const auto grant=renderDriver_.beginBlock(junction::GraphDriver::Replay);if(!grant.mayProcess)return;
-                const unsigned frames=unsigned(std::min<quint64>(256,target-renderDriver_.clock().renderFrame()));
-                mixer_->process(frames*2);
-                renderDriver_.clock().advance(frames);
-                if(grant.releaseRequested){renderDriver_.acknowledgeRelease(junction::GraphDriver::Replay,renderDriver_.clock().renderFrame(),grant.generation);return;}
-            }
-            if(renderDriver_.clock().renderFrame()<target)return;
-            if(auto* runtime=junctionRuntime_.load(std::memory_order_acquire)){const auto source=renderDriver_.clock().renderFrame(),rendered=source-restoreStartRender_;runtime->setCaptureAnchor(source,origin+(rendered/44100)*48000+(rendered%44100)*48000/44100);}
-            const auto release=renderDriver_.requestTransfer(junction::GraphDriver::Realtime,junction::RenderMode::ArmedRealtime);
-            renderDriver_.acknowledgeRelease(junction::GraphDriver::Replay,renderDriver_.clock().renderFrame(),release);
-            if(!renderDriver_.transferComplete(release))return;
-            aligning_=false;
-        }else{
-            for(int i=0;i<4;++i)applyGraphDeck(i);
-            restoreError_=samplers_->finalizeJunctionRestore();
-            restoreStartRender_=renderDriver_.clock().renderFrame();
-            if(auto* runtime=junctionRuntime_.load(std::memory_order_acquire)){bool valid=false;const auto origin=originalGraph_["atMediaFrame"].toString().toULongLong(&valid);if(valid)runtime->setCaptureAnchor(restoreStartRender_,origin);}
-            applyGraphMixer();pendingMixer_={};
-            if(!pendingFx_.empty()){effects_->getEngineEffectsManager()->onCallbackStart();for(const auto& snapshot:pendingFx_){auto slot=findFxSlot(snapshot.group);if(!slot||!junction::fx::restore(*slot,snapshot,[this](const QString& name){return handles_->handleForGroup(name).handle();}))restoreError_="FX state or routes differ from checkpoint";}pendingFx_.clear();}
-            for(const auto& snapshot:pendingDsp_){auto* processor=junction::ddj::latest(snapshot.processor);if(!processor||!processor->restore(snapshot,[this](const QString& name){return handles_->handleForGroup(name).handle();}))restoreError_="DSP processor routes differ from checkpoint";}
-            pendingDsp_.clear();
-            for(const auto& state:pendingKeylock_){const auto ok=junction::keylock::restore(*decks_[state.deck]->getEngineBuffer(),state);if(!ok)restoreError_="Keylock DSP state differs from checkpoint";if(qEnvironmentVariableIsSet("PLUMDECK_JUNCTION_TRACE"))qWarning()<<"junction keylock restore"<<state.deck<<ok<<state.position<<state.speed<<state.pitch<<state.processor.virtualPitch<<state.processor.virtualTempo;}
-            pendingKeylock_.clear();
-        }
-        restoring_=false;restoreTransfer_=0;
-        renderDriver_.requestTransfer(junction::GraphDriver::Realtime,junction::RenderMode::ArmedRealtime);
-        audioBridge_.inputsEnabled.store(true,std::memory_order_release);
-    }
-    void applyGraphDeck(int i){
-        if(restoreDecks_[i].isEmpty())return;
-        const auto row=restoreDecks_[i];restoreDecks_[i]={};
-        const double rate=tracks_[i]->getSampleRate().value();
-        if(row["sourceSampleRateHz"].toDouble()!=rate||row["positionFrames"].toDouble()>tracks_[i]->getDuration()*rate){deckErrors_[i]="Resolved asset format or duration differs from graph";return;}
-        const auto grid=row["beatgrid"].toObject();
-        if(!grid["markers"].toArray().isEmpty()||grid["lastMarkerBpm"].toDouble()>0){
-            std::vector<mixxx::BeatMarker> markers;
-            for(const auto value:grid["markers"].toArray()){const auto marker=value.toObject();markers.emplace_back(mixxx::audio::FramePos(marker["positionFrames"].toDouble()),marker["beatsTillNext"].toInt());}
-            const auto beats=mixxx::Beats::fromBeatMarkers(tracks_[i]->getSampleRate(),markers,mixxx::audio::FramePos(grid["lastMarkerMs"].toDouble()*rate/1000),mixxx::Bpm(grid["lastMarkerBpm"].toDouble()));
-            if(!beats||!tracks_[i]->trySetBeats(beats)){deckErrors_[i]="Junction beatgrid could not be restored";return;}
-        }
-        const auto controls=row["controls"].toObject();
-        for(const auto* key:graphControls())if(controls.contains(key))ControlObject::set(ConfigKey(groups[i],key),controls[key].toDouble());
-        const auto performance=row["performance"].toObject();placementQuantize_[i]=performance["quantize"].toBool();
-        const auto cues=performance["hotCues"].toArray();for(int c=0;c<cues.size()&&c<16;++c)if(cues[c].isDouble())ControlObject::set(ConfigKey(groups[i],QStringLiteral("hotcue_%1_position").arg(c+1)),engineSamples(i,cues[c].toDouble()));
-        decks_[i]->getEngineBuffer()->queueNewPlaypos(mixxx::audio::FramePos(row["positionFrames"].toDouble()),EngineBuffer::SEEK_EXACT);
-        play(i,row["play"].toBool());restoreAfter_[i]=decks_[i]->junctionAudioBlocks()+2;
-    }
-    void applyGraphMixer(){
-        if(pendingMixer_.isEmpty())return;
-        const auto m=pendingMixer_;masterGain(m["masterGain"].toDouble(.5));crossfader(m["crossfader"].toDouble());
-        const auto channels=m["channels"].toObject();
-        for(int i=0;i<4;++i){const auto ch=channels[names[i]].toObject();const auto color=ch["colorFx"].toObject();const auto colorError=colorFx(i,color["effect"].toString("filter"),color["amount"].toDouble());if(!colorError.isEmpty())restoreError_=colorError;restoreEffectParameters(effects_->getQuickEffectChain(groups[i])->getEffectSlot(0),color["parameters"].toObject());const auto effect=ch["fx"].toObject();if(!fx(i,effect["effect"].toString("echo"),effect["enabled"].toBool(),effect["mix"].toDouble(),effect["depth"].toDouble(.5)))restoreError_="Junction FX processor unavailable";restoreEffectParameters(effects_->getStandardEffectChain(i)->getEffectSlot(0),effect["parameters"].toObject());}
-        auto beat=m["beatFx"].toObject();if(beat["auto"].toBool())beat.remove("bpm");if(!beat.isEmpty()){const auto error=beatFx_->restoreSemantic(beat);if(!error.isEmpty())restoreError_=error;}
-    }
-    bool snapshotPending_=false,capturedDspReady_=false;
-    quint64 snapshotTransfer_=0;
-    junction::ddj::Processor* snapshotProcessor_=nullptr;
-    junction::ddj::Snapshot preparedDsp_;
-    std::vector<junction::ddj::Snapshot> pendingDsp_;
-    QJsonObject capturedGraph_;
-    std::future<std::pair<QJsonObject,QJsonArray>> snapshotWrite_;
-    junction::keylock::Snapshot preparedKeylock_,pendingKeylock_;
-    junction::fx::Snapshot preparedFx_,pendingFx_;
-    std::vector<EffectSlotPointer> preparedFxSlots_;
-    std::atomic<quint64> audioCaptureSequence_{0};
     std::atomic<junction::Runtime*> junctionRuntime_{nullptr};
     junction::AudioBridge audioBridge_;
-    junction::ReplayDriver renderDriver_{44100,0};
-    junction::DriveGrant blockGrant_;
+    /// Audio thread only: frames rendered since the stream opened.
+    quint64 renderFrame_=0;
     junction::PrivatePreview preview_;
-    std::array<QJsonObject,4> restoreDecks_;
-    std::array<quint64,4> restoreAfter_{};
-    std::array<bool,4> deckReady_{};
-    std::array<QString,4> deckErrors_;
     std::array<double,4> fxDepths_{};
-    QJsonObject pendingMixer_;
-    bool restoring_=false,aligning_=false;
-    QJsonObject originalGraph_;
-    quint64 alignTarget_=0,restoreStartRender_=0;
-    quint64 restoreTransfer_=0;
-    QString restoreError_;
     void saveScratchDiagnostics() {
         QJsonObject deckStates;
         bool changed = false, active = false;

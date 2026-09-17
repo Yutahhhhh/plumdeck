@@ -142,12 +142,12 @@ export function McpView() {
             利用可能なツール {info && <Badge variant="secondary">{info.tool_count}</Badge>}
           </CardTitle>
           <CardDescription>
-            楽曲検索、セットリスト、分類、歌詞に加え、Junction の接続・DJ順・引き継ぎ・Program・試聴・Liveモニターを操作できます。
+            楽曲検索、セットリスト、分類、歌詞に加え、Junction の接続・DJ順・交代・Program・試聴を操作できます。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-muted-foreground">
-            Junction操作では、最初にAIから音声エンジンの準備と状態取得を実行できます。参加承認、開始、引き継ぎ、録音、退出、終了は実際のセッションへ反映されるため、AIへ対象と意図を明示してください。Junction Liveのデッキ割り当ては表示専用で、会場音声はProgram出力から流れます。
+            Junction操作では、最初にAIから音声エンジンの準備と状態取得を実行できます。参加承認、開始、強制交代、録音、退出、終了は実際のセッションへ反映されるため、AIへ対象と意図を明示してください。
           </div>
           <div className="grid gap-2">
             {info?.tools.map((tool, i) => (

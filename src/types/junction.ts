@@ -48,19 +48,12 @@ export interface JunctionParticipant {
   displayName: string;
   avatarDataUrl?: string;
   themeColor?: string;
-  slotId?: string;
-  invitationId?: string;
-  isPlaceholder?: boolean;
   orderIndex?: number;
   rosterStatus?: string;
-  /** The DJ asked to be considered next; only the coordinator starts handoff. */
-  turnRequested?: boolean;
   connectionQuality?: JunctionConnectionQuality;
   /** Set for PlumDeck Lite (phone) participants. */
   client?: 'lite';
   isHost?: boolean;
-  /** Session coordinator; independent from the current performer. */
-  isCoordinator?: boolean;
   isPerformer?: boolean;
   isNextUp?: boolean;
   status?: string;
@@ -81,24 +74,17 @@ export interface JunctionSnapshot {
   revision: number | string;
   localPeerId: string;
   hostPeerId: string;
-  /** Alias that describes the role without implying performance order. */
-  coordinatorPeerId?: string;
   performerPeerId: string;
   nextPeerId?: string;
-  lifecycle?: 'lobby' | 'starting' | 'live';
+  lifecycle?: 'lobby' | 'live';
   epoch: string;
   handoffState: string;
   participants: JunctionParticipant[];
-  readiness: { ready: boolean; reasons: string[] };
-  program: { state: string; captureActive?: boolean; localMonitor?: 'direct' | 'program-delayed'; meter?: number; outputDevice?: string; recording?: boolean };
+  program: { state: string; meter?: number; outputDevice?: string; recording?: boolean };
   connection: { state: string; detail?: string };
   /** Legacy single server invite. Manual mode uses per-participant exchange.inviteText. */
   invite?: string;
   exchange?: SnapshotExchange;
-  /** Local-only: tracks received from the remote performer. Never on the wire. */
-  junctionTracks?: JunctionTrack[];
-  /** A Lite DJ performs; this computer's decks are local preparation only. */
-  localPrep?: boolean;
   /** JUNCTION MASTER: the previous DJ's master as a local virtual input channel. */
   junctionInput?: JunctionInputState;
   /** Who holds the operator role (controls Program). Equal to performer today. */
@@ -145,16 +131,11 @@ export interface JunctionTurnState {
 export type ProgramVenueSource = 'none' | 'remote-host' | 'direct-stream' | 'local-mix';
 export interface JunctionProgramMixer {
   venueSource: ProgramVenueSource;
-  directStreamBypass: boolean;
-  junctionMaster: { peerId: string; inProgram: boolean; releasingPeerId: string };
-  localNext: { inProgram: boolean; cueOnly: boolean };
   /** Only local play is ever returned; `relayed-peer` is the host forwarding one Lite DJ to the next. */
   returnFeed: {
     source: 'none' | 'local-play' | 'relayed-peer';
     targetPeerId: string;
     feedbackBlocked: boolean;
-    /** `local-next-bus`: the engine's local-channel bus, which never contains JUNCTION MASTER. Absent on older runtimes. */
-    tap?: 'local-next-bus' | 'main-bus';
   };
 }
 export type JunctionDeckName = 'A' | 'B' | 'C' | 'D';
@@ -213,35 +194,6 @@ export interface JunctionInputSettings {
   eqMid?: number;
   eqHigh?: number;
 }
-export type JunctionTrackState = 'pending' | 'receiving' | 'verifying' | 'ready' | 'failed';
-export type JunctionTrackRole = 'current' | 'next';
-/** Current/next presentation metadata from the remote performer. */
-export interface JunctionTrack {
-  role: JunctionTrackRole;
-  assetId: string;
-  title: string;
-  artist: string;
-  musicalKey: string;
-  durationMs: number;
-  bpm: number;
-  sizeBytes: number;
-  sourcePeerId: string;
-  sourceDjName: string;
-  /** Deck on the performer's computer, or '' once it left every deck. */
-  sourceDeck: '' | 'A' | 'B' | 'C' | 'D';
-  onDeck: boolean;
-  playing: boolean;
-  positionMs: number;
-  rate: number;
-  audibility: number;
-  state: JunctionTrackState;
-  ready: boolean;
-  order: number;
-  progress: number;
-  detail?: string;
-  /** This computer's verified cache file; present only when ready. */
-  path?: string;
-}
 export type JunctionOp =
   | 'snapshot'
   | 'create'
@@ -258,9 +210,6 @@ export type JunctionOp =
   | 'profile.update'
   | 'roster.reorder'
   | 'session.start'
-  | 'handoff.request'
-  | 'handoff.cancel'
-  | 'handoff.accept'
   | 'recovery.resume'
   | 'turn.join'
   | 'turn.leave'
@@ -295,7 +244,6 @@ export type JunctionOp =
   | 'lite.roster.set'
   | 'input.set'
   | 'input.release';
-export interface JunctionLease { sessionId: string; epoch: string; actorPeerId: string }
 
 /** Sanitized result of exchange.inspect. No secrets, bounded fields. */
 export interface ExchangeInspection {

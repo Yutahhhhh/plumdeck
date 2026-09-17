@@ -1,6 +1,6 @@
 import { deckRealtimeStore } from "./deck-realtime-store";
 import { routePerformanceCommand } from '../performance-command-router';
-import { captureJunctionLease, junctionLeaseKey, junctionState } from '../junction/state';
+import { junctionLeaseKey, junctionState } from '../junction/state';
 /**
  * ネイティブ DJ エンジン（Phase 0 シミュレータ）のクライアントアダプタ。
  *
@@ -115,7 +115,7 @@ export class DjEngineClient {
   private controlQueues = new Map<string, LatestCommandQueue<ContinuousControl>>();
   private scratchQueues = new Map<DeckId, ScratchCommandQueue>();
   private backspins = new Map<DeckId, { spin: Backspin; gestureId: string }>();
-  private scratchGestures = new Map<string, { deck: DeckId; session: string | null; generation: number; trackId: string | undefined; positionMs: number; leaseKey: string; lease: ReturnType<typeof captureJunctionLease> }>();
+  private scratchGestures = new Map<string, { deck: DeckId; session: string | null; generation: number; trackId: string | undefined; positionMs: number; leaseKey: string }>();
   private stateListeners = new Set<StateListener>();
   private statusListeners = new Set<StatusListener>();
   private unsubscribers: UnlistenFn[] = [];
@@ -306,7 +306,7 @@ export class DjEngineClient {
     const reply = await invoke<EngineReply>("dj_engine_send", {
       sessionId,
       op,
-      params: routePerformanceCommand(op, params, (params._junction as ReturnType<typeof captureJunctionLease>) ?? captureJunctionLease()),
+      params: routePerformanceCommand(op, params),
     });
     if (reply.ok) {
       return reply.data;
@@ -397,7 +397,7 @@ export class DjEngineClient {
         session: this.sessionId,
         generation: this.seekGeneration[deck],
         trackId: this.clientState.snapshot?.decks[deck]?.track?.trackId,
-        positionMs, leaseKey: junctionLeaseKey(), lease: captureJunctionLease(),
+        positionMs, leaseKey: junctionLeaseKey(),
       };
       this.scratchGestures.set(gestureId, context);
     } else if (!context || context.deck !== deck) {
@@ -412,7 +412,7 @@ export class DjEngineClient {
         const guard = this.scratchGestures.get(queued.gestureId);
         if (!guard || guard.leaseKey !== junctionLeaseKey() || guard.session !== this.sessionId || guard.generation !== this.seekGeneration[deck]
           || guard.trackId !== this.clientState.snapshot?.decks[deck]?.track?.trackId) return;
-        return this.send(DJ_ENGINE_OPS.deckScratch, { ...queued, ...(guard.lease ? {_junction: guard.lease} : {}) });
+        return this.send(DJ_ENGINE_OPS.deckScratch, { ...queued });
       });
       this.scratchQueues.set(deck, queue);
     }

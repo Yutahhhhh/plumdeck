@@ -46,9 +46,6 @@ public:
         if (!requests_.push(request, enabled && !begin ? 64 : 0)) overflowGeneration_.store(request.generation);
     }
 
-    double junctionPositionFrames() const noexcept { return exactFrames_.load(std::memory_order_acquire); }
-    double junctionSpeed() const noexcept { return exactSpeed_.load(std::memory_order_acquire); }
-    quint64 junctionAudioBlocks() const noexcept { return exactBlocks_.load(std::memory_order_acquire); }
     bool scratching() const { return observedScratching_.load(); }
 
     QJsonObject audioDiagnostics() const {
@@ -293,9 +290,6 @@ public:
     void postProcess(const int bufferSize) override {
         EngineDeck::postProcess(bufferSize);
         const auto exact = getEngineBuffer()->getExactPlayPos();
-        exactFrames_.store(exact.isValid() ? exact.value() : 0, std::memory_order_release);
-        exactSpeed_.store(getEngineBuffer()->getSpeed(), std::memory_order_release);
-        exactBlocks_.fetch_add(1, std::memory_order_release);
         const double callbackMs = bufferSize * 500.0 / std::max(1.0, m_sampleRate.get());
         const bool scratching = getEngineBuffer()->getScratching();
         traceAudioMs_ += callbackMs;
@@ -325,8 +319,6 @@ private:
     deckclock::Boundary clockBoundary_;
     std::atomic<quint64> clockGeneration_{0};
     quint64 clockSequence_ = 0, appliedLoadGeneration_ = 0;
-    std::atomic<double> exactFrames_{0}, exactSpeed_{0};
-    std::atomic<quint64> exactBlocks_{0};
     static double monotonicMs() { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
     struct TraceRow { double audioMs, positionMs, speed, callbackMs, commandedSpeed, targetMs, requestAgeMs; bool held, scratching; };
     const bool traceEnabled_ = qEnvironmentVariableIntValue("PLUMDECK_MIXXX_TIMING_TRACE") == 1;
