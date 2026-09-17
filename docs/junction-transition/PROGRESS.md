@@ -1,18 +1,19 @@
 STATUS: IN_PROGRESS
 
 ## 進行中
-- タスク: T0.3
-- 方針: CURRENT.md と LITE.md の内容を踏まえ、`docs/junction-transition/DESIGN.md` を作成する。状態モデル対応表、プロトコルメッセージと機能フラグ、継ぎ目アルゴリズム、遅延予算、ON AIR検出、tail送出マスク／ロック表、障害時の動き、廃止・残置一覧、テスト計画、移行手順を書き、D1〜D4との矛盾がないか自己チェックする。
-- 触るファイル: docs/junction-transition/DESIGN.md（新規）, docs/junction-transition/PROGRESS.md
-- 途中経過: T0.1・T0.2 完了。これから T0.3 着手。
+- タスク: T1.1
+- 方針: `TurnState`（OFF/STANDBY/READY/ON AIR/OUTGOING、DESIGN.md 1.1〜1.2節）を純粋関数として実装し、C++ユニットテスト（junction-core-tests）を追加する。TS側（program-mixer.ts）も同じ導出にしてテストする。
+- 触るファイル: native/mixxx-engine-host/src/junction/authority.h/.cpp（turnPhase/readyBlockers追加）、新規 turn_state.h/.cpp、tests/junction/turn_state_test.cpp、src/services/junction/program-mixer.ts
+- 途中経過: T0.1〜T0.3（調査・設計）完了。T1.1 はこれから着手（未着手）。
 
 ## 次にやること
-- T0.3 設計書
-- T1.1 状態機械（実装開始）
+- T1.1 状態機械
+- T1.2 順番の自動化
 
 ## タスク一覧
 - [x] T0.1 現状の把握
 - [x] T0.2 share-musics（PlumDeck Lite）の調査（share-musics は `/Users/horiyuuta/Workspace/share-musics` で発見。LITE.md 作成済み）
+- [x] T0.3 設計書（DESIGN.md 作成、D1〜D4との矛盾なしを確認）
 - [ ] T0.3 設計書
 - [ ] T1.1 状態機械
 - [ ] T1.2 順番の自動化
@@ -53,6 +54,8 @@ STATUS: IN_PROGRESS
   4. share-musics の `docs/requirements.md` に要件矛盾を発見：FR-30（デスクトップ版とのJunction交代対応）と「7.スコープ外(v1)」の「PlumDeckデスクトップ版とのJunction互換性」が直接矛盾。コード実装はFR-30寄りに進んでいる。T4.4 の要件書改訂時に整合を取る（D1〜D4とは矛盾しないため要判断には計上せず、作業ルールに従い進行可能なタスクとして処理）。
   5. share-musics の README.md に実装と一致しない記述（`plumdeck-junction://` 招待URL、`VITE_JUNCTION_SIGNALING_URL`）を発見。コード全体をgrepしても該当0件。古い記述の可能性。T5.2 のドキュメント更新時に併せて確認・修正する。
   6. Lite側にフレーム精度の継ぎ目（seamFrame/TakeoverAnchor相当）は無く、時間ベースのフェード（20ms/200ms）のみ。T2.2/T4.2 の継ぎ目設計で、Web Audio特有の制約として考慮する。
+- 2026-09-17 T0.3: `Authority.phase` の既存値集合は変更せず、新フィールド `turnPhase`（off/standby/ready/onair/outgoing）を独立軸として追加する方針にした。理由: `phase` を変更すると recovery の `route()` 内 `allowed()` 判定（T0.1発見の結合リスク）を壊す恐れがあるため（判断基準4「状態の二重管理を作らない」と一見矛盾するように見えるが、「既存の真実は変えず、UI向けの導出軸を1つ追加する」ことで二重管理を避ける設計とした）。
+- 2026-09-17 T0.3: B2Bの繰り返し表現方法、Mac側解放タイマーの正確な値、`decks`メッセージの正式スキーマは未決のままT1.2/T1.5/T2.4へ引き継ぐ（進行を止めるほどの不確実性ではないため要判断には計上しない）。
 
 ## 検証ログ
 - （まだ無し）
