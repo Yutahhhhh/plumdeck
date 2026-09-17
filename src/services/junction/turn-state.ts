@@ -37,7 +37,7 @@ export const BLOCKER_TEXT: Record<JunctionTurnBlocker, string> = {
   latency_unknown: '回線の遅延を測定しています',
   latency_budget: '回線の遅延が大きく、会場の音に間に合いません',
   host_waiting_stream: 'ホストがあなたの音を受信するまでお待ちください',
-  junction_not_unity: 'JUNCTION MASTERを初期位置に戻しています',
+  junction_not_unity: 'JUNCTION MASTERを等倍・EQフラット・THRUに戻してください',
   already_audible: '一度フェーダーを下げてください',
 };
 
@@ -153,7 +153,7 @@ export function turnGuidance(snapshot: JunctionSnapshot | null | undefined): str
     case 'standby': {
       if (turn?.blocker?.code === 'already_audible') return `STANDBY — ${BLOCKER_TEXT.already_audible}`;
       if (!owner) return 'STANDBY — 最初のDJです。曲を用意してください';
-      if (turn?.blocker?.code && turn.blocker.code !== 'junction_not_unity') return `STANDBY — ${BLOCKER_TEXT[turn.blocker.code]}`;
+      if (turn?.blocker?.code) return `STANDBY — ${BLOCKER_TEXT[turn.blocker.code]}`;
       return `STANDBY — ${nameOf(snapshot, owner)}の音を受信中。曲を用意してCUEで合わせてください`;
     }
     case 'ready':

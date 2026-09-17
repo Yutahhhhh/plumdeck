@@ -1,28 +1,31 @@
 STATUS: IN_PROGRESS
 
 ## 進行中
-- なし。T0.1〜T0.3（フェーズ0：調査と設計）を完了し、本セッションはここで終了する（1回の実行の上限3タスクに達したため）。
-- 次回セッションが T1.1 に着手する際の方針（参考）: `TurnState`（OFF/STANDBY/READY/ON AIR/OUTGOING、DESIGN.md 1.1〜1.2節）を純粋関数として実装し、C++ユニットテスト（junction-core-tests）を追加する。TS側（program-mixer.ts）も同じ導出にしてテストする。触るファイル想定: native/mixxx-engine-host/src/junction/authority.h/.cpp（turnPhase/readyBlockers追加）、新規 turn_state.h/.cpp、tests/junction/turn_state_test.cpp、src/services/junction/program-mixer.ts。
+- タスク: T3.1
+- 方針: プレイ画面を `snapshot.turn` に合わせる。信号灯と案内1行、J をデッキ列の1デッキとして表示、LOCAL NEXT のデッキ選択と Junction Live カードの廃止、次のDJの準備状況、合図、OUTGOING のロック表示、診断の折りたたみ。
+- 触るファイル: src/components/play/JunctionPerformanceStrip.tsx, JunctionInputDeck.tsx, JunctionTrackList.tsx, PlayWorkspace.tsx, src/services/junction/program-mixer.ts, src/services/performance-command-router.ts ほか
+- 途中経過: ネイティブ側（T1.1〜T2.4）は完了・コミット済み（8b2ae50）。UI はこれから。
 
 ## 次にやること
-- T1.1 状態機械
-- T1.2 順番の自動化
+- T3.1 プレイ画面
+- T3.2 Junction パネル
+- T3.3 DDJ-1000
+- T3.4 MCP
 
 ## タスク一覧
-- [x] T0.1 現状の把握
-- [x] T0.2 share-musics（PlumDeck Lite）の調査（share-musics は `/Users/horiyuuta/Workspace/share-musics` で発見。LITE.md 作成済み）
-- [x] T0.3 設計書（DESIGN.md 作成、D1〜D4との矛盾なしを確認）
-- [ ] T0.3 設計書
-- [ ] T1.1 状態機械
-- [ ] T1.2 順番の自動化
-- [ ] T1.3 ブースモニター
-- [ ] T1.4 フェーダースタート
-- [ ] T1.5 tail
-- [ ] T1.6 継ぎ目（ホストが受け手の場合）
-- [ ] T2.1 ホストが J を次のDJへ中継
-- [ ] T2.2 待機ストリーム・継ぎ目切替・遅延予算
-- [ ] T2.3 Mac↔Mac の交代と最初のDJの開始を新フローへ
-- [ ] T2.4 Mac送り手からのJ曲情報
+- [x] T0.1 現状の把握（bda83c6）
+- [x] T0.2 share-musics（PlumDeck Lite）の調査（0cf5aa6）
+- [x] T0.3 設計書（70b92a9）
+- [x] T1.1 状態機械（8c17e1d）
+- [x] T1.2 順番の自動化（8b2ae50）
+- [x] T1.3 ブースモニター（8b2ae50）
+- [x] T1.4 フェーダースタート（8b2ae50）
+- [x] T1.5 tail（8b2ae50）
+- [x] T1.6 継ぎ目（ホストが受け手の場合）（8b2ae50）
+- [x] T2.1 ホストが J を次のDJへ中継（8b2ae50）
+- [x] T2.2 待機ストリーム・継ぎ目切替・遅延予算（8b2ae50）
+- [x] T2.3 Mac↔Mac の交代と最初のDJの開始を新フローへ（8b2ae50）
+- [x] T2.4 Mac送り手からのJ曲情報（8b2ae50）
 - [ ] T3.1 プレイ画面
 - [ ] T3.2 Junctionパネル
 - [ ] T3.3 DDJ-1000でのJ割り当て
@@ -39,27 +42,33 @@ STATUS: IN_PROGRESS
 
 ## 判断ログ
 - 2026-09-17: PROGRESS.md が存在しなかったため新規作成。既定ブランチ main から feat/junction-fader-start を作成して着手。
-- 2026-09-17 T0.1: 指示にあったファイルパス（`cmake/target/CMakeLists.txt` 等）は実際と一部相違していたため、実在するパスに読み替えて調査した。詳細は CURRENT.md 冒頭の注記を参照。
-- 2026-09-17 T0.1 重要発見（設計判断に直結）:
-  1. `runtime.cpp` の `selectLiteOwner()`（662-698行）が、Lite絡みのハンドオフに限りフェンスなしの即時オーナー切替を既に実装している。フェーダースタート方式の最も近い既存テンプレートとして T1.1/T1.4 で参照する。
-  2. 状態移送（ReplayDriverのgraph/DSPカプセル）と音声レベルの復旧（recovery）は実装としては分離しているが、`Authority` の `phase`/`epoch`/`cutoverFrame` を共有しているため結合している。`phase` の値を新フロー用に変更すると、`runtime.cpp:1469` の `route()` 内の recovery `allowed()` 判定を壊すリスクがある。T2.3 で状態移送を切り離す際は必ずこの共有フィールドへの影響を先に確認する。
-  3. MCPの `input.set`/`input.release` 相当の操作が `junction_mcp_bridge.rs` の許可リストに対応する腕（arm）が見当たらない疑い（未実行確認）。T3.4 で要再確認。
-  4. ネイティブ側 `junction-core-tests`/`junction-fx-tests` と `junction:test:manual`/`integration`/`audio`/`network` はCIで実行されていない。手動実行が前提。T5.4 の全テスト実行時に注意。
-- 2026-09-17 T0.2 重要発見:
-  1. Lite側には plumdeck の `Authority.phase` 相当の状態機械が無く、`JunctionPanel.tsx` の `switchHostOwner()` が `ownerPeerId` を直接書き換える即時遷移のみ。plumdeck の `selectLiteOwner()`（フェンスなし即時切替）と設計思想が一致しており、Lite は元々フェーダースタート方式に近い。T1.1/T4.1 の設計で有利に働く。
-  2. Lite の `AUTO_RELEASE_MS=1500` は plumdeck の「可聴だった後1.5秒無音で解放」（D3の解放条件）と定数まで一致する既存の対応物。D3実装はLite側の値をそのまま踏襲できる。
-  3. `decks` という名前のメッセージは Worker API ではなく DataChannel 上のメッセージ型（`DjPlayPage.tsx` の `junctionDecks()` が生成、500ms間隔）。受信側の消費コードがLite内に存在せず未使用/布石と推測。T2.4/T4.2 で仕様を確定させる必要あり。
-  4. share-musics の `docs/requirements.md` に要件矛盾を発見：FR-30（デスクトップ版とのJunction交代対応）と「7.スコープ外(v1)」の「PlumDeckデスクトップ版とのJunction互換性」が直接矛盾。コード実装はFR-30寄りに進んでいる。T4.4 の要件書改訂時に整合を取る（D1〜D4とは矛盾しないため要判断には計上せず、作業ルールに従い進行可能なタスクとして処理）。
-  5. share-musics の README.md に実装と一致しない記述（`plumdeck-junction://` 招待URL、`VITE_JUNCTION_SIGNALING_URL`）を発見。コード全体をgrepしても該当0件。古い記述の可能性。T5.2 のドキュメント更新時に併せて確認・修正する。
-  6. Lite側にフレーム精度の継ぎ目（seamFrame/TakeoverAnchor相当）は無く、時間ベースのフェード（20ms/200ms）のみ。T2.2/T4.2 の継ぎ目設計で、Web Audio特有の制約として考慮する。
-- 2026-09-17 T0.3: `Authority.phase` の既存値集合は変更せず、新フィールド `turnPhase`（off/standby/ready/onair/outgoing）を独立軸として追加する方針にした。理由: `phase` を変更すると recovery の `route()` 内 `allowed()` 判定（T0.1発見の結合リスク）を壊す恐れがあるため（判断基準4「状態の二重管理を作らない」と一見矛盾するように見えるが、「既存の真実は変えず、UI向けの導出軸を1つ追加する」ことで二重管理を避ける設計とした）。
-- 2026-09-17 T0.3: B2Bの繰り返し表現方法、Mac側解放タイマーの正確な値、`decks`メッセージの正式スキーマは未決のままT1.2/T1.5/T2.4へ引き継ぐ（進行を止めるほどの不確実性ではないため要判断には計上しない）。
+- 2026-09-17: ユーザーから「矛盾がなければ最後まで作りきる。分割報告の指示は無視してよい」と指示があったため、1セッション1〜3タスクの制限を外して連続で進める。
+- 2026-09-17 T0.1: 指示のパス（`cmake/target/CMakeLists.txt` 等）は実際と一部相違。実在パスに読み替え（CURRENT.md 冒頭）。
+- 2026-09-17 T0.1: `selectLiteOwner()` が既にフェンスなし即時切替を持ち、フェーダースタートの雛形になる。状態移送と recovery は `Authority` の `phase`/`epoch`/`cutoverFrame` を共有しているので、`phase` の値集合は変えない。
+- 2026-09-17 T0.2: Lite 側に Authority 相当の状態機械はなく、`switchHostOwner()` の即時切替のみ。`AUTO_RELEASE_MS=1500` はネイティブの 1.5 秒解放と一致。`decks` は DataChannel メッセージで受信側が未実装。share-musics の requirements.md に FR-30 とスコープ外の矛盾あり（T4.4 で整合）。
+- 2026-09-17 T1.1: 状態は既存の役割（owner/next/releasingPeer/rosterOrder/finishedOrder）から導出するだけにし、新しい真実を持たない。`turnPhase` フィールドを足す設計書案はやめ、`turn::derive()` の純粋関数にした（判断基準4）。
+- 2026-09-17 T1.2: 順番は rosterOrder（常に全員を含む）と finishedOrder（列から外れた人）で表す。B2B の繰り返しは `turnRepeat` フラグで、交代した人を finished に入れないことで実現（重複登録はしない）。turnRequests は「順番に入る」に置き換え。
+- 2026-09-17 T1.4: ON AIR の合図は LOCAL NEXT バス（J とマイクを構造的に除外）のコールバック単位ピーク＋マイクON＋Jの等倍からの変化。閾値 -50dBFS、無音300ms で待機、有音20ms で発火。定数は turn_state.h の1か所で、TS とテストで一致を検査する。
+- 2026-09-17 T1.4/T2.3: fader-start モードの `Authority::authorize` は epoch 不一致・fence・recovery で拒否しない。交代の瞬間に epoch が進んでも、演奏中のDJのフェーダー操作が拒否されないようにするため（判断基準2）。拒否は OUTGOING の tail ロックだけ。旧 fence 方式のテストは互換のため残した。
+- 2026-09-17 T1.5: tail の送出は送り手側で LOCAL NEXT バスをデッキのマスク＋切替時点のマスター音量で固定したもの（EngineMixer フックに `localReturnMask`/`localReturnFixedGain` を追加）。ゲストは OUTGOING を知った時点（スナップショット、最大約0.5秒後）で tail を確定する。この間に新しく鳴らしたデッキは含まれる可能性があるが、実害は小さいので許容。
+- 2026-09-17 T2.2: 継ぎ目は、次のDJが自分のキャプチャを J の再生フレームに合わせ直した最初のブロック（既存 TakeoverAnchor と同じ仕組み）で決め、そのフレームとキャプチャ世代をホストへ送る。ホストはその世代以降だけを Program に使う。待機ストリームは次の epoch（`standbyEpoch`）で送る。
+- 2026-09-17 T2.2: 会場出力の遅延は 0.5 秒から 1.0 秒に固定変更した。ゲストが受け手のとき J のバッファ（約120ms）＋Opus 受信保持（60ms）＋回線で 250ms の予算を超え、LAN でも READY にならなかったため。本番中に遅延を変えない決定事項に合わせ、STANDBY 中に自動で動かすのではなく、測定値が予算（遅延の半分＝500ms）を超えたら READY にしない方式にした。
+- 2026-09-17 T2.3: 状態移送（グラフ書き出し・音声照合・フェンス）のコードは削除せず、通常フローから到達しない状態にした（handoff.* 操作は理由付きで拒否、HandoffPrepare を送る経路なし）。recovery は独立経路のまま E2E で動作確認済み。削除は T5.1 で判断。
+- 2026-09-17 T2.4: Junction Live の音源ファイル転送は fader-start では無効（announceTracks と TrackAnnounce 受信を止めた）。曲情報は `turn` の decks メッセージ（パスなし、500ms 間隔）で送り、ホストが受け手へ中継。表示位置は J の遅延ぶん補正。
+- 2026-09-17 T2.x: PlumDeck Lite はフレーム精度の継ぎ目を持たないため、Lite が絡む ON AIR は時刻ベース（既存の即時切替と同じ）。Lite は DataChannel の `hello{capabilities}` で機能フラグを示す（T4.1 で実装）。
+- 2026-09-17 T3.x 前: J 等倍でない理由の文言を「初期位置に戻しています」から「等倍・EQフラット・THRUに戻してください」に変更（DJ が自分で戻す必要があるため）。
 
 ## 検証ログ
-- （まだ無し）
+- 基準（変更前）: `junction-core-tests` 84 passed / 4 skipped、`pnpm junction:test:ui` 55 pass、`pnpm junction:test:manual` 14 pass / 1 skip。
+- T1.1: `junction-core-tests` 93 passed、`node --test src/services/junction/turn-state.test.mjs` 6 pass、`tsc --noEmit` 成功。
+- T1.2〜T2.4: `junction-core-tests` 95 passed / 4 skipped。
+- T1.2〜T2.4: `pnpm junction:test:manual` 15 pass / 1 skip（BlackHole 2ch 実機ループバック）。新規「fader start: a remote first DJ, guest to host and host to guest…」で、J 無音からの最初のDJ、ゲスト→ホスト、ホスト→ゲスト（中継）の交代、tail ロック表、J の曲情報（ファイル転送なし）、J を下げての解放、B2B 繰り返し、合図を実音声で確認。録音した Program に 5ms を超える無音なし。3人テストでゲスト→ゲストの J 中継も確認。
+- T1.2〜T2.4: `pnpm junction:test:integration`（シグナリングサーバー経由）1 pass。承認、フェーダースタート交代、tail、シグナリング再起動、ゲスト停止からの recovery.resume を確認。
+- T1.2〜T2.4: `pnpm junction:test:ui` 61 pass。
+- 未検証: `cross-platform-runtime.test.mjs`（Windows 実機が必要）。新方式に書き換え済みだが未実行。
 
 ## 要判断（ユーザー）
 - なし
 
 ## 要人手
-- （T0.2 の結果待ち。share-musics が見つからない場合はここに記録する）
+- Windows 実機での cross-platform テスト（T5.4 の MANUAL-CHECK.md に記載予定）。

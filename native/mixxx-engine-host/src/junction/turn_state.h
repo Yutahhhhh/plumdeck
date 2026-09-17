@@ -107,7 +107,7 @@ inline QString blockerText(Blocker b) {
     case Blocker::LatencyUnknown:return QStringLiteral("回線の遅延を測定しています");
     case Blocker::LatencyBudget:return QStringLiteral("回線の遅延が大きく、会場の音に間に合いません");
     case Blocker::HostWaitingStream:return QStringLiteral("ホストがあなたの音を受信するまでお待ちください");
-    case Blocker::JunctionNotUnity:return QStringLiteral("JUNCTION MASTERを初期位置に戻しています");
+    case Blocker::JunctionNotUnity:return QStringLiteral("JUNCTION MASTERを等倍・EQフラット・THRUに戻してください");
     case Blocker::AlreadyAudible:return QStringLiteral("一度フェーダーを下げてください");
     case Blocker::None:break;
     }
