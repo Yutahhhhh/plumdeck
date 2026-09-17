@@ -1,18 +1,18 @@
 STATUS: IN_PROGRESS
 
 ## 進行中
-- タスク: T0.2
-- 方針: `SHARE_MUSICS_DIR` → `../share-musics` → ホーム配下の順で PlumDeck Lite リポジトリを探し、Junction／DjPlayPage／MixerEngine／peerConnection／JunctionPanel／要件（FR-29等）／Worker API を調べて `docs/junction-transition/LITE.md` にまとめる。
-- 触るファイル: docs/junction-transition/LITE.md（新規予定）, docs/junction-transition/PROGRESS.md
-- 途中経過: T0.1 完了。CURRENT.md 作成済み（未コミット→今回コミット）。T0.2 はこれから着手。
+- タスク: T0.3
+- 方針: CURRENT.md と LITE.md の内容を踏まえ、`docs/junction-transition/DESIGN.md` を作成する。状態モデル対応表、プロトコルメッセージと機能フラグ、継ぎ目アルゴリズム、遅延予算、ON AIR検出、tail送出マスク／ロック表、障害時の動き、廃止・残置一覧、テスト計画、移行手順を書き、D1〜D4との矛盾がないか自己チェックする。
+- 触るファイル: docs/junction-transition/DESIGN.md（新規）, docs/junction-transition/PROGRESS.md
+- 途中経過: T0.1・T0.2 完了。これから T0.3 着手。
 
 ## 次にやること
-- T0.2 share-musics（PlumDeck Lite）の調査
 - T0.3 設計書
+- T1.1 状態機械（実装開始）
 
 ## タスク一覧
 - [x] T0.1 現状の把握
-- [ ] T0.2 share-musics（PlumDeck Lite）の調査
+- [x] T0.2 share-musics（PlumDeck Lite）の調査（share-musics は `/Users/horiyuuta/Workspace/share-musics` で発見。LITE.md 作成済み）
 - [ ] T0.3 設計書
 - [ ] T1.1 状態機械
 - [ ] T1.2 順番の自動化
@@ -46,6 +46,13 @@ STATUS: IN_PROGRESS
   2. 状態移送（ReplayDriverのgraph/DSPカプセル）と音声レベルの復旧（recovery）は実装としては分離しているが、`Authority` の `phase`/`epoch`/`cutoverFrame` を共有しているため結合している。`phase` の値を新フロー用に変更すると、`runtime.cpp:1469` の `route()` 内の recovery `allowed()` 判定を壊すリスクがある。T2.3 で状態移送を切り離す際は必ずこの共有フィールドへの影響を先に確認する。
   3. MCPの `input.set`/`input.release` 相当の操作が `junction_mcp_bridge.rs` の許可リストに対応する腕（arm）が見当たらない疑い（未実行確認）。T3.4 で要再確認。
   4. ネイティブ側 `junction-core-tests`/`junction-fx-tests` と `junction:test:manual`/`integration`/`audio`/`network` はCIで実行されていない。手動実行が前提。T5.4 の全テスト実行時に注意。
+- 2026-09-17 T0.2 重要発見:
+  1. Lite側には plumdeck の `Authority.phase` 相当の状態機械が無く、`JunctionPanel.tsx` の `switchHostOwner()` が `ownerPeerId` を直接書き換える即時遷移のみ。plumdeck の `selectLiteOwner()`（フェンスなし即時切替）と設計思想が一致しており、Lite は元々フェーダースタート方式に近い。T1.1/T4.1 の設計で有利に働く。
+  2. Lite の `AUTO_RELEASE_MS=1500` は plumdeck の「可聴だった後1.5秒無音で解放」（D3の解放条件）と定数まで一致する既存の対応物。D3実装はLite側の値をそのまま踏襲できる。
+  3. `decks` という名前のメッセージは Worker API ではなく DataChannel 上のメッセージ型（`DjPlayPage.tsx` の `junctionDecks()` が生成、500ms間隔）。受信側の消費コードがLite内に存在せず未使用/布石と推測。T2.4/T4.2 で仕様を確定させる必要あり。
+  4. share-musics の `docs/requirements.md` に要件矛盾を発見：FR-30（デスクトップ版とのJunction交代対応）と「7.スコープ外(v1)」の「PlumDeckデスクトップ版とのJunction互換性」が直接矛盾。コード実装はFR-30寄りに進んでいる。T4.4 の要件書改訂時に整合を取る（D1〜D4とは矛盾しないため要判断には計上せず、作業ルールに従い進行可能なタスクとして処理）。
+  5. share-musics の README.md に実装と一致しない記述（`plumdeck-junction://` 招待URL、`VITE_JUNCTION_SIGNALING_URL`）を発見。コード全体をgrepしても該当0件。古い記述の可能性。T5.2 のドキュメント更新時に併せて確認・修正する。
+  6. Lite側にフレーム精度の継ぎ目（seamFrame/TakeoverAnchor相当）は無く、時間ベースのフェード（20ms/200ms）のみ。T2.2/T4.2 の継ぎ目設計で、Web Audio特有の制約として考慮する。
 
 ## 検証ログ
 - （まだ無し）
