@@ -7,7 +7,8 @@ import { useJunctionTracks } from '@/hooks/useJunctionTracks';
 import { useJunction } from '@/hooks/useJunction';
 import { junctionCommand } from '@/services/junction/client';
 import { JunctionInputDeck } from "./JunctionInputDeck";
-import { JunctionPerformanceStrip } from "./JunctionPerformanceStrip";
+import { JunctionTurnBar } from "./JunctionTurnBar";
+import { TAIL_LOCK_TEXT } from "@/services/junction/turn-state";
 import { BeatFxPanel } from "./BeatFxPanel";
 import { memoryAction } from "@/services/dj-engine/memory-cues";
 import { jogWeight } from "@/services/dj-engine/jog-weight";
@@ -86,6 +87,9 @@ export function PlayWorkspace() {
   const junction = useJunctionTracks();
   const junctionSession = useJunction();
   const junctionInput = junctionSession?.active ? junctionSession.junctionInput : undefined;
+  // OUTGOING: the decks still sounding on the next DJ's J accept loops only.
+  const outgoing = junctionSession?.active && junctionSession.turn?.signal === "outgoing";
+  const tailLock = (deck: DeckId): string | undefined => outgoing && junctionSession?.turn?.tailDecks.includes(deck) ? TAIL_LOCK_TEXT : undefined;
   const updateJunctionMonitorDeck = useCallback((deck: DeckId | null) => {
     setJunctionMonitorDeck(deck);
     void invoke<DeckId | null>('junction_live_monitor_set', {deck}).catch(() => undefined);
@@ -287,7 +291,11 @@ export function PlayWorkspace() {
 
   const loadTrack = useCallback((deck: DeckId, track: Track) => {
     const junction = junctionState.get();
-    if (junction?.active && junction.localPeerId !== junction.performerPeerId && !junction.localPrep) {
+    if (junction?.active && junction.turn?.signal === "outgoing" && junction.turn.tailDecks.includes(deck)) {
+      setCommandError(TAIL_LOCK_TEXT);
+      return;
+    }
+    if (junction?.active && !junction.turn && junction.localPeerId !== junction.performerPeerId && !junction.localPrep) {
       setCommandError("別のDJがプレイ中です。Junctionの手元試聴で準備し、引き継ぎ後にデッキへロードしてください。");
       return;
     }
@@ -766,11 +774,11 @@ export function PlayWorkspace() {
       gridAvailable={Boolean(deck?.track?.beatgridOffsetMs !== undefined || deck?.track?.beatTimesMs?.length)}
       onGridShift={!monitorAssetId && gridEdit?.deck === id && !gridSaving.current ? (deltaMs) => setGridShift(old => ({ sequence: (old?.sequence ?? 0) + 1, deltaMs })) : undefined}
       hotCues={deck?.hotCues} scratching={deck?.scratching} loopRegion={deck?.loopRegion}
-      onSeek={connected && !monitorAssetId ? (ms) => seekAbsolute(id, ms) : undefined}
-      onScratch={connected && !monitorAssetId ? (command) => scratch(id, command) : undefined}
-      onBackspin={connected && !monitorAssetId ? (release) => client.backspin(id, release.gestureId, release.positionMs, release.velocity, jogWeight(id),
+      onSeek={connected && !monitorAssetId && !tailLock(id) ? (ms) => seekAbsolute(id, ms) : undefined}
+      onScratch={connected && !monitorAssetId && !tailLock(id) ? (command) => scratch(id, command) : undefined}
+      onBackspin={connected && !monitorAssetId && !tailLock(id) ? (release) => client.backspin(id, release.gestureId, release.positionMs, release.velocity, jogWeight(id),
         (cause) => setCommandError(cause instanceof Error ? cause.message : String(cause))) : undefined}
-      onScratchGrab={connected && !monitorAssetId ? () => client.grabBackspin(id) : undefined}
+      onScratchGrab={connected && !monitorAssetId && !tailLock(id) ? () => client.grabBackspin(id) : undefined}
       onScratchError={(cause) => setCommandError(cause instanceof Error ? cause.message : String(cause))} />;
   };
   // Lanes accept the same drag payload as the decks, so a row can be dropped on
@@ -815,6 +823,7 @@ export function PlayWorkspace() {
 
   const cueColorsFor = (id:DeckId) => Array.from({length:16},(_,slot)=>trackMetadata[(localTrackId(snapshot?.decks[id]?.track) ?? -1)]?.cue_points.find(cue=>cue.slot===slot)?.color??null);
   const softwareDeck = (id: DeckId) => <SoftwareDeck key={id} id={id} deck={displayedDeck(id)} active={activeDeck === id} connected={connected}
+    tailLock={tailLock(id)}
     monitorOnly={junctionMonitorDeck === id && Boolean(junction.current)} monitorAssetId={junctionMonitorDeck === id && junction.current?.state === "ready" ? junction.current.assetId : undefined}
     cueColors={junctionMonitorDeck === id ? undefined : cueColorsFor(id)}
     onGridEdit={() => openGridEditor(id)}
@@ -936,15 +945,19 @@ export function PlayWorkspace() {
     </div>}
     <section className="dj-performance" aria-label="Software DJ controller">
       {waveformLayout === "horizontal" && <div className="dj-scrolling-waves">{visibleDecks.map((id) => lane(id, "horizontal"))}</div>}
-      {junctionSession?.active && <JunctionPerformanceStrip snapshot={junctionSession} decks={visibleDecks} connected={connected}
-        deckState={(deck) => snapshot?.decks[deck]} channelState={(deck) => snapshot?.mixer.channels[deck]}
-        onSelectDeck={setActiveDeck} onTogglePlay={togglePlay}
-        onPfl={(deck, enabled) => void run(() => client.setPfl(deck, enabled))} />}
-      {junctionInput?.peerId && <JunctionInputDeck state={junctionInput}
-        performerName={junctionSession?.participants.find((participant) => participant.peerId === junctionInput.peerId)?.djName}
-        onSet={(settings) => junctionCommand('input.set', { ...settings })}
-        onRelease={() => junctionCommand('input.release')} />}
-      <div className="dj-deck-pairs">{Array.from({ length: deckCount / 2 }, (_, pair) => {
+      {junctionSession?.active && <JunctionTurnBar snapshot={junctionSession} />}
+      <div className="dj-deck-pairs">{junctionInput?.peerId && <div className="dj-deck-pair dj-deck-pair--junction">
+        <JunctionInputDeck state={junctionInput}
+          performerName={junctionSession?.participants.find((participant) => participant.peerId === junctionInput.peerId)?.djName}
+          mixingTail={junctionSession?.turn?.signal === "onair"}
+          onSet={(settings) => junctionCommand('input.set', { ...settings })}
+          onRelease={() => junctionCommand('turn.release')}
+          onMatchTempo={snapshot?.decks[activeDeck]?.track?.bpm && !tailLock(activeDeck) ? async (bpm) => {
+            const trackBpm = client.getState().snapshot?.decks[activeDeck]?.track?.bpm;
+            if (!trackBpm) throw new Error(`DECK ${activeDeck}のBPMが分かりません`);
+            await client.setTempo(activeDeck, bpm / trackBpm);
+          } : undefined} />
+      </div>}{Array.from({ length: deckCount / 2 }, (_, pair) => {
         const left = DECK_IDS[pair * 2]; const right = DECK_IDS[pair * 2 + 1];
         return <div className="dj-deck-pair" key={left}>
           {softwareDeck(left)}
@@ -961,7 +974,8 @@ export function PlayWorkspace() {
               onTempo: (rate) => void run(() => client.setTempo(deck, rate)),
             })}
             reason={(deck, capability, feature, controller) =>
-              !connected ? "未接続"
+              capability !== "mixer.pfl" && tailLock(deck) ? tailLock(deck)
+              : !connected ? "未接続"
                 : !snapshot?.engine.decks.includes(deck) ? `Deck ${deck} 未実装`
                   : !(capabilities.includes(capability) || capabilities.includes("mixer.basic")) ? `${feature} 未実装`
                     : !controller ? `${feature} コントローラー未接続` : undefined} />}
@@ -971,7 +985,7 @@ export function PlayWorkspace() {
     </section>
     <div className="dj-master-strip">
       <span className="dj-master-title"><Volume2 />MASTER</span>
-      <Fader label="マスターゲイン" min={0} max={1} value={snapshot?.mixer.masterGain ?? 0} disabled={!canMix} onChange={(value) => void run(() => client.setMasterGain(value))} />
+      <Fader label="マスターゲイン" min={0} max={1} value={snapshot?.mixer.masterGain ?? 0} disabled={!canMix || Boolean(outgoing)} onChange={(value) => void run(() => client.setMasterGain(value))} />
       <span className="dj-master-value">{Math.round((snapshot?.mixer.masterGain ?? 0) * 100)}%</span>
       {snapshot?.audio.microphone?.available && <button type="button" className={cn("dj-button", snapshot.audio.microphone.enabled && "is-active")}
         aria-label="マイク出力を切り替え" aria-pressed={snapshot.audio.microphone.enabled}
@@ -979,7 +993,7 @@ export function PlayWorkspace() {
         title={snapshot.audio.microphone.deviceId ? "マイクをMasterへ出力 / ミュート" : "オーディオ設定でマイクを選択してください"}
         onClick={() => void run(async () => { const applied = await client.setMicrophone({ enabled: !client.getState().snapshot?.audio.microphone?.enabled }); if (applied.microphone) saveMicrophoneSettings(applied.microphone); })}>
         <Mic />MIC {snapshot.audio.microphone.enabled ? "ON" : "OFF"}</button>}
-      <div className="dj-crossfader"><span>A{deckCount === 4 ? "/C" : ""}</span><Fader label="クロスフェーダー" min={-1} max={1} value={snapshot?.mixer.crossfader ?? 0} disabled={!connected || !capabilities.includes("mixer.basic") && !capabilities.includes("mixer.crossfader")} onChange={(value) => void run(() => client.setCrossfader(value))} /><span>B{deckCount === 4 ? "/D" : ""}</span></div>
+      <div className="dj-crossfader"><span>A{deckCount === 4 ? "/C" : ""}</span><Fader label="クロスフェーダー" min={-1} max={1} value={snapshot?.mixer.crossfader ?? 0} disabled={Boolean(outgoing) || !connected || !capabilities.includes("mixer.basic") && !capabilities.includes("mixer.crossfader")} onChange={(value) => void run(() => client.setCrossfader(value))} /><span>B{deckCount === 4 ? "/D" : ""}</span></div>
       <span className={cn("dj-master-note", snapshot?.recording?.active && "is-recording")}>{snapshot?.recording?.active ? `● REC ${formatTime(snapshot.recording.elapsedMs)}` : `DECK ${activeDeck} SELECTED`}</span>
     </div>
     <PlayLibrary activeDeck={activeDeck} seedTrackId={Number.isFinite(seed) && seed > 0 ? seed : null} onLoad={loadLocalTrack} cueOverrides={listCueOverrides} cueRevision={cueRevision} cueImportControl={<RekordboxCueImportButton onImport={importRekordboxCues} />} />

@@ -34,6 +34,8 @@ type Props = {
   id: DeckId; deck?: DeckState; channel?: ChannelState; active: boolean; connected: boolean; capability: boolean; capabilities: readonly string[];
   /** Presentation-only Junction binding. No control may reach the real deck. */
   monitorOnly?: boolean; monitorAssetId?: string;
+  /** OUTGOING tail: everything but loops is locked, with this reason. */
+  tailLock?: string;
   onActivate: () => void; onToggle: () => void; onCue: () => void;
   onSeek: (delta: number) => void; onSeekAbsolute: (ms: number) => void; onTempo: (rate: number) => void;
   onKeylock: (enabled: boolean) => void; onSync: (enabled: boolean) => void; onMaster?: () => void; onUnload: () => void;
@@ -48,7 +50,7 @@ type Props = {
   onGridEdit: () => void; onGridClose?: () => void; gridEditor?: ReactNode;
 };
 
-export function SoftwareDeck({ id, deck, channel, active, connected, capability, capabilities, monitorOnly = false, monitorAssetId, onActivate, onToggle, onCue, onSeekAbsolute, onTempo, onKeylock, onSync, onMaster, onUnload, onHotCue, onLoop, onBeatJump, onBeatLoop, onLoopEnable, onQuantize, onFx, onSaveLoop, onLoopIn, onLoopOut, savedLoops, onRecallLoop, trackKey, cueColors, onGridEdit, onGridClose, gridEditor }: Props) {
+export function SoftwareDeck({ id, deck, channel, active, connected, capability, capabilities, monitorOnly = false, monitorAssetId, tailLock, onActivate, onToggle, onCue, onSeekAbsolute, onTempo, onKeylock, onSync, onMaster, onUnload, onHotCue, onLoop, onBeatJump, onBeatLoop, onLoopEnable, onQuantize, onFx, onSaveLoop, onLoopIn, onLoopOut, savedLoops, onRecallLoop, trackKey, cueColors, onGridEdit, onGridClose, gridEditor }: Props) {
   const deckDrop = usePlayDeckDrop(`play-deck-controls-${id}`, id);
   const left = id === "A" || id === "C";
   const [loopBeats, setLoopBeats] = useState(4);
@@ -92,14 +94,15 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
   const rate = deck?.rate ?? 1;
   const trackBpm = deck?.track?.bpm ?? null;
   const bpm = trackBpm !== null && trackBpm > 0 ? trackBpm * rate : deck?.effectiveBpm ?? null;
-  const disabled = monitorOnly || !connected || !capability || !deck?.track;
+  const disabled = monitorOnly || Boolean(tailLock) || !connected || !capability || !deck?.track;
   const supported = (name: string) => !disabled && capabilities.includes(name);
   const quantize = (deck as (DeckState & { quantize?: boolean }) | undefined)?.quantize ?? false;
-  const unavailable = (capabilityName: string, feature: string, controller = true, needsTrack = true) =>
+  const available = (capabilityName: string, feature: string, controller = true, needsTrack = true) =>
     monitorOnly ? "Junction Liveは表示専用です" : !connected ? "未接続" : !capability ? `Deck ${id} 未実装` : needsTrack && !deck?.track ? "曲が未ロード"
       : !capabilities.includes(capabilityName) ? `${feature} 未実装` : !controller ? `${feature} コントローラー未接続` : undefined;
+  const unavailable = (capabilityName: string, feature: string, controller = true, needsTrack = true) => tailLock ?? available(capabilityName, feature, controller, needsTrack);
   const hotCueReason = unavailable("deck.hotcue", "HOT CUE", Boolean(onHotCue));
-  const loopReason = unavailable("deck.loop", "LOOP", Boolean(onBeatLoop || onLoop));
+  const loopReason = available("deck.loop", "LOOP", Boolean(onBeatLoop || onLoop));
   const jumpReason = unavailable("deck.beatjump", "BEAT JUMP", Boolean(onBeatJump));
   const fxReason = unavailable("mixer.fx", "PAD FX", Boolean(onFx));
   const quantizeReason = unavailable("deck.quantize", "QUANTIZE", Boolean(onQuantize), false);
@@ -141,7 +144,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
   const stateKind = leading ? "master" : deck?.status === "error" ? "error" : deck?.status === "playing" ? "playing" : "idle";
 
   return <article ref={deckDrop.setNodeRef} aria-label={`Deck ${id}`} data-deck={id} data-track-drop-deck={id} data-track-drop-label={`DECK ${id} へロード`} data-track-drop-active={deckDrop.isOver ? "true" : undefined} onClick={onActivate}
-    className={cn("dj-deck", left ? "dj-deck--left" : "dj-deck--right", active && "dj-deck--active", !deck?.track && "dj-deck--empty", monitorOnly && "dj-deck--junction-monitor")}>
+    title={tailLock} className={cn("dj-deck", left ? "dj-deck--left" : "dj-deck--right", active && "dj-deck--active", !deck?.track && "dj-deck--empty", monitorOnly && "dj-deck--junction-monitor", tailLock && "dj-deck--tail")}>
     <div className="dj-track-info">
       <button className="dj-deck-number" aria-label={`Select deck ${id}`} aria-pressed={active} onClick={onActivate}>{id}</button>
       <div className="dj-cover">{data?.artwork ? <img src={artworkUrl(data.artwork)} alt="" /> : <Disc3 />}</div>
@@ -154,6 +157,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
         <span className="dj-num">{position < 0 ? "−" : ""}{formatTime(Math.abs(position))}.{Math.floor(Math.abs(position) / 100) % 10}</span>
       </div>
       <div className="dj-deck-flags">
+        {tailLock && <span className="dj-chip dj-chip--tail" title={tailLock}>残りの曲 · ループのみ</span>}
         <span className="dj-chip dj-chip--state" data-state={monitorOnly ? "junction" : stateKind}>{monitorOnly ? status : leading ? "MASTER" : deck?.syncEnabled ? `→ ${deck.syncLeader || "—"}` : status}</span>
         {/* rekordbox のデッキヘッダ：左に KEY SYNC とキー表示、右に BEAT SYNC / MASTER。 */}
         <div className="dj-sync-block" role="group" aria-label={`Deck ${id} SYNC`}>

@@ -131,6 +131,8 @@ export interface JunctionTurnState {
   incompatiblePeerIds: string[];
   cue?: { kind: TurnCueKind; fromPeerId: string; at: number };
   latency?: { pathMs: number; budgetMs: number };
+  /** This DJ's own sound (or a J move) is up right now. */
+  localAudible?: boolean;
   /** A READY DJ replaces a disconnected ON AIR DJ without asking the host. */
   autoFailover: boolean;
 }
@@ -260,6 +262,15 @@ export type JunctionOp =
   | 'handoff.cancel'
   | 'handoff.accept'
   | 'recovery.resume'
+  | 'turn.join'
+  | 'turn.leave'
+  | 'turn.repeat'
+  | 'turn.failover'
+  | 'turn.onair'
+  | 'turn.force'
+  | 'turn.skip'
+  | 'turn.release'
+  | 'turn.cue'
   | 'program.configure'
   | 'program.record.start'
   | 'program.record.stop'

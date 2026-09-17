@@ -16,8 +16,12 @@ const ASSIGN = [{ value: 0, label: "A" }, { value: 1, label: "THRU" }, { value: 
 type Props = {
   state: JunctionInputState;
   performerName?: string;
+  /** This DJ is ON AIR while the previous DJ's tail still sounds here. */
+  mixingTail: boolean;
   onSet: (settings: JunctionInputSettings) => Promise<unknown>;
   onRelease: () => Promise<unknown>;
+  /** Sets the selected local deck's tempo to J's BPM; absent when not possible. */
+  onMatchTempo?: (bpm: number) => Promise<unknown>;
 };
 
 function loudest(decks: readonly RemoteDeck[] | undefined, name: string | undefined): RemoteDeck | undefined {
@@ -28,7 +32,7 @@ function loudest(decks: readonly RemoteDeck[] | undefined, name: string | undefi
  * The JUNCTION deck: the other DJ's audio as one mixer channel. One lane shows
  * what arrived; the colour of each range says which of their decks was loudest.
  */
-export function JunctionInputDeck({ state, performerName, onSet, onRelease }: Props) {
+export function JunctionInputDeck({ state, performerName, mixingTail, onSet, onRelease, onMatchTempo }: Props) {
   const channel = state.channel;
   const [draft, setDraft] = useState<JunctionInputSettings>({});
   const pending = useRef<JunctionInputSettings>({});
@@ -106,21 +110,28 @@ export function JunctionInputDeck({ state, performerName, onSet, onRelease }: Pr
   }, []);
 
   const deck = loudest(state.decks, state.audibleDeck);
-  const releasing = Boolean(state.releasingPeerId);
-  const stage = releasing ? "MIXING" : state.receiving ? "CUEING" : "WAITING";
+  const releasing = mixingTail && Boolean(state.releasingPeerId);
   const vu = Math.max(0, Math.min(1, state.channel.vu ?? 0));
   const source = state.djName || performerName || "前のDJ";
   const run = (task: () => Promise<unknown>) => void task().then(() => setError(null), (cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+  const bpm = deck && deck.bpm > 0 ? deck.bpm * (deck.rate || 1) : 0;
+  const remaining = deck && deck.durationMs > 0 ? Math.max(0, deck.durationMs - deck.positionMs) : null;
 
-  return <section className={cn("dj-junction-input", releasing && "is-releasing")} aria-label="JUNCTION MASTER">
-    <div className="dj-junction-input-head">
-      <span className="dj-junction-input-badge"><Radio />JUNCTION MASTER</span>
-      <strong title={source}>{source}</strong>
-      <span className={cn("dj-junction-input-status", state.receiving && "is-live")}>{state.receiving ? `${stage} · 遅延 ${Math.round(state.latencyMs)}ms` : `${stage} · 音声を待っています`}</span>
-    </div>
-    <div className="dj-junction-input-track">
-      {deck ? <><i style={{ background: `var(${DECK_COLOR[deck.deck] ?? "--dj-blue"})` }} /><b title={deck.title}>{deck.title || "タイトル未設定"}</b><span>{[deck.artist, deck.bpm ? `${(deck.bpm * deck.rate).toFixed(1)} BPM` : "", `${formatTime(deck.positionMs)} / ${formatTime(deck.durationMs)}`].filter(Boolean).join(" · ")}</span></>
-        : <span>曲の情報はまだ届いていません</span>}
+  return <article className={cn("dj-deck dj-junction-input", releasing && "is-releasing")} aria-label="JUNCTION MASTER" data-deck="J">
+    <div className="dj-track-info dj-junction-input-head">
+      <span className="dj-deck-number dj-junction-input-number" title="JUNCTION MASTER">J</span>
+      <div className="dj-track-name">
+        <strong title={deck?.title}>{deck ? deck.title || "タイトル未設定" : `${source}の音`}</strong>
+        <span>{deck ? [deck.artist, source].filter(Boolean).join(" · ") : state.receiving ? "曲の情報はまだ届いていません" : "音を待っています"}</span>
+      </div>
+      <div className="dj-track-time">
+        <strong className="dj-num">{remaining === null ? "−−:−−" : `−${formatTime(remaining)}`}</strong>
+        <span className="dj-num">{bpm ? `${bpm.toFixed(1)} BPM` : "— BPM"}</span>
+      </div>
+      <div className="dj-deck-flags">
+        <span className={cn("dj-chip dj-chip--state", state.receiving && "is-live")} data-state={state.receiving ? "playing" : "idle"}><Radio />{releasing ? "残りの曲" : state.receiving ? "受信中" : "待機"}</span>
+        {onMatchTempo && <button type="button" className="dj-chip" disabled={!bpm} title="選択中のデッキのテンポをJUNCTION MASTERのBPMに合わせます" onClick={() => run(() => onMatchTempo(bpm))}>BPMを合わせる</button>}
+      </div>
     </div>
     <canvas ref={canvasRef} className="dj-junction-input-lane" aria-label="JUNCTION MASTERの波形。色は前のDJのどのデッキが鳴っていたかを表します" />
     <div className="dj-junction-input-controls">
@@ -138,9 +149,9 @@ export function JunctionInputDeck({ state, performerName, onSet, onRelease }: Pr
       </div>
       <button type="button" className={cn("dj-mixer-cue", value("pfl", false) && "is-on")} aria-pressed={value("pfl", false)} disabled={!channel.available || !channel.pflAvailable}
         title={channel.pflAvailable ? "ヘッドホンでJUNCTION MASTERをモニターする" : "ヘッドホン出力のあるデバイスでCUEを使えます"} onClick={() => change({ pfl: !value("pfl", false) })}>CUE</button>
-      {releasing && <button type="button" className="dj-button dj-junction-input-release" title="前のDJの送出を止めます。JUNCTION MASTERのレベルを0にして1.5秒たつと自動で解放します" onClick={() => run(onRelease)}>前のDJを解放</button>}
+      {releasing && <button type="button" className="dj-button dj-junction-input-release" title="前のDJの曲を止めます。レベルを0にして1.5秒たつと自動で解放します" onClick={() => run(onRelease)}>前のDJを解放</button>}
     </div>
-    {releasing && <p className="dj-junction-input-note">{source}の音はここで鳴り続けています。フェーダーで下げ切ると自動で解放されます。</p>}
+    {releasing && <p className="dj-junction-input-note">{source}の曲はここで鳴り続けています。LEVELを下げ切ると交代完了です。</p>}
     {error && <p role="alert" className="dj-junction-input-error">{error}</p>}
-  </section>;
+  </article>;
 }

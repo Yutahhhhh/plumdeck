@@ -4,11 +4,8 @@ import {
   JUNCTION_MASTER,
   LOCAL_NEXT,
   PROGRAM_MASTER,
-  STAGE_LABEL,
   junctionRoles,
-  junctionStage,
   programMixerView,
-  stripActions,
 } from './program-mixer.ts';
 
 const participant = (peerId, overrides = {}) => ({peerId, displayName: peerId, status: 'connected', ...overrides});
@@ -32,7 +29,6 @@ test('the received master is JUNCTION MASTER and never called next', () => {
   assert.equal(JUNCTION_MASTER, 'JUNCTION MASTER');
   assert.equal(LOCAL_NEXT, 'LOCAL NEXT');
   assert.equal(PROGRAM_MASTER, 'PROGRAM MASTER');
-  for (const label of Object.values(STAGE_LABEL)) assert.doesNotMatch(label, /次の曲/);
 });
 
 test('coordinator, operator, next and the still-sounding DJ are separate roles', () => {
@@ -44,15 +40,6 @@ test('coordinator, operator, next and the still-sounding DJ are separate roles',
   assert.equal(roles.soundingPeerId, 'phone');
   assert.equal(roles.localCoordinator && roles.localOperator, true);
   assert.equal(roles.localSounding, false);
-});
-
-test('receiver stages: cueing before takeover, mixing while the previous DJ sounds, then playing', () => {
-  assert.equal(junctionStage(null), 'inactive');
-  assert.equal(junctionStage(base()), 'waiting');
-  assert.equal(junctionStage(base({junctionInput: input()})), 'cueing');
-  assert.equal(junctionStage(base({performerPeerId: 'mac', junctionInput: input({releasingPeerId: 'phone'})})), 'mixing');
-  assert.equal(junctionStage(base({performerPeerId: 'mac', junctionInput: input({peerId: ''})})), 'playing');
-  assert.equal(junctionStage(base({localPeerId: 'guest', performerPeerId: 'phone', junctionInput: input({peerId: '', releasingPeerId: 'guest'})})), 'sending');
 });
 
 test('before takeover LOCAL NEXT is CUE only and the engine bypass is reported, not hidden', () => {
@@ -88,31 +75,4 @@ test('older runtimes without programMixer derive the same venue answer', () => {
   assert.equal(programMixerView(base({performerPeerId: 'mac'})).venueSource, 'local-mix');
   assert.equal(programMixerView(base({localPeerId: 'guest'})).venueSource, 'remote-host');
   assert.equal(programMixerView(base({program: {state: 'idle'}})).venueSource, 'none');
-});
-
-test('the coordinator can nominate any connected or played DJ without a request', () => {
-  const snapshot = base({participants: [
-    participant('mac', {isHost: true, rosterStatus: 'waiting'}),
-    participant('phone', {client: 'lite', rosterStatus: 'performing'}),
-    participant('guest', {rosterStatus: 'waiting'}),
-    participant('played', {rosterStatus: 'finished'}),
-    participant('invitee', {rosterStatus: 'invited'}),
-  ]});
-  const nominate = stripActions(snapshot).find((action) => action.kind === 'nominate');
-  assert.deepEqual(nominate.candidates.map((row) => row.peerId), ['mac', 'guest', 'played']);
-});
-
-test('no new nomination while the previous DJ still sounds; the operator gets release instead', () => {
-  const actions = stripActions(base({performerPeerId: 'mac', junctionInput: input({releasingPeerId: 'phone'})}));
-  assert.deepEqual(actions.map((action) => action.kind), ['release']);
-});
-
-test('guests request a turn, including again after playing, and the next DJ accepts', () => {
-  const guest = (status, overrides = {}) => base({localPeerId: 'guest', participants: [participant('mac', {isHost: true}), participant('guest', {rosterStatus: status})], ...overrides});
-  assert.deepEqual(stripActions(guest('waiting')).map((action) => action.label), ['演奏を希望']);
-  assert.deepEqual(stripActions(guest('finished')).map((action) => action.label), ['もう一度演奏を希望']);
-  assert.deepEqual(stripActions(guest('requested')), []);
-  const next = stripActions(guest('next', {nextPeerId: 'guest'}));
-  assert.equal(next[0].kind, 'accept');
-  assert.equal(next[0].disabled, true);
 });

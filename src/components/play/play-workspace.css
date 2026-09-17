@@ -378,20 +378,15 @@
 .dj-wave-retry { position: absolute; bottom: 2px; right: 3px; z-index: 2; padding: 4px 8px; color: #ffd19e; background: #332419; font-size: 11px; }
 
 /* JUNCTION deck: the other DJ's audio as one channel with a single lane. */
-.dj-junction-input { display: grid; flex-shrink: 0; grid-template-columns: minmax(150px, 220px) minmax(0, 1fr) auto; grid-template-rows: auto auto; gap: 2px 8px; padding: 4px 8px; border-top: 1px solid var(--dj-line); border-bottom: 1px solid var(--dj-line); background: var(--dj-panel); }
+.dj-deck-pair--junction, .dj-workspace--vertical .dj-deck-pair--junction { grid-template-columns: minmax(0, 1fr); }
+.dj-junction-input { --deck-accent: #9ed184; display: grid; flex-shrink: 0; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; gap: 2px 8px; padding: 0 8px 4px 0; }
 .dj-junction-input.is-releasing { box-shadow: inset 3px 0 var(--dj-green); }
-.dj-junction-input-head { display: flex; align-items: center; gap: 6px; min-width: 0; grid-column: 1; grid-row: 1; }
-.dj-junction-input-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dj-junction-input-badge { display: inline-flex; align-items: center; gap: 3px; padding: 1px 5px; border-radius: 2px; background: #1f3321; color: #9ed184; font-size: 9px; font-weight: 700; letter-spacing: .06em; }
-.dj-junction-input-badge svg { width: 11px; height: 11px; }
-.dj-junction-input-status { color: var(--dj-faint); font-size: 9px; white-space: nowrap; }
-.dj-junction-input-status.is-live { color: var(--dj-green); }
-.dj-junction-input-track { display: flex; align-items: center; gap: 5px; min-width: 0; grid-column: 1; grid-row: 2; color: var(--dj-dim); font-size: 9px; }
-.dj-junction-input-track i { width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; }
-.dj-junction-input-track b { min-width: 0; overflow: hidden; color: var(--dj-text); text-overflow: ellipsis; white-space: nowrap; }
-.dj-junction-input-track span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dj-junction-input-lane { grid-column: 2; grid-row: 1 / span 2; width: 100%; height: 44px; border-radius: 2px; background: #000; }
-.dj-junction-input-controls { display: flex; align-items: center; gap: 8px; grid-column: 3; grid-row: 1 / span 2; }
+.dj-junction-input-head { grid-column: 1 / -1; grid-row: 1; }
+.dj-junction-input-number { background: #1f3321; color: #9ed184; }
+.dj-junction-input-head .dj-chip svg { width: 10px; height: 10px; }
+.dj-junction-input-lane { grid-column: 1; grid-row: 2; width: calc(100% - 7px); height: 44px; margin-left: 7px; border-radius: 2px; background: #000; }
+.dj-junction-input-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; grid-column: 2; grid-row: 2; }
+@media (max-width: 720px) { .dj-junction-input { grid-template-columns: minmax(0, 1fr); } .dj-junction-input-controls { grid-column: 1; grid-row: 3; padding-left: 7px; } }
 .dj-junction-input-eq { display: flex; gap: 2px; }
 .dj-junction-input-level { display: flex; flex-direction: column; gap: 2px; width: 96px; color: var(--dj-dim); font-size: 8px; font-weight: 700; }
 .dj-junction-input-vu { display: block; width: 100%; height: 3px; overflow: hidden; border-radius: 2px; background: #17191c; }
@@ -401,25 +396,33 @@
 .dj-junction-input-note { color: var(--dj-dim); }
 .dj-junction-input-error { color: var(--dj-red); }
 
-/* Junction strip: JUNCTION MASTER / LOCAL NEXT / PROGRAM MASTER and handoff, always on the player. */
-.dj-junction-strip { display: grid; flex-shrink: 0; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 3px 10px; padding: 4px 8px; border-top: 1px solid var(--dj-line); background: var(--dj-panel); font-size: 9px; color: var(--dj-dim); }
-.dj-junction-strip.is-mixing, .dj-junction-strip.is-sending { box-shadow: inset 3px 0 var(--dj-green); }
-.dj-junction-strip-roles { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; grid-column: 1 / -1; }
-.dj-junction-strip-roles b { color: var(--dj-text); font-weight: 600; }
-.dj-junction-strip-stage { display: inline-flex; align-items: center; gap: 3px; padding: 1px 5px; border-radius: 2px; background: #1f3321; color: #9ed184; font-weight: 700; }
-.dj-junction-strip-stage svg, .dj-junction-strip-cell header svg, .dj-junction-strip .dj-segmented svg { width: 11px; height: 11px; }
-.dj-junction-strip-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.dj-junction-strip-cell header { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.dj-junction-strip-cell header strong { display: inline-flex; align-items: center; gap: 3px; color: var(--dj-text); font-size: 9px; letter-spacing: .06em; white-space: nowrap; }
-.dj-junction-strip-cell header small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dj-junction-strip-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.dj-junction-strip-row select { min-width: 0; max-width: 160px; }
-.dj-junction-strip-track { flex: 1; min-width: 0; overflow: hidden; color: var(--dj-text); text-overflow: ellipsis; white-space: nowrap; }
-.dj-junction-strip-meter { display: block; flex: 1; height: 4px; overflow: hidden; border-radius: 2px; background: #17191c; }
-.dj-junction-strip-meter i { display: block; height: 100%; background: linear-gradient(90deg, #55ad67 0 72%, #d2a84e 72% 90%, #cf6660 90%); transition: width 80ms linear; }
-.dj-junction-strip-flag { color: var(--dj-faint); }
-.dj-junction-strip-flag.is-live { color: var(--dj-green); }
-.dj-junction-strip-flag.is-warning { color: #d2a84e; }
-.dj-junction-strip-actions { display: flex; flex-direction: column; align-items: stretch; justify-content: center; gap: 3px; grid-column: 4; grid-row: 2; }
-.dj-junction-strip-nominate { display: flex; gap: 4px; }
-.dj-junction-strip-error { grid-column: 1 / -1; margin: 0; color: var(--dj-red); }
+/* Junction turn bar: the signal light, one line of booth guidance, and the handover actions. */
+.dj-turn-bar { --turn-color: #5b616a; --turn-ink: #c9ced5; display: flex; flex-wrap: wrap; flex-shrink: 0; align-items: center; gap: 4px 10px; padding: 4px 8px; border-top: 1px solid var(--dj-line); background: var(--dj-panel); box-shadow: inset 3px 0 var(--turn-color); font-size: 11px; color: var(--dj-dim); }
+.dj-turn-bar.is-standby { --turn-color: #d2a84e; --turn-ink: #1b1508; }
+.dj-turn-bar.is-ready { --turn-color: #55ad67; --turn-ink: #06140a; }
+.dj-turn-bar.is-onair { --turn-color: #cf4b44; --turn-ink: #fff; }
+.dj-turn-bar.is-outgoing { --turn-color: #7b818a; --turn-ink: #fff; }
+.dj-turn-light { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; gap: 4px; min-width: 84px; padding: 2px 8px; border-radius: 3px; background: var(--turn-color); color: var(--turn-ink); font-size: 11px; font-weight: 800; letter-spacing: .06em; }
+.dj-turn-bar.is-off .dj-turn-light { background: #26292d; color: #8d939b; }
+.dj-turn-bar.is-onair .dj-turn-light { animation: dj-turn-onair 1.6s ease-in-out infinite; }
+@keyframes dj-turn-onair { 50% { filter: brightness(1.25); } }
+@media (prefers-reduced-motion: reduce) { .dj-turn-bar.is-onair .dj-turn-light { animation: none; } }
+.dj-turn-light svg { width: 12px; height: 12px; }
+.dj-turn-guidance { flex: 1 1 260px; min-width: 0; margin: 0; overflow: hidden; color: var(--dj-text); text-overflow: ellipsis; white-space: nowrap; }
+.dj-turn-next, .dj-turn-cue { flex-shrink: 0; padding: 1px 6px; border: 1px solid var(--dj-line); border-radius: 3px; white-space: nowrap; }
+.dj-turn-next.is-ready { border-color: #3f6b3a; color: #b9e2a8; }
+.dj-turn-cue { border-color: #6b5a2c; color: #f0d58a; font-weight: 700; }
+.dj-turn-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.dj-turn-cues button { font-size: 10px; }
+.dj-turn-warning { flex-basis: 100%; margin: 0; color: #e8a66b; }
+.dj-turn-diagnostics { flex-basis: 100%; color: var(--dj-faint); font-size: 10px; }
+.dj-turn-diagnostics summary { width: max-content; cursor: pointer; }
+.dj-turn-diagnostics dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 1px 10px; margin: 3px 0; }
+.dj-turn-diagnostics dt { color: var(--dj-dim); }
+.dj-turn-diagnostics dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.dj-turn-meter { display: inline-block; width: 120px; height: 4px; overflow: hidden; border-radius: 2px; background: #17191c; vertical-align: middle; }
+.dj-turn-meter i { display: block; height: 100%; background: linear-gradient(90deg, #55ad67 0 72%, #d2a84e 72% 90%, #cf6660 90%); transition: width 80ms linear; }
+.dj-turn-device { display: flex; flex-wrap: wrap; gap: 6px; }
+.dj-turn-device select { min-width: 0; max-width: 220px; }
+.dj-deck--tail { box-shadow: inset 0 0 0 1px #7b818a; }
+.dj-chip--tail { border-color: #7b818a; color: #d8dce1; }

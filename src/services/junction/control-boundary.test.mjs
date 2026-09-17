@@ -16,6 +16,16 @@ test('while a Lite DJ performs, this computer prepares its own decks with a leas
   assert.equal(routed._junction.actorPeerId,'self');
   assert.throws(()=>routePerformanceCommand('unknown.raw',{}));
 });
+test('fader start: a waiting DJ plays their own decks and only the OUTGOING tail is refused',()=>{
+  const turn={signal:'standby',nextPeerId:'self',outgoingPeerId:'',blocker:{code:'',text:''},nextStatus:'',tailDecks:[],repeat:false,outOfQueue:[],incompatiblePeerIds:[],autoFailover:false};
+  junctionState.set({...base,turn});
+  assert.equal(routePerformanceCommand('deck.play',{deck:'A'}).deck,'A');
+  junctionState.set({...base,turn:{...turn,signal:'outgoing',tailDecks:['A']}});
+  assert.throws(()=>routePerformanceCommand('deck.play',{deck:'A'}),/ループ以外/);
+  assert.equal(routePerformanceCommand('deck.loop.enable',{deck:'A',enabled:false}).deck,'A');
+  assert.equal(routePerformanceCommand('deck.load',{deck:'B'}).deck,'B');
+  assert.throws(()=>routePerformanceCommand('mixer.crossfader',{position:0}),/マスター系/);
+});
 test('queued lease is not promoted after handoff and unknown raw operations fail closed',()=>{
   junctionState.set({...base,performerPeerId:'self'});
   const lease = captureJunctionLease();
