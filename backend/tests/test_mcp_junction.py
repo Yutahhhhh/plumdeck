@@ -109,7 +109,6 @@ def test_tools_translate_typed_arguments(monkeypatch):
             turn_expires_at=1_700_000_060_000,
         )
         junction.junction_reject_participant("peer-456")
-        junction.junction_attach_live_monitor("C", "a" * 64)
         junction.junction_set_microphone_enabled(True)
         junction.junction_configure_input(
             volume=0.75,
@@ -134,13 +133,13 @@ def test_tools_translate_typed_arguments(monkeypatch):
 
     actions = [call["body"]["action"] for call in calls]
     assert actions == [
-        "network.configure", "peer.reject", "live.attach", "mic.enabled",
+        "network.configure", "peer.reject", "mic.enabled",
         "input.set", "input.release",
         "turn.join", "turn.leave", "turn.repeat", "turn.failover", "turn.onair",
         "turn.force", "turn.skip", "turn.release", "turn.cue",
         "exchange.export",
     ]
-    turn_arguments = [call["body"]["arguments"] for call in calls[6:15]]
+    turn_arguments = [call["body"]["arguments"] for call in calls[5:14]]
     assert turn_arguments == [
         {"peerId": "peer-321"}, {}, {"enabled": True}, {"auto": False}, {}, {}, {}, {}, {"kind": "go_ahead"},
     ]
@@ -156,8 +155,7 @@ def test_tools_translate_typed_arguments(monkeypatch):
         },
     }
     assert calls[1]["body"]["arguments"] == {"peerId": "peer-456"}
-    assert calls[2]["body"]["arguments"] == {"deck": "C", "assetId": "a" * 64}
-    assert calls[4]["body"]["arguments"] == {
+    assert calls[3]["body"]["arguments"] == {
         "volume": 0.75,
         "orientation": 2,
         "eqLow": 0.8,
@@ -165,8 +163,8 @@ def test_tools_translate_typed_arguments(monkeypatch):
         "eqHigh": 1.2,
         "pfl": True,
     }
-    assert calls[5]["body"]["arguments"] == {}
-    assert calls[15]["body"]["arguments"] == {"kind": "invite", "peerId": "peer-789"}
+    assert calls[4]["body"]["arguments"] == {}
+    assert calls[14]["body"]["arguments"] == {"kind": "invite", "peerId": "peer-789"}
 
 
 def test_guest_response_exchange_export_may_omit_peer_id(monkeypatch):
@@ -313,3 +311,11 @@ def test_retired_handoff_tools_explain_fader_start_without_calling_the_bridge(mo
     monkeypatch.delenv(BRIDGE_URL_ENV, raising=False)
     with pytest.raises(ToolError, match="フェーダーを上げると交代"):
         getattr(junction, tool)()
+
+
+def test_retired_live_monitor_points_to_junction_master(monkeypatch):
+    monkeypatch.delenv(BRIDGE_URL_ENV, raising=False)
+    with pytest.raises(ToolError, match="junctionInput.decks"):
+        junction.junction_attach_live_monitor("C", "a" * 64)
+    with pytest.raises(ToolError, match="廃止"):
+        junction.junction_detach_live_monitor("C")

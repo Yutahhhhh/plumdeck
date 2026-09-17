@@ -1346,6 +1346,18 @@ struct Runtime::Impl {
         p.lastControlAt=monotonicNanos();
         if(manual&&p.manual.state==ExchangeState::Interrupted&&p.transport&&p.transport->linkState(false)==LinkState::Connected){p.manual.connectDeadline=0;manualSetState(p,ExchangeState::Connected,"通信が復旧しました");}
         const auto payload=envelope.payload;
+        // Fader start never transfers the performance graph, validates audio
+        // or cuts over at a future frame. Those legacy messages can only come
+        // from an older peer, which cannot take turns here, so they are dropped.
+        switch(envelope.type){
+        case MessageType::HandoffPrepare:case MessageType::HandoffFence:case MessageType::HandoffFenced:case MessageType::HandoffReady:
+        case MessageType::HandoffCommit:case MessageType::HandoffActivate:case MessageType::HandoffCancel:
+        case MessageType::GraphManifest:case MessageType::GraphApplied:case MessageType::GraphCheckpoint:
+        case MessageType::ValidationWindow:case MessageType::AssetRequest:case MessageType::AssetManifest:case MessageType::AssetComplete:
+            if(auth.faderStart)return;
+            break;
+        default:break;
+        }
         if(envelope.type==MessageType::SessionSnapshot && payload["engineFingerprint"]!=fingerprint()){fail("Junctionの基礎プロトコルに互換性がありません");return;}
         if(!p.hello && envelope.type!=MessageType::PeerHello && envelope.type!=MessageType::SessionSnapshot)return;
         if(envelope.type==MessageType::PeerHello){if(payload["fingerprint"]!=fingerprint()){p.hello=false;if(manual){discardAttempt(p);manualSetState(p,ExchangeState::Failed,"Junctionの基礎プロトコルに互換性がありません","version_mismatch");}else fail("Junctionの基礎プロトコルに互換性がありません");return;}const bool firstHello=!p.hello;p.hello=true;const auto capabilities=payload["junctionCapabilities"].toArray();if(capabilities.size()<=32&&capabilities.contains(kJunctionTracksCapability))p.junctionTracksV1=true;if(capabilities.size()<=32&&capabilities.contains(QString::fromLatin1(turn::kCapability)))p.faderStartV1=true;if(firstHello)queue(p,"peer.hello",localProfile());if(payload.contains("djName")||payload.contains("displayName"))p.name=sanitizeDisplayName(payload["djName"].toString(payload["displayName"].toString(p.name)));if(payload.contains("avatarDataUrl"))p.avatarDataUrl=profileAvatar(payload["avatarDataUrl"].toString());if(payload.contains("themeColor"))p.themeColor=profileColor(payload["themeColor"].toString(),id);if(!manual||p.transport->aggregateLinkState()==LinkState::Connected)connection="connected";

@@ -100,6 +100,22 @@ test('the Lite takeover seam is measured from the deck, not from the clock',asyn
  assert.doesNotMatch(select,/programPending\.clear\(\)/,'an operator switch never drops audio already delivered');
  assert.doesNotMatch(select,/const auto cut=now\(\)/,'the seam is not a moment in time');
 });
+test('state transfer is unreachable from fader start while recovery stays independent',async()=>{
+ const runtime=await readFile(path.resolve(import.meta.dirname,'../../src/junction/runtime.cpp'),'utf8');
+ assert.doesNotMatch(runtime,/auth\.prepare\(/,'nothing prepares a graph handoff');
+ assert.doesNotMatch(runtime,/broadcast\("handoff\.prepare"/,'no host announces a graph handoff');
+ const command=runtime.slice(runtime.indexOf('QJsonObject Runtime::command('));
+ assert.match(command,/if\(op=="handoff\.request"\|\|op=="handoff\.accept"\|\|op=="handoff\.cancel"\)return reject\("この操作は廃止されました/,'the old operations explain themselves');
+ const gate=runtime.slice(runtime.indexOf('Fader start never transfers the performance graph'),runtime.indexOf('if(auth.faderStart)return;'));
+ for(const type of ['HandoffPrepare','HandoffFence','HandoffFenced','HandoffReady','HandoffCommit','GraphManifest','GraphCheckpoint','ValidationWindow','AssetRequest'])assert.match(gate,new RegExp(`MessageType::${type}`),`${type} never reaches the state machine`);
+ assert.match(runtime,/auth\.faderStart=true;\n\s*timer\.setInterval/,'every runtime starts in fader start');
+ assert.match(runtime,/auth=Authority\{\};auth\.faderStart=true;/,'and stays there after a session ends');
+ assert.match(runtime,/if\(auth\.faderStart\|\|hosting\|\|!q->localDeckTracks/,'no Junction Live file announcement');
+ // Recovery does not use the transfer: it re-routes Program to the host's own mix.
+ const recovery=runtime.slice(runtime.indexOf('void beginRecovery('),runtime.indexOf('void collectValidation('));
+ assert.doesNotMatch(recovery,/startExport|restoreGraph|beginValidation|auth\.commit\(/);
+ assert.match(runtime,/void ownerLost\([\s\S]*beginRecovery\(reason\);/,'an ON AIR loss without a READY next DJ falls back to recovery');
+});
 test('Lite deck metadata is timestamped on receipt and positions are extrapolated for display',async()=>{
  const runtime=await readFile(path.resolve(import.meta.dirname,'../../src/junction/runtime.cpp'),'utf8');
  const host=await readFile(path.resolve(import.meta.dirname,'../../src/host.cpp'),'utf8');

@@ -29,6 +29,10 @@ JunctionInputAssign = Literal["left", "thru", "right"]
 TurnMode = Literal["rest", "temporary"]
 ExchangeKind = Literal["invite", "response", "notice"]
 TurnCue = Literal["one_more", "go_ahead", "hold", "ok"]
+_RETIRED_LIVE_MONITOR = (
+    "Junction Liveは廃止されました。音源は転送せず、前のDJの曲名・BPM・再生位置は"
+    "junction_get_state の junctionInput.decks（JUNCTION MASTER）で確認できます"
+)
 _RETIRED_HANDOFF = (
     "この操作は廃止されました。次のDJがフェーダーを上げると交代します。"
     "順番は junction_join_turn / junction_leave_turn / junction_reorder_roster、"
@@ -49,7 +53,6 @@ ExchangeText = Annotated[
 AssetId = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 JunctionInputLevel = Annotated[float, Field(ge=0.0, le=1.0)]
 JunctionInputEq = Annotated[float, Field(ge=0.0, le=4.0)]
-_ASSET_ID = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _call(action: str, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -538,16 +541,14 @@ def junction_set_microphone_enabled(enabled: bool) -> Dict[str, Any]:
 
 @mcp.tool()
 def junction_attach_live_monitor(deck: Deck, asset_id: AssetId) -> Dict[str, Any]:
-    """受信済みJunction Live音源をA〜Dの表示専用モニターデッキへ割り当てる。Master音声や実デッキは変更しない。"""
-    if not _ASSET_ID.fullmatch(asset_id):
-        raise ToolError("asset_id must be a lowercase SHA-256 hex string")
-    return _call("live.attach", {"deck": deck, "assetId": asset_id})
+    """廃止：Junction Liveの表示専用モニター。フェーダースタート方式では音源を転送しないため、常にエラーで理由を返す。"""
+    raise ToolError(_RETIRED_LIVE_MONITOR)
 
 
 @mcp.tool()
 def junction_detach_live_monitor(deck: Deck) -> Dict[str, Any]:
-    """A〜Dの表示専用Junction Liveモニターを外し、下のローカルデッキ表示へ戻す。"""
-    return _call("live.detach", {"deck": deck})
+    """廃止：Junction Liveの表示専用モニターの解除。常にエラーで理由を返す。"""
+    raise ToolError(_RETIRED_LIVE_MONITOR)
 
 
 @mcp.tool()
