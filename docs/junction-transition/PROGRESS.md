@@ -1,10 +1,8 @@
 STATUS: IN_PROGRESS
 
 ## 進行中
-- タスク: T1.1
-- 方針: `TurnState`（OFF/STANDBY/READY/ON AIR/OUTGOING、DESIGN.md 1.1〜1.2節）を純粋関数として実装し、C++ユニットテスト（junction-core-tests）を追加する。TS側（program-mixer.ts）も同じ導出にしてテストする。
-- 触るファイル: native/mixxx-engine-host/src/junction/authority.h/.cpp（turnPhase/readyBlockers追加）、新規 turn_state.h/.cpp、tests/junction/turn_state_test.cpp、src/services/junction/program-mixer.ts
-- 途中経過: T0.1〜T0.3（調査・設計）完了。T1.1 はこれから着手（未着手）。
+- なし。T0.1〜T0.3（フェーズ0：調査と設計）を完了し、本セッションはここで終了する（1回の実行の上限3タスクに達したため）。
+- 次回セッションが T1.1 に着手する際の方針（参考）: `TurnState`（OFF/STANDBY/READY/ON AIR/OUTGOING、DESIGN.md 1.1〜1.2節）を純粋関数として実装し、C++ユニットテスト（junction-core-tests）を追加する。TS側（program-mixer.ts）も同じ導出にしてテストする。触るファイル想定: native/mixxx-engine-host/src/junction/authority.h/.cpp（turnPhase/readyBlockers追加）、新規 turn_state.h/.cpp、tests/junction/turn_state_test.cpp、src/services/junction/program-mixer.ts。
 
 ## 次にやること
 - T1.1 状態機械
