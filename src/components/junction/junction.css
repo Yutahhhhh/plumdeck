@@ -474,3 +474,11 @@
 .junction-entry-subhead { margin: 0; font-size: 13px; }
 .junction-share-musics-row .junction-btn,
 .junction-share-musics-list .junction-btn { flex: 0 0 auto; white-space: nowrap; }
+
+/* Fader-start timetable settings and turn states. */
+.junction-timetable { display: flex; flex-direction: column; gap: 6px; }
+.junction-inline-toggle { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; }
+.junction-state-next { color: #1b1508; background: #d2a84e; }
+.junction-state-nextReady { color: #06140a; background: #55ad67; }
+.junction-state-playing { color: #fff; background: #cf4b44; }
+.junction-state-outgoing { color: #fff; background: #7b818a; }

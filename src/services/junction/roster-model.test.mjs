@@ -14,8 +14,7 @@ import {
   reorderPeerIds,
   safeAvatarDataUrl,
   stableThemeColor,
-  turnRequestAvailable,
-  handoffCancelAvailable,
+  rosterTurnActions,
   rosterPositionLocked,
 } from './roster-model.ts';
 
@@ -122,19 +121,9 @@ test('the first performer is derived from performerPeerId, not from host identit
   assert.deepEqual(orderedParticipants(rows).map((row) => row.peerId), ['first-dj', 'host']);
 });
 
-test('a turn request is visible without becoming the next or current performer', () => {
-  const requested = participant('guest', {rosterStatus: 'requested'});
-  const state = snapshot([requested], {lifecycle: 'live', performerPeerId: 'host'});
-  assert.equal(participantVisualState(requested, state), 'requested');
-  assert.equal(turnRequestAvailable('requested', false, true), false);
-  assert.equal(turnRequestAvailable('ready', false, true), true);
-  assert.equal(coordinatorCanSelect('requested'), true);
-});
-
 test('connected DJs are candidates without a request, and played DJs are never locked out', () => {
   assert.equal(coordinatorCanSelect('ready'), true, 'a connected DJ needs no turn request to be chosen');
   assert.equal(coordinatorCanSelect('finished'), true, 'a DJ who played may be chosen again');
-  assert.equal(turnRequestAvailable('finished', false, true), true, 'a played DJ may join the queue again');
   for (const state of ['playing', 'next', 'invited', 'connecting', 'response', 'problem']) assert.equal(coordinatorCanSelect(state), false);
   assert.equal(rosterPositionLocked('playing'), true);
   assert.equal(rosterPositionLocked('finished'), false);
@@ -183,8 +172,31 @@ test('blocking readiness and serious connection reasons stay concise and visible
   assert.equal(connectionAlert(snapshot([], {connection: {state: 'connected', detail: 'internal detail'}})), undefined);
 });
 
-test('only the coordinator can withdraw a pending next DJ, never a performer', () => {
-  assert.equal(handoffCancelAvailable('next', true), true);
-  assert.equal(handoffCancelAvailable('next', false), false);
-  for (const state of ['playing', 'finished', 'requested', 'ready', 'invited']) assert.equal(handoffCancelAvailable(state, true), false);
+test('fader start roster: the timetable decides next, the host steps in only when the booth needs it', () => {
+  const p = (peerId, overrides = {}) => ({peerId, displayName: peerId, djName: peerId, status: 'connected', ...overrides});
+  const turn = (overrides = {}) => ({signal: 'onair', nextPeerId: 'b', outgoingPeerId: '', blocker: {code: '', text: ''}, nextStatus: '', tailDecks: [], repeat: false, outOfQueue: ['d'], incompatiblePeerIds: ['old'], autoFailover: false, ...overrides});
+  const snap = (overrides = {}) => ({active: true, sessionId: 's', revision: 1, epoch: '3', lifecycle: 'live', localPeerId: 'a', hostPeerId: 'a', performerPeerId: 'a', nextPeerId: 'b', handoffState: 'playing',
+    participants: [p('a', {rosterStatus: 'performing'}), p('b', {rosterStatus: 'next'}), p('c', {rosterStatus: 'waiting'}), p('d', {rosterStatus: 'finished'}), p('old', {rosterStatus: 'waiting'})],
+    readiness: {ready: false, reasons: []}, program: {state: 'running'}, connection: {state: 'connected'}, turn: turn(), ...overrides});
+  const labels = (snapshot, id, host) => rosterTurnActions(snapshot.participants.find((row) => row.peerId === id), snapshot, host).map((action) => `${action.label}:${action.op}`);
+  const s = snap();
+  assert.deepEqual(labels(s, 'a', true), [], 'the ON AIR DJ has nothing to press');
+  assert.deepEqual(labels(s, 'b', true), ['強制交代:turn.force', 'スキップ:turn.skip']);
+  assert.deepEqual(labels(s, 'c', true), ['順番から外す:turn.leave']);
+  assert.deepEqual(labels(s, 'd', true), ['順番に入れる:turn.join']);
+  assert.deepEqual(labels(s, 'old', true), [], 'an app that cannot fader-start is never queued');
+  assert.equal(rosterTurnActions(s.participants[2], s, true)[0].params.peerId, 'c');
+  const ready = snap({participants: s.participants.map((row) => row.peerId === 'b' ? {...row, rosterStatus: 'ready'} : row)});
+  assert.equal(participantVisualState(ready.participants[1], ready), 'nextReady');
+  assert.equal(rosterTurnActions(ready.participants[1], ready, true)[0].primary, true, 'forcing a READY DJ is the obvious step');
+  const guest = snap({localPeerId: 'd', turn: turn()});
+  assert.deepEqual(labels(guest, 'd', false), ['順番に入る:turn.join']);
+  assert.deepEqual(rosterTurnActions(guest.participants[3], guest, false)[0].params, {}, 'a DJ joins as themself');
+  assert.deepEqual(labels(guest, 'c', false), [], 'guests never move other DJs');
+  const outgoing = snap({performerPeerId: 'b', nextPeerId: '', turn: turn({outgoingPeerId: 'a', nextPeerId: ''})});
+  assert.equal(participantVisualState(outgoing.participants[0], outgoing), 'outgoing');
+  assert.deepEqual(labels(outgoing, 'a', true), ['強制解放:turn.release']);
+  const lobby = snap({lifecycle: 'lobby', performerPeerId: '', nextPeerId: '', participants: [p('a', {rosterStatus: 'waiting'}), p('c', {rosterStatus: 'waiting'})]});
+  assert.deepEqual(labels(lobby, 'c', true), ['最初のDJにする:session.start']);
+  assert.deepEqual(labels(lobby, 'c', false), []);
 });

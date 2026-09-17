@@ -347,6 +347,23 @@ export function JunctionPanel({open, onClose, incomingInvite, onConsumeIncoming,
               />
             </section>}
 
+            {host && snapshot.lifecycle !== 'lobby' && snapshot.turn && <section className="junction-section junction-timetable" aria-label="順番の設定">
+              <label className="junction-inline-toggle">
+                <input type="checkbox" checked={snapshot.turn.repeat} disabled={cards.handoff?.busy}
+                  onChange={(event) => void runCard('handoff', () => junctionCommand('turn.repeat', {enabled: event.target.checked}))} />
+                B2B：演奏を終えたDJを順番の最後に戻す
+              </label>
+              <label className="junction-inline-toggle">
+                ON AIRのDJが切断したとき
+                <select value={snapshot.turn.autoFailover ? 'auto' : 'confirm'} disabled={cards.handoff?.busy}
+                  onChange={(event) => void runCard('handoff', () => junctionCommand('turn.failover', {auto: event.target.value === 'auto'}))}>
+                  <option value="confirm">確認する</option>
+                  <option value="auto">READYの次のDJへ自動で交代</option>
+                </select>
+              </label>
+            </section>}
+            {!host && snapshot.lifecycle === 'live' && <p className="junction-card-note">順番はホストが決めます。自分の番になるとプレイ画面の信号が STANDBY になります。</p>}
+
             <JunctionRoster
               snapshot={snapshot}
               host={host}
@@ -356,10 +373,7 @@ export function JunctionPanel({open, onClose, incomingInvite, onConsumeIncoming,
               automaticPeers={automaticPeers}
               onExchangeAction={handleExchangeAction}
               onImportText={(peerId, text) => runCard(peerId, () => junctionCommand('exchange.import', {text: text.trim(), peerId}), true)}
-              onChooseParticipant={(peerId, first) => void runCard('handoff', () => junctionCommand(first ? 'session.start' : 'handoff.request', first ? {performerPeerId: peerId} : {targetPeerId: peerId}))}
-              onAcceptHandoff={() => void runCard('handoff', () => junctionCommand('handoff.accept'))}
-              onCancelHandoff={() => void runCard('handoff', () => junctionCommand('handoff.cancel'))}
-              onRequestTurn={() => void runCard('handoff', () => junctionCommand('handoff.request', {targetPeerId: snapshot.localPeerId}))}
+              onTurn={(action) => void runCard('handoff', () => junctionCommand(action.op, action.params))}
               onReorder={(peerIds) => runCard('roster', () => junctionCommand('roster.reorder', {peerIds}), true)}
             />
 
@@ -373,7 +387,7 @@ export function JunctionPanel({open, onClose, incomingInvite, onConsumeIncoming,
                   await junctionCommand('snapshot');
                 })}
               >
-                マイクを閉じて引き継ぎに備える
+                マイクを閉じる（マイクONはフェーダースタートの合図になります）
               </button>
             )}
 
@@ -454,10 +468,13 @@ export function JunctionPanel({open, onClose, incomingInvite, onConsumeIncoming,
               <summary>トラブル対応・高度な情報</summary>
               <div className="junction-settings-body">
                 <p className="junction-card-note">接続状態：{connectionStatus(snapshot.connection.state)}</p>
-                <p className="junction-card-note">引き継ぎ：{snapshot.handoffState}</p>
+                <p className="junction-card-note">内部状態：{snapshot.handoffState}</p>
                 <p className="junction-card-note">接続方法：{serverMode ? '自動接続' : automaticPeers.size > 0 ? '招待用の文字を直接受け渡し（PlumDeck Liteのメンバーとは自動で受け渡し）' : '招待用の文字を直接受け渡し'}</p>
                 {host && snapshot.handoffState === 'recovery' && (
-                  <button type="button" className="junction-btn junction-btn-primary" disabled={cards.recovery?.busy} onClick={() => void runCard('recovery', () => junctionCommand('recovery.resume'))}>このPCの演奏で再開</button>
+                  <div className="junction-card-actions">
+                    <button type="button" className="junction-btn junction-btn-primary" disabled={cards.recovery?.busy} onClick={() => void runCard('recovery', () => junctionCommand('recovery.resume'))}>このPCの演奏で再開</button>
+                    {snapshot.turn?.nextPeerId && snapshot.turn.nextPeerId !== snapshot.localPeerId && <button type="button" className="junction-btn junction-btn-default" disabled={cards.recovery?.busy} onClick={() => void runCard('recovery', () => junctionCommand('turn.force'))}>次のDJに交代</button>}
+                  </div>
                 )}
               </div>
             </details>

@@ -14,7 +14,9 @@ export type RosterVisualState =
   | 'ready'
   | 'requested'
   | 'next'
+  | 'nextReady'
   | 'playing'
+  | 'outgoing'
   | 'finished'
   | 'reconnecting'
   | 'disconnected'
@@ -27,26 +29,54 @@ export interface QualityPresentation {
   detail?: string;
 }
 
-/**
- * Every connected DJ is a candidate: a turn request only joins the queue, and a
- * DJ who already played may be chosen again.
- */
+/** Any connected DJ, including one who already played, can open the session. */
 export function coordinatorCanSelect(state: RosterVisualState): boolean {
   return state === 'ready' || state === 'requested' || state === 'finished';
 }
 
-/** Only the performer keeps a fixed position; played DJs can be queued again. */
+/** Only the ON AIR DJ keeps a fixed position; played DJs can be queued again. */
 export function rosterPositionLocked(state: RosterVisualState): boolean {
   return state === 'playing';
 }
 
-/** Only the coordinator withdraws a pending (not yet committed) turn. */
-export function handoffCancelAvailable(state: RosterVisualState, coordinator: boolean): boolean {
-  return coordinator && state === 'next';
+export type TurnActionOp = 'session.start' | 'turn.join' | 'turn.leave' | 'turn.skip' | 'turn.force' | 'turn.release';
+export interface TurnAction {
+  label: string;
+  op: TurnActionOp;
+  params: Record<string, unknown>;
+  primary: boolean;
+  title?: string;
 }
 
-export function turnRequestAvailable(state: RosterVisualState, coordinator: boolean, self: boolean): boolean {
-  return !coordinator && self && (state === 'ready' || state === 'finished');
+/**
+ * What one roster row offers. There is no nominate/accept step: the timetable
+ * decides who is next, the next DJ goes on air with a fader, and the host
+ * only steps in (skip, force, release) when the booth needs it.
+ */
+export function rosterTurnActions(participant: JunctionParticipant, snapshot: JunctionSnapshot, host: boolean): TurnAction[] {
+  const state = participantVisualState(participant, snapshot);
+  const self = participant.peerId === snapshot.localPeerId;
+  const peerId = participant.peerId;
+  const params = self ? {} : {peerId};
+  const incompatible = snapshot.turn?.incompatiblePeerIds.includes(peerId) ?? false;
+  if (snapshot.lifecycle === 'lobby') {
+    return host && coordinatorCanSelect(state) && !incompatible
+      ? [{label: '最初のDJにする', op: 'session.start', params: {performerPeerId: peerId}, primary: true, title: 'このDJがフェーダーを上げるとセッションが始まります'}]
+      : [];
+  }
+  if (snapshot.lifecycle !== 'live') return [];
+  if (state === 'outgoing') return host ? [{label: '強制解放', op: 'turn.release', params: {}, primary: false, title: '残りの曲を止め、次の順番へ進めます'}] : [];
+  if (state === 'next' || state === 'nextReady') {
+    if (!host) return [];
+    return [
+      {label: '強制交代', op: 'turn.force', params: {}, primary: state === 'nextReady', title: 'フェーダーを待たずにこのDJをON AIRにします'},
+      {label: 'スキップ', op: 'turn.skip', params: {}, primary: false, title: 'このDJを順番の最後へ回します'},
+    ];
+  }
+  if (state === 'playing' || incompatible || (!host && !self)) return [];
+  if (state === 'finished') return [{label: self ? '順番に入る' : '順番に入れる', op: 'turn.join', params, primary: self, title: '順番の最後に入ります'}];
+  if (state === 'ready' || state === 'requested') return [{label: self ? '順番から外れる' : '順番から外す', op: 'turn.leave', params, primary: false}];
+  return [];
 }
 
 const EXCHANGE_PROBLEM = new Set<ExchangeState>([
@@ -98,10 +128,11 @@ export function participantVisualState(
   participant: JunctionParticipant,
   snapshot: JunctionSnapshot,
 ): RosterVisualState {
-  if (participant.peerId === snapshot.performerPeerId || participant.isPerformer) return 'playing';
-  if (participant.peerId === snapshot.nextPeerId || participant.isNextUp) return 'next';
-
   const explicit = participant.rosterStatus?.toLowerCase();
+  if (participant.peerId === snapshot.performerPeerId || participant.isPerformer) return 'playing';
+  if ((snapshot.turn?.outgoingPeerId && participant.peerId === snapshot.turn.outgoingPeerId) || explicit === 'outgoing') return 'outgoing';
+  if (participant.peerId === snapshot.nextPeerId || participant.isNextUp) return explicit === 'ready' ? 'nextReady' : 'next';
+
   if (explicit === 'performing' || explicit === 'playing') return 'playing';
   if (explicit === 'next') return 'next';
   if (explicit === 'finished') return 'finished';

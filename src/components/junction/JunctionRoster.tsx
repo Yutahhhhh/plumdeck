@@ -19,19 +19,17 @@ import type { ExchangeActionId } from '@/services/junction/exchange-actions';
 import { deriveHostCardGuidance } from '@/services/junction/exchange-actions';
 import {
   orderedParticipants,
-  compactReadinessReasons,
   connectionAlert,
-  coordinatorCanSelect,
-  handoffCancelAvailable,
   participantName,
   participantVisualState,
   qualityPresentation,
   reorderPeerIds,
   rosterPositionLocked,
+  rosterTurnActions,
   safeAvatarDataUrl,
   stableThemeColor,
-  turnRequestAvailable,
   type RosterVisualState,
+  type TurnAction,
 } from '@/services/junction/roster-model';
 import type { JunctionParticipant, JunctionSnapshot } from '@/types/junction';
 import { ExchangeFlow } from './ExchangeFlow';
@@ -41,10 +39,12 @@ const STATE_LABEL: Record<RosterVisualState, string> = {
   response: '返答あり',
   connecting: '接続中',
   ready: '接続済み',
-  requested: '演奏希望',
-  next: '次のDJ',
-  playing: '演奏中',
-  finished: '演奏済み・再演奏可',
+  requested: '順番待ち',
+  next: 'STANDBY',
+  nextReady: 'READY',
+  playing: 'ON AIR',
+  outgoing: 'OUTGOING',
+  finished: '順番の外',
   reconnecting: '自動再接続中',
   disconnected: '切断',
   problem: '要対応',
@@ -60,10 +60,7 @@ interface Props {
   automaticPeers?: Set<string>;
   onExchangeAction: (peerId: string, action: ExchangeActionId) => void;
   onImportText: (peerId: string, text: string) => Promise<void>;
-  onChooseParticipant: (peerId: string, first: boolean) => void;
-  onAcceptHandoff: () => void;
-  onCancelHandoff: () => void;
-  onRequestTurn: () => void;
+  onTurn: (action: TurnAction) => void;
   onReorder: (peerIds: string[]) => Promise<void>;
 }
 
@@ -77,10 +74,7 @@ export function JunctionRoster({
   automaticPeers,
   onExchangeAction,
   onImportText,
-  onChooseParticipant,
-  onAcceptHandoff,
-  onCancelHandoff,
-  onRequestTurn,
+  onTurn,
   onReorder,
 }: Props) {
   const source = useMemo(() => orderedParticipants(snapshot.participants), [snapshot.participants]);
@@ -122,7 +116,7 @@ export function JunctionRoster({
       <header className="junction-roster-head">
         <div>
           <h3 id="junction-roster-title">DJ一覧</h3>
-          <p>{participants.length}人 · 上から演奏予定順 · 接続済みのDJは希望がなくても指名できます</p>
+          <p>{participants.length}人 · 上から演奏順（タイムテーブル） · 次のDJはフェーダーを上げるとON AIRになります</p>
         </div>
         {host && participants.length > 1 && <small>ドラッグで順番を変更</small>}
       </header>
@@ -147,10 +141,7 @@ export function JunctionRoster({
                 automatic={Boolean(automaticPeers?.has(participant.peerId))}
                 onExchangeAction={onExchangeAction}
                 onImportText={onImportText}
-                onChooseParticipant={onChooseParticipant}
-                onAcceptHandoff={onAcceptHandoff}
-                onCancelHandoff={onCancelHandoff}
-                onRequestTurn={onRequestTurn}
+                onTurn={onTurn}
               />
             ))}
           </ol>
@@ -174,10 +165,7 @@ interface RowProps {
   automatic: boolean;
   onExchangeAction: (peerId: string, action: ExchangeActionId) => void;
   onImportText: (peerId: string, text: string) => Promise<void>;
-  onChooseParticipant: (peerId: string, first: boolean) => void;
-  onAcceptHandoff: () => void;
-  onCancelHandoff: () => void;
-  onRequestTurn: () => void;
+  onTurn: (action: TurnAction) => void;
 }
 
 function RosterRow({
@@ -191,30 +179,25 @@ function RosterRow({
   automatic,
   onExchangeAction,
   onImportText,
-  onChooseParticipant,
-  onAcceptHandoff,
-  onCancelHandoff,
-  onRequestTurn,
+  onTurn,
 }: RowProps) {
   const state = participantVisualState(participant, snapshot);
   const isSelf = participant.peerId === snapshot.localPeerId;
   const isHost = participant.peerId === snapshot.hostPeerId || participant.isHost;
   const sortable = host && !rosterPositionLocked(state);
-  const sounding = Boolean(snapshot.junctionInput?.releasingPeerId && snapshot.junctionInput.releasingPeerId === participant.peerId);
+  const incompatible = Boolean(snapshot.turn?.incompatiblePeerIds.includes(participant.peerId));
   const {attributes, listeners, setNodeRef, transform, transition, isDragging} = useSortable({
     id: participant.peerId,
     disabled: !sortable,
   });
   const style = {transform: CSS.Transform.toString(transform), transition};
   const guidance = host && !isSelf && participant.exchange ? deriveHostCardGuidance(participant, Boolean(copiedPacket && copiedPacket === participant.exchange.inviteText), automatic) : undefined;
-  const primary = primaryAction(participant, snapshot, host, state);
-  // The coordinator can withdraw a pending turn before it is committed.
-  const cancellable = handoffCancelAvailable(state, host);
+  const actions = rosterTurnActions(participant, snapshot, host);
   const quality = qualityPresentation(
     participant.connectionQuality ?? (state === 'disconnected' ? {level: 'offline'} : state === 'reconnecting' ? {level: 'poor'} : undefined),
   );
-  const readinessReason = state === 'next' && !snapshot.readiness.ready
-    ? compactReadinessReasons(snapshot.readiness.reasons)
+  const nextStatus = (state === 'next' || state === 'nextReady') && !isSelf && snapshot.turn?.nextStatus
+    ? {receiving: '受信中', loaded: 'ロード済み', cueing: 'CUE中', ready: 'READY'}[snapshot.turn.nextStatus]
     : undefined;
 
   return (
@@ -244,38 +227,23 @@ function RosterRow({
           <div className="junction-roster-badges">
             {isSelf && <span className="junction-badge junction-badge-self">あなた</span>}
             {isHost && <span className="junction-badge" title="セッションの管理者。演奏者や操作権とは別です">ホスト</span>}
-            {state === 'playing' && <span className="junction-badge" title="Program Masterを操作しているDJ">操作権</span>}
-            {sounding && <span className="junction-badge" title="操作権は移りました。受け手がJUNCTION MASTERを下げ切るまで音を送り続けます">送出中</span>}
+            {incompatible && <span className="junction-badge" title="相手のアプリを更新してください。更新するまで順番に入れません">要アップデート</span>}
+            {nextStatus && <span className="junction-badge" title="次のDJの準備状況">{nextStatus}</span>}
             <span className={`junction-state junction-state-${state}`}>{STATE_LABEL[state]}</span>
           </div>
         </div>
         <ConnectionIndicator presentation={quality} />
       </div>
 
-      {(primary || cancellable) && (
+      {actions.length > 0 && (
         <div className="junction-roster-actions">
-          {primary && (
-            <button
-              type="button"
-              className="junction-btn junction-btn-primary junction-row-primary"
-              disabled={busy || primary.disabled}
-              onClick={() => {
-                if (primary.exchangeAction) onExchangeAction(participant.peerId, primary.exchangeAction);
-                else if (primary.kind === 'first') onChooseParticipant(participant.peerId, true);
-                else if (primary.kind === 'next') onChooseParticipant(participant.peerId, false);
-                else if (primary.kind === 'accept') onAcceptHandoff();
-                else if (primary.kind === 'request') onRequestTurn();
-              }}
-            >
-              {primary.label}
+          {actions.map((action) => (
+            <button key={action.op} type="button" title={action.title}
+              className={`junction-btn ${action.primary ? 'junction-btn-primary junction-row-primary' : 'junction-btn-default'}`}
+              disabled={busy} onClick={() => onTurn(action)}>
+              {action.label}
             </button>
-          )}
-          {cancellable && (
-            <button type="button" className="junction-btn junction-btn-default" disabled={busy} onClick={onCancelHandoff}>
-              引き継ぎを取消
-            </button>
-          )}
-
+          ))}
         </div>
       )}
 
@@ -285,11 +253,6 @@ function RosterRow({
         onAction={(action) => onExchangeAction(participant.peerId, action)}
         onImport={(text) => onImportText(participant.peerId, text)}
       />}
-      {readinessReason && (
-        <p className="junction-row-warning" role="status">
-          準備待ち：{readinessReason}
-        </p>
-      )}
       {error && !guidance && <p className="junction-card-error" role="alert">{error}</p>}
     </li>
   );
@@ -316,27 +279,4 @@ function ConnectionIndicator({presentation}: {presentation: ReturnType<typeof qu
       <small>{presentation.label.replace('通信', '')}</small>
     </span>
   );
-}
-
-interface PrimaryAction {
-  label: string;
-  kind?: 'first' | 'next' | 'accept' | 'request';
-  exchangeAction?: ExchangeActionId;
-  disabled?: boolean;
-}
-
-function primaryAction(
-  participant: JunctionParticipant,
-  snapshot: JunctionSnapshot,
-  host: boolean,
-  state: RosterVisualState,
-): PrimaryAction | undefined {
-  const isSelf = participant.peerId === snapshot.localPeerId;
-  const lobby = snapshot.lifecycle === 'lobby' || (!snapshot.performerPeerId && snapshot.lifecycle !== 'live');
-  if (host && lobby && coordinatorCanSelect(state)) return {label: '最初のDJに選ぶ', kind: 'first'};
-  if (host && !lobby && coordinatorCanSelect(state)) return {label: '次のDJにする', kind: 'next'};
-  if (isSelf && state === 'next') return {label: '準備OK・引き継ぐ', kind: 'accept', disabled: !snapshot.readiness.ready};
-  if (host && state === 'next' && snapshot.readiness.ready) return {label: '交代を確定', kind: 'accept'};
-  if (turnRequestAvailable(state, host, isSelf)) return {label: state === 'finished' ? 'もう一度演奏を希望' : '演奏を希望する', kind: 'request'};
-  return undefined;
 }
