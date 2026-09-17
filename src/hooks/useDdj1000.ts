@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { djEngineClient } from "@/services/dj-engine/client";
 import { Ddj1000Decoder, ddj1000Feedback, ddj1000ExtendedFeedback } from "@/services/midi/ddj1000";
 import { Ddj1000Runtime, type ControllerActions } from "@/services/midi/ddj1000-runtime";
+import { JUNCTION_CHANNEL_KEY, readJunctionChannel, type JunctionChannelAssign } from "@/services/midi/junction-channel";
 import { sampler } from "@/services/dj-engine/sampler";
 import { padSelectionFeedback } from "@/services/midi/pad-state";
 import { JOG_DEFAULT, jogSetting } from "@/services/midi/jog-settings";
@@ -22,6 +23,8 @@ export function useDdj1000(actions: ControllerActions) {
   const [enabled, setEnabled] = useState(() => localStorage.getItem("plumdeck.ddj1000.enabled") !== "false");
   const [status, setStatus] = useState<MidiStatus>(OFF);
   const [retry, setRetry] = useState(0);
+  const [junctionChannel, setJunctionChannelState] = useState<JunctionChannelAssign>(() => readJunctionChannel(localStorage.getItem(JUNCTION_CHANNEL_KEY)));
+  const junctionChannelRef = useRef(junctionChannel);
   const lightTestUntil = useRef(0);
   const [sensitivity, setSensitivity] = useState(() => {
     return jogSetting(Number(localStorage.getItem("plumdeck.ddj1000.jogSensitivity") ?? JOG_DEFAULT),localStorage.getItem("plumdeck.ddj1000.jogSensitivityVersion"));
@@ -44,6 +47,9 @@ export function useDdj1000(actions: ControllerActions) {
     void invoke("dj_midi_select_device", { device: localStorage.getItem("plumdeck.midi.device") || null }).catch(() => undefined);
     const runtime = new Ddj1000Runtime(djEngineClient, () => latest.current);
     for (const deck of ["A", "B", "C", "D"] as const) runtime.setTempoRange(deck, Number(localStorage.getItem(`plumdeck.tempoRange.${deck}`)) || 16);
+    runtime.junctionChannel = junctionChannelRef.current;
+    const junctionChannelChange = (event: Event) => { runtime.junctionChannel = (event as CustomEvent<JunctionChannelAssign>).detail; runtime.reset(); };
+    window.addEventListener("plumdeck:controller-junction-channel", junctionChannelChange);
     const tempoRange = (event: Event) => {
       const detail = (event as CustomEvent<{ deck: import("@/types/dj-engine").DeckId; range: number }>).detail;
       runtime.setTempoRange(detail.deck, detail.range);
@@ -160,13 +166,18 @@ export function useDdj1000(actions: ControllerActions) {
       })().catch(e => { if (live) setStatus(previous => ({ ...previous, error: String(e) })); }).finally(() => { writing = false; });
     }, 50);
     return () => {
-      live = false; clearInterval(displayTimer); clearInterval(inputTimer); clearInterval(pollTimer); clearInterval(feedbackTimer); window.removeEventListener("plumdeck:controller-tempo-range", tempoRange); runtime.dispose();
+      live = false; clearInterval(displayTimer); clearInterval(inputTimer); clearInterval(pollTimer); clearInterval(feedbackTimer); window.removeEventListener("plumdeck:controller-tempo-range", tempoRange); window.removeEventListener("plumdeck:controller-junction-channel", junctionChannelChange); runtime.dispose();
       // The native lease closes the ports and clears feedback itself. Avoid a
       // delayed cleanup disabling the next effect after a reconnect.
       void invoke("dj_midi_status", { enabled: false }).catch(() => undefined);
     };
   }, [enabled, retry]);
-  return { status, enabled, setEnabled, sensitivity, setSensitivity,
+  const setJunctionChannel = (value: JunctionChannelAssign) => {
+    junctionChannelRef.current = value; setJunctionChannelState(value);
+    try { localStorage.setItem(JUNCTION_CHANNEL_KEY, value); } catch { /* per-viewer convenience only */ }
+    window.dispatchEvent(new CustomEvent("plumdeck:controller-junction-channel", { detail: value }));
+  };
+  return { status, enabled, setEnabled, sensitivity, setSensitivity, junctionChannel, setJunctionChannel,
     reconnect: () => setRetry(value => value + 1),
     testLights: () => { lightTestUntil.current = Date.now() + 4000; } };
 }

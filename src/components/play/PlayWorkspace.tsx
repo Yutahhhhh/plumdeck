@@ -911,6 +911,7 @@ export function PlayWorkspace() {
           </summary>
           <div className="dj-midi-popover">
             <label><input type="checkbox" checked={midi.enabled} onChange={e => midi.setEnabled(e.target.checked)} /> DDJ-1000を自動接続</label>
+            <label title="JUNCTION MASTERを受けている間だけ、このチャンネルのLEVEL・EQ・CUE・クロスフェーダー割り当てがJUNCTION MASTERを操作します。デッキ側の操作は変わりません。">JUNCTION MASTERのチャンネル <select value={midi.junctionChannel} onChange={e => midi.setJunctionChannel(e.target.value === "C" || e.target.value === "D" ? e.target.value : "")}><option value="">割り当てない</option><option value="C">CH3</option><option value="D">CH4</option></select></label>
             <label title="小さい値ほど同じジョグ回転での移動量が小さくなります。">ジョグ移動量 <input type="range" min="0.005" max="0.25" step="0.005" value={midi.sensitivity} onChange={e => midi.setSensitivity(Number(e.target.value))} /> {midi.sensitivity.toFixed(3)} ms/count <button onClick={()=>midi.setSensitivity(0.1)}>標準に戻す</button></label>
             <span>受信 {midi.status.received} / 送信 {midi.status.sent}</span>
             <span>ジョグ画面: {midi.status.display?.authenticated ? `接続応答あり · HID送信 ${midi.status.display.reportsSent}` : "接続応答待ち"}</span>

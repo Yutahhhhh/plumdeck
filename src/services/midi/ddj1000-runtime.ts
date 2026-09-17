@@ -5,6 +5,8 @@ import { BEAT_FX, beatFxMaxBeats } from "./beat-fx.ts";
 import type { DjEngineClient } from "../dj-engine/client";
 import type { BeatFxState, DeckId, PadEffect } from "../../types/dj-engine";
 import type { MidiAction } from "./ddj1000";
+import { controllerTailLock, junctionChannelActive, junctionChannelSettings, junctionChannelTarget, type JunctionChannelAssign } from "./junction-channel.ts";
+import { junctionCommand } from "../junction/client.ts";
 const DECKS: DeckId[] = ["A", "B", "C", "D"];
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 export type ControllerActions = {
@@ -62,6 +64,20 @@ export class Ddj1000Runtime {
   private unsubscribePads: () => void;
   // Legacy constructor default; the device hook supplies the user's calibrated setting.
   public jogSensitivity = 1.8;
+  /** Physical mixer channel that carries JUNCTION MASTER while this DJ has J. */
+  public junctionChannel: JunctionChannelAssign = "";
+  private junctionPending: Record<string, unknown> = {};
+  private junctionTimer: ReturnType<typeof setTimeout> | null = null;
+  /** J strip moves coalesce like the on-screen fader: one native call per 50 ms. */
+  private sendJunction(settings: Record<string, unknown>) {
+    this.junctionPending = {...this.junctionPending, ...settings};
+    if (this.junctionTimer) return;
+    this.junctionTimer = setTimeout(() => {
+      this.junctionTimer = null;
+      const pending = this.junctionPending; this.junctionPending = {};
+      if (this.alive) this.perform(() => junctionCommand("input.set", pending));
+    }, 50);
+  }
   private client: DjEngineClient;
   private actions: () => ControllerActions;
   constructor(client: DjEngineClient, actions: () => ControllerActions) {
@@ -127,6 +143,11 @@ export class Ddj1000Runtime {
     const {control,deck,value} = action;
     const snapshot = this.client.getState().snapshot;
     if (!snapshot) return false;
+    if (junctionChannelActive(this.junctionChannel, deck, junctionState.get())) {
+      const target = junctionChannelTarget(control, junctionState.get()?.junctionInput?.channel);
+      if (target === undefined) return true;
+      return this.acquire(`J:${control}`, value, target);
+    }
     const targetDeck = /^filter[A-D]$/.test(control) ? control.slice(-1) as DeckId : deck;
     const channel = targetDeck ? snapshot.mixer.channels[targetDeck] : undefined;
     let target: number | undefined;
@@ -138,7 +159,9 @@ export class Ddj1000Runtime {
     else if (control === 'tempo' && deck) target = .5 + (snapshot.decks[deck].rate - 1) / (2 * (this.ranges.get(deck) ?? .16));
     else if (control === 'fxMix') target = snapshot.mixer.beatFx?.mix ?? .5;
     if (target === undefined || !Number.isFinite(target)) return true;
-    const key = `${deck ?? 'master'}:${control}`;
+    return this.acquire(`${deck ?? 'master'}:${control}`, value, target);
+  }
+  private acquire(key: string, value: number, target: number): boolean {
     const pickup = this.pickup.get(key) ?? {acquired:false};
     if (!pickup.acquired) pickup.acquired = Math.abs(value-target) < .025 || (pickup.previous !== undefined && (pickup.previous-target)*(value-target)<=0);
     pickup.previous=value;this.pickup.set(key,pickup);
@@ -146,7 +169,22 @@ export class Ddj1000Runtime {
     return pickup.acquired;
   }
   dispatch(action: MidiAction) {
-    if (!this.alive || !this.softTakeover(action)) return;
+    if (!this.alive) return;
+    const junction = junctionState.get();
+    // The J strip belongs to the receiver: it is never part of an outgoing tail.
+    const jStrip = junctionChannelActive(this.junctionChannel, action.deck, junction) && junctionChannelSettings(action.control, action.value, action.pressed, junction?.junctionInput?.channel) !== null;
+    if (!jStrip && controllerTailLock(action.control, action.deck, junction)) {
+      // Dropped without a toast: the hardware keeps moving while the engine
+      // does not, so this control must be picked up again after the release.
+      this.pickup.set(`${action.deck ?? 'master'}:${action.control}`, {previous: action.value, acquired: false});
+      return;
+    }
+    if (!this.softTakeover(action)) return;
+    if (jStrip) {
+      const settings = junctionChannelSettings(action.control, action.value, action.pressed, junction?.junctionInput?.channel);
+      if (settings) this.sendJunction({...settings});
+      return;
+    }
     if (action.deck && action.slot !== undefined && action.mode !== undefined) {
       const key = `${action.deck}:${action.mode}:${action.slot}:${Boolean(action.shift)}`;
       if (action.pressed === false) {
@@ -570,5 +608,5 @@ export class Ddj1000Runtime {
     }
     this.seekPreview.clear(); this.loopIn.clear(); this.loopAdjust.clear(); this.keyPages.clear(); this.keyboardCues.clear(); this.choosingKeyboardCue.clear(); this.jumps.clear(); this.vinyl.clear();
   }
-  dispose() { this.unsubscribeJunction(); this.unsubscribePads(); this.reset(); this.alive = false; clearInterval(this.heartbeat); }
+  dispose() { this.unsubscribeJunction(); this.unsubscribePads(); this.reset(); this.alive = false; clearInterval(this.heartbeat); if (this.junctionTimer) clearTimeout(this.junctionTimer); this.junctionTimer = null; }
 }
