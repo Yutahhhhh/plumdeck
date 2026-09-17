@@ -9,7 +9,7 @@ import path from 'node:path';
 const binary=process.env.PLUMDECK_TEST_HOST||path.resolve(import.meta.dirname,'../../build-upstream/plumdeck-mixxx-engine-host');
 const previousBinary=process.env.PLUMDECK_PREVIOUS_HOST;
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
-async function until(read,predicate,label,timeout=40000){const end=Date.now()+timeout;let last;while(Date.now()<end){last=await read();if(predicate(last))return last;await pause(60);}throw Error(`${label}: timed out; phase=${last?.handoffState}, connection=${last?.connection?.state}`);}
+async function until(read,predicate,label,timeout=40000){const end=Date.now()+timeout;let last;while(Date.now()<end){last=await read();if(predicate(last))return last;await pause(60);}throw Error(`${label}: timed out; phase=${last?.handoffState}, connection=${last?.connection?.state}, turn=${last?.turn?.signal}/${last?.turn?.blocker?.code}`);}
 function native(directory,executable=binary,extraEnv={}){
  const child=spawn(executable,[],{env:{...process.env,...extraEnv,PLUMDECK_JUNCTION_EPHEMERAL_NETWORK:'1',PLUMDECK_MIXXX_OUTPUT_DEVICE:process.env.PLUMDECK_MIXXX_OUTPUT_DEVICE||'BlackHole 2ch',PLUMDECK_MIXXX_RECORDING_DIR:directory}});
  let hello,id=0,stderr='';const pending=new Map();child.stderr.on('data',b=>{stderr=(stderr+b).slice(-3000);});
@@ -63,7 +63,9 @@ test('additive Junction Live negotiation is independent from the compatible base
  assert.match(exchange,/junction-5/,'manual exchange remains compatible with the previous release');
  assert.doesNotMatch(exchange,/junction-6/);
  assert.match(runtime,/junction-live-monitor-v1/);
- assert.match(runtime,/"junctionCapabilities",QJsonArray\{kJunctionTracksCapability\}/);
+ assert.match(runtime,/"junctionCapabilities",QJsonArray\{kJunctionTracksCapability,QString::fromLatin1\(turn::kCapability\)\}/,'fader start is an additive capability');
+ assert.match(runtime,/capabilities\.contains\(QString::fromLatin1\(turn::kCapability\)\)\)p\.faderStartV1=true/,'a peer takes turns only after negotiating fader start');
+ assert.match(runtime,/if\(!peer\.approved\|\|!peer\.hello\|\|!peer\.faderStartV1\)return false;/,'an older peer is never silently given the old handoff');
  assert.match(runtime,/!host->second->junctionTracksV1/,'an old host is never sent an unknown track message');
  assert.match(runtime,/MessageType::TrackAnnounce && p\.junctionTracksV1/,'an announcement is accepted only after negotiation');
 });
@@ -76,8 +78,12 @@ test('the Lite takeover seam is measured from the deck, not from the clock',asyn
  assert.match(runtime,/input\.write\(samples,info\);/);
  // The one-shot: armed in exactly one place, consumed by exchange in exactly
  // one place, so no later handoff can inherit it.
- assert.equal(runtime.match(/takeoverAnchor\.store\(/g).length,2,'armed at takeover and cleared on stop, nowhere else');
- assert.match(runtime,/const bool measureSeam=takeOver&&programOpened&&!previous\.isEmpty\(\);[\s\S]{0,120}takeoverAnchor\.store\(measureSeam/);
+ // Armed when this computer takes over, armed by a guest going on air (its
+ // stream then names the seam), expired if no block measured it, cleared on stop.
+ assert.equal(runtime.match(/takeoverAnchor\.store\(/g).length,4,'armed at a local takeover or a guest ON AIR, expired, and cleared on stop');
+ assert.match(runtime,/const bool measureSeam=takeOver&&programOpened;[\s\S]{0,400}takeoverAnchor\.store\(measureSeam/);
+ assert.match(runtime,/void goOnAir\(\)[\s\S]{0,500}q->setCaptureAnchor\(UINT64_MAX,0\);takeoverAnchor\.store\(true/,'a guest measures its seam on its own anchored capture');
+ assert.match(runtime,/if\(remoteSeam\)seamFrame\.store\(report->frame/,'the host takes a remote seam from the new DJ report, never from its clock');
  assert.equal(runtime.match(/takeoverAnchor\.exchange\(false/g).length,1,'consumed exactly once, by the capture that uses it');
  const capture=runtime.slice(runtime.indexOf('void Runtime::capture('),runtime.indexOf('QJsonObject Runtime::command('));
  assert.match(capture,/TakeoverAnchor::resolve\(d->input\.renderedMediaFrame\(\),elapsed\)/,'the anchor is the frame the deck rendered in this same callback');
@@ -86,10 +92,11 @@ test('the Lite takeover seam is measured from the deck, not from the clock',asyn
  // operator from it on: no gap, no duplicated frame, and no timer involved.
  const allowed=runtime.slice(runtime.indexOf('const auto allowed=[&]'),runtime.indexOf('quint32 begin=0,end=info.frameCount;'));
  assert.match(allowed,/if\(seam\)\{const auto boundary=seamFrame\.load\([^)]*\);if\(!boundary\|\|f<boundary\)return producer==seam->oldOwner&&info\.epoch==seam->oldEpoch;\}/);
+ assert.match(allowed,/info\.generation>=ownerMinGeneration/,'a remote ON AIR stream counts only from its anchored generation');
  assert.doesNotMatch(allowed,/now\(\)|monotonicNanos/,'admission never consults a clock');
  // The seam retires on Program having actually been fed past the boundary.
  assert.match(runtime,/if\(boundary&&programEnqueuedThrough>=boundary\)seam\.reset\(\);/);
- const select=runtime.slice(runtime.indexOf('void selectLiteOwner('),runtime.indexOf('void liteControl('));
+ const select=runtime.slice(runtime.indexOf('void selectOwner('),runtime.indexOf('bool turnEligible('));
  assert.doesNotMatch(select,/programPending\.clear\(\)/,'an operator switch never drops audio already delivered');
  assert.doesNotMatch(select,/const auto cut=now\(\)/,'the seam is not a moment in time');
 });
@@ -100,7 +107,7 @@ test('Lite deck metadata is timestamped on receipt and positions are extrapolate
  const display=runtime.slice(runtime.indexOf('QJsonArray displayedLiteDecks('),runtime.indexOf('void feedInput('));
  assert.match(display,/elapsedMs=double\(ageNanos\)\/1000000\.0/);
  assert.match(display,/positionMs.*elapsedMs\*deck\["rate"\]/s,'playing positions advance at the announced rate');
- assert.match(runtime,/const auto decks=displayedLiteDecks\(\*source->second\)/,'snapshots expose the extrapolated copy');
+ assert.match(runtime,/const auto decks=displayedLiteDecks\(\*source->second,lagMs\)/,'snapshots expose the extrapolated copy, as heard through J');
  assert.equal(host.match(/orientation < 0\.5 \? \(1\.0 - crossfader\)/g)?.length,2,
    'native deck audibility maps orientation 0/1/2 to left/thru/right');
 });
@@ -135,16 +142,24 @@ test('Lite return audio is bidirectional, per-recipient, and excluded from JUNCT
  assert.doesNotMatch(transport,/Description::Direction::RecvOnly/,'the old receive-only Lite offer is gone');
  assert.match(runtime,/std::map<QString,std::unique_ptr<PcmRing>> liteReturnRings/,'each Lite recipient has one bounded SPSC return ring');
  assert.match(runtime,/if\(previous==auth\.local\)\{if\(programMixer\(true,false\)\.localReturnAllowed\(\)\)\{localReturnTarget\.store\(ring/,'a local previous owner uses the local-master return tap');
- assert.match(runtime,/else if\(litePeer\(previous\)\)\{returnRelaySource=previous;returnRelayTarget=target;/,'a Lite previous owner is relayed only to the new operator');
- assert.match(runtime,/hosting\|\|\(liteSession&&id==auth\.host\)\)route\(p->transport->decodedRing\(\),id\)/,'a native Lite guest consumes the host return stream');
+ assert.match(runtime,/else if\(peers\.count\(previous\)\)\{returnRelaySource=previous;returnRelayTarget=target;/,'a remote previous DJ is relayed only to its receiver');
+ assert.match(runtime,/if\(hosting\|\|id==auth\.host\)route\(p->transport->decodedRing\(\),id\)/,'every guest consumes the host J relay');
  assert.match(backend,/ControlObject::set\(ConfigKey\(kJunctionGroup, "main_mix"\), 0\)/,'received audio starts CUE-only');
  assert.match(backend,/if\(local\)runtime->captureLocalReturn\(local,frames,frame,44100\)/,'the return tap reads the LOCAL NEXT bus');
  assert.doesNotMatch(backend,/captureLocalReturn\(master/,'the return tap never reads main (Program Master)');
  const mixerHook=await readFile(path.resolve(import.meta.dirname,'../../cmake/target/CMakeLists.txt'),'utf8');
  assert.match(mixerHook,/pChannelInfo->m_handle\.handle\(\) == plumdeckExcluded \|\| pChannelInfo->m_pChannel->isTalkoverChannel\(\)\) continue;/,'the LOCAL NEXT bus skips Auxiliary1 and microphones');
  assert.match(backend,/audioBridge_\.localReturnExcluded\.store\(junctionHandle\.handle\(\)\.handle\(\)/,'Auxiliary1 is the excluded channel');
- assert.match(runtime,/if\(takeOver\)\{backend->junctionInputTakeOver\(\);setInputMainMix\(true\);\}/,'Auxiliary1 enters main only for local takeover');
- assert.equal(runtime.match(/setInputMainMix\(true\)/g)?.length,1,'no other path puts JUNCTION MASTER into main');
+ // J enters this DJ's mix at STANDBY (booth monitor and the standby stream),
+ // reset to unity there and nowhere else, so a takeover never undoes the mix move.
+ assert.match(runtime,/if\(id==auth\.local\)\{faderStart\.reset\(\);backend->junctionInputTakeOver\(\);setInputMainMix\(true\);\}/,'host STANDBY');
+ assert.match(runtime,/if\(isNext&&previousNext!=auth\.local\)\{faderStart\.reset\(\);backend->junctionInputTakeOver\(\);setInputMainMix\(true\);\}/,'guest STANDBY');
+ assert.equal(runtime.match(/backend->junctionInputTakeOver\(\)/g)?.length,2,'unity only when STANDBY begins');
+ assert.equal(runtime.match(/setInputMainMix\(true\)/g)?.length,2,'no other path puts JUNCTION MASTER into main');
+ const tailHook=await readFile(path.resolve(import.meta.dirname,'../../cmake/target/CMakeLists.txt'),'utf8');
+ assert.match(tailHook,/if \(plumdeckMask && [^\n]*\) continue;/,'the OUTGOING tail restricts the bus to its decks');
+ assert.match(tailHook,/plumdeckFixedGain >= 0 \? plumdeckFixedGain : m_pMainGain->get\(\)/,'the tail level is fixed at the turn change');
+ assert.match(runtime,/const float\* pcm=d->tailSend\.load\(std::memory_order_relaxed\)&&local\?local:master;/,'an OUTGOING guest streams only its tail');
 });
 test('JUNCTION MASTER is real engine audio: Program Master mixes it with LOCAL NEXT, the return never carries it',{timeout:120000},async()=>{
  const directory=await mkdtemp('/tmp/plumdeck-junction-master-');const host=native(directory,binary,{PLUMDECK_JUNCTION_AUDIO_PROBE:'1'});
@@ -205,16 +220,24 @@ test('Lite takeover starts the JUNCTION deck audible and measures its Program se
   assert.equal(performing.operatorPeerId,liteId);
   // Simulate the new Lite operator fading the Mac return and releasing it.
   await host.command('junction.input.release');
-  await until(host.snapshot,s=>s.localPrep&&s.junctionInput.peerId===liteId,'the released Mac can prepare while Lite performs');
-  // Cued with the JUNCTION deck pulled down on the far crossfader side: stale, silent controls.
-  await host.command('junction.input.set',{volume:0,orientation:0});assert.equal((await host.snapshot()).junctionInput.channel.audible,false);
+  let released=await host.snapshot();assert.equal(released.junctionInput.releasingPeerId,'');
+  assert.equal(released.turn.nextPeerId,'','a DJ who finished is out of the timetable until they join again');
+  // Joining the queue makes this Mac next: STANDBY resets J to unity, flat, THRU.
+  await host.command('junction.input.set',{volume:0,orientation:0});
+  await host.command('junction.turn.join');
+  const standby=await until(host.snapshot,s=>s.turn.nextPeerId===s.localPeerId&&s.localPrep&&s.junctionInput.peerId===liteId,'the released Mac prepares on STANDBY while Lite performs');
+  assert.equal(standby.junctionInput.channel.volume,1);assert.equal(standby.junctionInput.channel.orientation,1,'THRU');assert.equal(standby.junctionInput.channel.audible,true);
+  assert.equal(standby.turn.signal,'standby','no Lite audio arrives, so this DJ cannot be READY');
+  assert(['waiting_junction','junction_unstable'].includes(standby.turn.blocker.code),`one DJ-facing reason: ${standby.turn.blocker.code}`);
+  assert.equal(standby.programMixer.junctionMaster.inProgram,false,'STANDBY hears J on the booth monitor only');
   const takeover=async()=>{const s=await host.command('junction.lite.owner.set',{ownerPeerId:created.localPeerId});assert.equal(s.performerPeerId,created.localPeerId);assert.equal(s.localPrep,false);assert.equal(s.junctionInput.releasingPeerId,liteId,'the outgoing Lite DJ keeps sounding');return s;};
   const taken=await takeover();
-  assert.equal(taken.junctionInput.channel.volume,1);assert.equal(taken.junctionInput.channel.orientation,1,'THRU');assert.equal(taken.junctionInput.channel.audible,true);
+  assert.equal(taken.junctionInput.channel.volume,1,'a takeover keeps J where the DJ mixed it');assert.equal(taken.junctionInput.channel.audible,true);
   assert.equal(taken.programMixer.venueSource,'local-mix','Program Master is this mixer after takeover');
   assert.equal(taken.programMixer.junctionMaster.inProgram,true,'JUNCTION MASTER is mixed, not bypassed');
   assert.equal(taken.programMixer.localNext.inProgram,true);
   assert.equal(taken.programMixer.returnFeed.source,'none','nothing is returned while JUNCTION MASTER is in main');
+  assert.equal(taken.turn.signal,'onair');assert.equal(taken.turn.outgoingPeerId,liteId);
   // The seam is measured by the first captured block, not timed: the one-shot
   // is already spent and the boundary is real by the time the next snapshot
   // is answered. This peer sends no audio, so the deck reported nothing to
@@ -228,17 +251,82 @@ test('Lite takeover starts the JUNCTION deck audible and measures its Program se
   // This peer never sent a frame, so the stream-ended fallback is what ends
   // the hold: an outgoing DJ whose audio stopped arriving is already gone.
   await until(host.snapshot,s=>s.junctionInput.releasingPeerId==='','a stream that never arrives releases on its own',6000);
-  // Again from stale silent controls, released explicitly this time. Once the
-  // Mac becomes the outgoing sender its controls are locked, so stage the old
-  // fader first and simulate the Lite receiver's release before taking back.
-  await host.command('junction.input.set',{volume:0});
+  // Again, released explicitly this time.
   await host.command('junction.lite.owner.set',{ownerPeerId:liteId});
-  await host.command('junction.input.release');
-  await takeover();const released=await host.command('junction.input.release');
+  await host.command('junction.input.release');await host.command('junction.turn.join');
+  await until(host.snapshot,s=>s.turn.nextPeerId===s.localPeerId,'STANDBY again');
+  await takeover();released=await host.command('junction.input.release');
   assert.equal(released.junctionInput.releasingPeerId,'','an explicit release ends the hold at once');
   assert.equal(released.programMixer.junctionMaster.inProgram,false,'a released JUNCTION MASTER leaves Program');
   await host.command('junction.end');await until(host.snapshot,s=>!s.active,'host end');
  }finally{await host.close();await rm(directory,{recursive:true,force:true});}
+});
+test('fader start: a remote first DJ, guest to host and host to guest turns keep Program continuous and release the tail',{timeout:360000},async()=>{
+ const directory=await mkdtemp('/tmp/plumdeck-fader-start-');const host=native(directory),guest=native(directory);
+ try{
+  await host.start();await guest.start();
+  const devices=await host.command('audio.devices.list');const output=devices.devices.find(d=>d.name.includes('BlackHole')&&d.outputChannels>=2);assert(output,'loopback device required, not skipped');
+  const seed=Date.now()%1000000007,hostSource=path.join(directory,'host.wav'),guestSource=path.join(directory,'guest.wav');await writeFile(hostSource,tone());await writeFile(guestSource,remoteTone(240,seed));
+  for(const [peer,file,label] of [[host,hostSource,'host'],[guest,guestSource,'guest']]){
+   await peer.command('mixer.channel.gain',{deck:'A',gain:0});await peer.command('deck.load',{deck:'A',track:{trackId:`${label}-tone`,path:file,title:`${label} tone`,artist:'Fader DJ',bpm:124}});
+   await until(()=>peer.command('state.snapshot'),s=>['ready','paused'].includes(s.decks.A.status),`${label} decode`);await peer.command('deck.play',{deck:'A'});
+  }
+  await host.command('junction.create',{djName:'Host DJ',sessionName:'Fader start',programDevice:output.id.replace(/^coreaudio:/,''),adoptCurrent:false,startInLobby:true,exchangeMode:'manual'});
+  const slot=await newInvite(host);const answer=await response(guest,slot.text,'Guest DJ');await host.command('junction.exchange.import',{text:answer});await host.command('junction.peer.approve',{peerId:slot.peerId,accept:true});
+  await until(guest.snapshot,s=>s.connection.state==='connected'&&s.exchange.state==='connected','guest connected');
+  await until(host.snapshot,s=>participant(s,slot.peerId)?.rosterStatus==='waiting','guest negotiated');
+  assert(denied(await host.raw('junction.handoff.request',{targetPeerId:slot.peerId})),'the nomination handoff is retired');
+  assert(denied(await guest.raw('junction.turn.repeat',{enabled:true})),'only the host sets B2B repeat');
+  await host.command('junction.turn.repeat',{enabled:true});
+  // Bootstrap from a silent J: the guest is first in the timetable.
+  const started=await host.command('junction.session.start',{performerPeerId:slot.peerId});
+  assert.equal(started.lifecycle,'live');assert.equal(started.performerPeerId,'','nobody is on air until a fader goes up');
+  await until(host.snapshot,s=>s.turn.nextPeerId===slot.peerId,'the guest is next');
+  const firstReady=await until(guest.snapshot,s=>s.turn.signal==='ready','the first DJ is READY without J',40000);
+  assert.equal(firstReady.turn.blocker.code,'');
+  await guest.command('mixer.channel.gain',{deck:'A',gain:1});
+  await until(host.snapshot,s=>s.performerPeerId===slot.peerId,'raising the fader puts the first DJ on air',10000);
+  await until(guest.snapshot,s=>s.turn.signal==='onair','the guest sees ON AIR');
+  await until(host.snapshot,s=>Number(s.program.rms)>.001,'Program carries the first DJ',10000);
+  const recording=path.join(directory,'fader-program.wav');await host.command('junction.program.record.start',{path:recording});
+  // Guest to host: the host hears the guest on J and mixes in with its own fader.
+  const hostStandby=await until(host.snapshot,s=>s.turn.nextPeerId===s.localPeerId&&s.junctionInput.receiving,'host STANDBY hears the ON AIR guest on J',20000);
+  assert.equal(hostStandby.junctionInput.channel.volume,1);assert.equal(hostStandby.junctionInput.channel.orientation,1);
+  assert.equal(hostStandby.programMixer.venueSource,'direct-stream','the venue still hears the guest directly');
+  await until(host.snapshot,s=>s.turn.signal==='ready','host READY',40000);
+  await until(guest.snapshot,s=>s.turn.nextStatus==='ready','the ON AIR guest sees the next DJ ready',10000);
+  await host.command('junction.turn.cue',{kind:'go_ahead'});await until(guest.snapshot,s=>s.turn.cue?.kind==='go_ahead','a booth cue reaches the other DJ');
+  await host.command('mixer.channel.gain',{deck:'A',gain:1});
+  const hostOnAir=await until(host.snapshot,s=>s.performerPeerId===s.localPeerId,'host ON AIR by fader start',5000);
+  assert.equal(hostOnAir.turn.outgoingPeerId,slot.peerId);assert.equal(hostOnAir.programMixer.venueSource,'local-mix');
+  const outgoing=await until(guest.snapshot,s=>s.turn.signal==='outgoing'&&s.turn.tailDecks.includes('A'),'the guest keeps its tail',10000);
+  assert.equal(outgoing.localPrep,false);
+  assert(denied(await guest.raw('deck.pause',{deck:'A'})),'the tail deck refuses transport');
+  assert(denied(await guest.raw('mixer.channel.gain',{deck:'A',gain:0})),'the tail level is the receiver\'s J');
+  assert(denied(await guest.raw('mixer.crossfader',{position:1})),'master controls wait for the release');
+  assert(!denied(await guest.raw('deck.loop.set',{deck:'A',startMs:1000,endMs:3000})),'a loop on the tail is allowed');
+  assert(!denied(await guest.raw('deck.loop.enable',{deck:'A',enabled:false})),'and can be exited');
+  assert(!denied(await guest.raw('deck.load',{deck:'B',track:{trackId:'guest-prep',path:guestSource,title:'prep'}})),'other decks are free for preparation');
+  const withDecks=await until(host.snapshot,s=>s.junctionInput.decks?.some(d=>d.deck==='A'&&d.title==='guest tone'&&d.bpm===124),'J shows the tail track without transferring its file');
+  assert(!JSON.stringify(withDecks.junctionInput.decks).includes(guestSource),'no path crosses the wire');
+  await host.command('junction.input.set',{volume:0});
+  await until(host.snapshot,s=>s.turn.outgoingPeerId==='','J held down releases the tail',10000);
+  await until(guest.snapshot,s=>s.turn.tailDecks.length===0&&s.turn.signal!=='outgoing','the guest is free again');
+  // Host to guest: with B2B repeat the guest is next again; its fader is still up.
+  await until(host.snapshot,s=>s.turn.nextPeerId===slot.peerId,'B2B repeat queues the guest again');
+  await until(guest.snapshot,s=>s.turn.blocker.code==='already_audible','a fader left up must come down first',40000);
+  assert(denied(await guest.raw('junction.turn.onair')),'not READY: no manual ON AIR either');
+  await guest.command('mixer.channel.gain',{deck:'A',gain:0});
+  await until(guest.snapshot,s=>s.turn.signal==='ready'&&s.junctionInput.receiving,'guest READY on the host J relay',40000);
+  await guest.command('mixer.channel.gain',{deck:'A',gain:1});
+  await until(host.snapshot,s=>s.performerPeerId===slot.peerId&&s.turn.outgoingPeerId===s.localPeerId,'guest ON AIR, host OUTGOING',15000);
+  await until(host.snapshot,s=>s.turn.tailDecks.includes('A'),'the host tail');
+  await guest.command('junction.input.set',{volume:0});
+  await until(host.snapshot,s=>s.turn.outgoingPeerId==='','the guest releases the host tail',15000);
+  await pause(1500);await host.command('junction.program.record.stop');
+  recordedPcm(await readFile(recording));
+  await host.command('junction.end');await until(host.snapshot,s=>!s.active,'host end');await until(guest.snapshot,s=>!s.active,'guest end');
+ }finally{const closed=await Promise.allSettled([host.close(),guest.close()]);await rm(directory,{recursive:true,force:true});for(const result of closed)if(result.status==='rejected')throw result.reason;}
 });
 test('current and previous engines connect in both host/guest directions',{skip:!previousBinary,timeout:180000},async()=>{
  const directory=await mkdtemp('/tmp/plumdeck-mixed-runtime-');
@@ -262,7 +350,7 @@ test('periodic roster snapshots keep avatar blobs off the heartbeat control path
  assert.match(source,/queue\(p,"session\.snapshot",wireState\(true\)\)/);
  assert.match(source,/json\(s\)\.size\(\)>60\*1024/);
  assert.match(source,/"throughSeq",u64\(auth\.throughSeq\).*"bootstrap",true/);
- assert.match(source,/startDeadline=monotonicNanos\(\)\+120000000000LL/);
+ assert.doesNotMatch(source.slice(source.indexOf('if(op=="session.start")'),source.indexOf('if(op.startsWith("private."))')),/startDeadline|auth\.prepare/,'a fader-start session has no bootstrap deadline or prepared handoff');
  assert.match(source,/kControlSilenceNanos=10000000000LL/);
  assert.match(source,/queued\.type!=type[\s\S]*queued\.bytes=bytes;return/);
  assert.match(source,/ticks%200==0\)p->transport->sendKeepAlive\(\)/);
@@ -299,34 +387,26 @@ test('manual multi-DJ admission, cancellation, handoff and same-peer re-exchange
   const firstSlot=await newInvite(host);const firstAnswer=await response(first,firstSlot.text,'最初のリモート DJ',{avatarDataUrl:guestAvatar});await host.command('junction.exchange.import',{text:firstAnswer});await host.command('junction.peer.approve',{peerId:firstSlot.peerId,accept:true});await until(first.snapshot,s=>s.connection.state==='connected'&&s.exchange.state==='connected','remote-first P2P connection and exchange state');
   assert(denied(await first.raw('junction.session.start',{performerPeerId:firstSlot.peerId})),'guest cannot start the session');assert(denied(await first.raw('junction.roster.reorder',{peerIds:[]})),'guest cannot reorder the lobby');
   await pause(700);lobby=await first.snapshot();assert.equal(participant(lobby,lobby.hostPeerId).avatarDataUrl,hostAvatar,'cached profile survives lightweight heartbeats');assert.equal(participant(await host.snapshot(),firstSlot.peerId).avatarDataUrl,guestAvatar);
-  const starting=await host.command('junction.session.start',{performerPeerId:firstSlot.peerId});assert.equal(starting.lifecycle,'starting');assert.equal(starting.performerPeerId,'');assert.equal(starting.program.state,'running');assert.equal(starting.program.captureActive,false,'coordinator capture stays off during remote bootstrap');
-  const firstLive=await until(first.snapshot,s=>s.lifecycle==='live'&&s.performerPeerId===s.localPeerId,'remote DJ becomes first performer',80000);assert(BigInt(firstLive.epoch)>1n);await until(host.snapshot,s=>s.lifecycle==='live'&&s.performerPeerId===firstSlot.peerId,'coordinator observes remote-first live',80000);const retained=await first.command('state.snapshot');assert.equal(retained.decks.A.track.title,'Remote-first tone','bootstrap keeps the selected DJ deck instead of restoring the coordinator graph');
-  // Junction Live: current/next metadata and bytes arrive independently from
-  // Program audio, and the coordinator's real decks are never loaded.
-  const listed=await until(host.snapshot,s=>s.junctionTracks?.some(t=>t.title==='Remote-first tone'&&t.role==='current'&&t.state==='ready'),'remote-first track received and verified for Junction Live',120000);
-  const shared=listed.junctionTracks.find(t=>t.title==='Remote-first tone');
-  assert.match(shared.assetId,/^[0-9a-f]{64}$/);assert.equal(shared.role,'current');assert.equal(shared.playing,true);assert.equal(shared.sourcePeerId,firstSlot.peerId);assert.equal(shared.sourceDeck,'A');assert.equal(shared.artist,'Junction DJ');assert.equal(shared.sourceDjName,'最初のリモート DJ');
-  assert(path.isAbsolute(shared.path)&&path.basename(shared.path)===shared.assetId,'ready track is this computer\'s content-addressed cache file');assert.notEqual(shared.path,remoteSource,'the sender path is never used');
-  assert((await readFile(shared.path)).equals(await readFile(remoteSource)),'verified bytes match the performer file');
-  assert.deepEqual((await first.snapshot()).junctionTracks,[],'the performer does not receive its own tracks');assert(!JSON.stringify(await first.snapshot()).includes(shared.path),'coordinator cache paths never reach a peer');
+  // The remote first DJ is simply first in the timetable: STANDBY from a silent J, ON AIR by raising a fader.
+  await first.command('mixer.channel.gain',{deck:'A',gain:0});
+  const starting=await host.command('junction.session.start',{performerPeerId:firstSlot.peerId});assert.equal(starting.lifecycle,'live');assert.equal(starting.performerPeerId,'');assert.equal(starting.program.state,'running');assert.equal(starting.program.captureActive,false,'coordinator capture stays off until someone is on air');
+  await until(first.snapshot,s=>s.turn.signal==='ready','remote first DJ READY',60000);
+  await first.command('mixer.channel.gain',{deck:'A',gain:1});
+  const firstLive=await until(first.snapshot,s=>s.lifecycle==='live'&&s.performerPeerId===s.localPeerId,'remote DJ becomes first performer',20000);assert(BigInt(firstLive.epoch)>1n);await until(host.snapshot,s=>s.lifecycle==='live'&&s.performerPeerId===firstSlot.peerId,'coordinator observes remote-first live');const retained=await first.command('state.snapshot');assert.equal(retained.decks.A.track.title,'Remote-first tone','the first DJ keeps its own decks');
+  // J metadata instead of files: the coordinator, next in the timetable, sees the
+  // performer's track on J; nothing is transferred and its own decks stay as they are.
+  const listed=await until(host.snapshot,s=>s.junctionInput?.decks?.some(d=>d.title==='Remote-first tone'&&d.role==='current'&&d.playing),'the ON AIR track appears on the coordinator J',30000);
+  assert.equal(listed.junctionInput.peerId,firstSlot.peerId);assert.deepEqual(listed.junctionTracks,[],'no Junction Live file transfer in a fader-start session');
+  assert(!JSON.stringify(listed).includes(remoteSource),'the sender path is never exposed');
   let hostDecks=await host.command('state.snapshot');assert.equal(hostDecks.decks.A.track.title,'Manual session tone','existing coordinator deck is not replaced');assert.equal(hostDecks.decks.A.status,'playing');assert.equal(hostDecks.decks.B.track,null,'no automatic deck load');
-  assert(denied(await host.raw('deck.load',{deck:'B',track:{trackId:'junction',path:shared.path,title:'x'}})),'a non-performing coordinator still cannot issue shared deck.load');
-  assert(denied(await host.raw('junction.tracks.load',{assetId:shared.assetId,deck:'B'})),'there is deliberately no monitor deck-load operation');
-  const remoteWaveform=await host.command('waveform.ensure',{junctionAssetId:shared.assetId});assert(remoteWaveform.assetKey,'the waveform API reads the received cache without a deck load');
-  hostDecks=await host.command('state.snapshot');assert.equal(hostDecks.decks.B.track,null);assert.equal(hostDecks.decks.A.track.title,'Manual session tone');assert.equal(hostDecks.decks.A.status,'playing');
-  // Read the published waveform exactly as the desktop UI does (read lease + cache file) while not performing.
-  const waveformRoot=path.join(process.env.HOME,'Library/Caches/plumdeck/waveform-v2',remoteWaveform.assetKey);
-  const waveformFile=async resource=>{const lease=await host.command('waveform.acquireReadLease',{assetKey:remoteWaveform.assetKey,resourceKey:resource});assert(lease.leaseId,'a non-performing coordinator can lease its own waveform files');try{return await readFile(path.join(waveformRoot,resource));}finally{await host.command('waveform.releaseReadLease',{leaseId:lease.leaseId});}};
-  const waveformManifest=await until(async()=>{try{return JSON.parse(await waveformFile('manifest.json'));}catch{return null;}},m=>m?.state==='ready'&&m.levels?.some(l=>l.readyTileRanges?.length),'received track waveform published',60000);
-  const waveformLevel=waveformManifest.levels.find(l=>l.readyTileRanges?.length);const waveformTile=await waveformFile(`${waveformLevel.lod}-${waveformLevel.readyTileRanges[0][0]}-bands.bin`);assert(waveformTile.length>64&&waveformTile.subarray(64).some(b=>b!==0),'real waveform data for the received track');
-  let monitoredSession=await host.snapshot();assert.equal(monitoredSession.performerPeerId,firstSlot.peerId,'waveform monitoring never changes the performer');assert.equal(monitoredSession.epoch,firstLive.epoch);assert.equal(monitoredSession.handoffState,'playing');
+  assert(denied(await host.raw('junction.tracks.load',{assetId:'0'.repeat(64),deck:'B'})),'there is deliberately no monitor deck-load operation');
+  let monitoredSession=await host.snapshot();assert.equal(monitoredSession.performerPeerId,firstSlot.peerId,'watching J never changes the performer');assert.equal(monitoredSession.epoch,firstLive.epoch);assert.equal(monitoredSession.handoffState,'playing');
   await until(host.snapshot,s=>Number(s.program.rms)>.001,'Program keeps carrying the remote performer',10000);
-  const beforePosition=shared.positionMs;const moved=await until(host.snapshot,s=>s.junctionTracks?.find(t=>t.role==='current')?.positionMs>beforePosition+200,'dynamic position metadata follows without a deck seek');assert.equal(moved.junctionTracks.find(t=>t.role==='current').assetId,shared.assetId);
-  // The performer sets the next track: the pair follows, the coordinator decks do not.
-  await first.command('deck.load',{deck:'B',track:{trackId:'remote-next',path:nextSource,title:'Remote next tone',artist:'Junction DJ'},_junction:await lease(first)});await until(()=>first.command('state.snapshot'),s=>['ready','paused'].includes(s.decks.B.status),'performer loads a next track');
-  const paired=await until(host.snapshot,s=>s.junctionTracks?.some(t=>t.title==='Remote next tone'&&t.role==='next'&&t.sourceDeck==='B'&&t.state==='ready'),'performer next track is prefetched',120000);assert(paired.junctionTracks.length<=2);assert.equal(paired.junctionTracks.find(t=>t.role==='current').assetId,shared.assetId);
-  await first.command('deck.unload',{deck:'B',_junction:await lease(first)});
-  const unloaded=await until(host.snapshot,s=>!s.junctionTracks?.some(t=>t.title==='Remote next tone'),'performer deck.unload removes the stale next card');assert.equal(unloaded.junctionTracks.filter(t=>t.assetId===shared.assetId).length,1,'the current card remains singular');
+  const beforePosition=listed.junctionInput.decks.find(d=>d.role==='current').positionMs;await until(host.snapshot,s=>s.junctionInput?.decks?.find(d=>d.role==='current')?.positionMs>beforePosition+200,'position metadata follows without a deck seek');
+  await first.command('deck.load',{deck:'B',track:{trackId:'remote-next',path:nextSource,title:'Remote next tone',artist:'Junction DJ'}});await until(()=>first.command('state.snapshot'),s=>['ready','paused'].includes(s.decks.B.status),'performer loads a next track');
+  await until(host.snapshot,s=>s.junctionInput?.decks?.some(d=>d.title==='Remote next tone'&&d.role==='next'&&d.deck==='B'),'the performer next track is listed on J');
+  await first.command('deck.unload',{deck:'B'});
+  await until(host.snapshot,s=>!s.junctionInput?.decks?.some(d=>d.title==='Remote next tone'),'performer deck.unload removes the next row');
   assert.equal((await host.command('state.snapshot')).decks.B.track,null,'performer changes never load coordinator decks');
   const liveRoster=await host.snapshot();assert.notEqual(participant(liveRoster,liveRoster.localPeerId).rosterStatus,'finished','never-playing coordinator is not marked finished');
   await host.command('junction.end');const ended=await until(host.snapshot,s=>!s.active,'remote-first host end');assert.deepEqual(ended.junctionTracks,[],'Junction Live disappears with the session');await until(first.snapshot,s=>!s.active,'remote-first guest end');
@@ -348,17 +428,30 @@ test('manual multi-DJ admission, cancellation, handoff and same-peer re-exchange
   await host.command('junction.peer.approve',{peerId:two.peerId,accept:true});await until(second.snapshot,s=>s.connection.state==='connected'&&s.exchange.state==='connected','approved P2P connection and exchange state');
   assert(denied(await second.raw('junction.roster.reorder',{peerIds:[]})),'guest cannot reorder roster');
   const measured=await until(host.snapshot,s=>participant(s,two.peerId)?.connectionQuality?.level!=='unknown','connection quality report',8000);const quality=participant(measured,two.peerId).connectionQuality;assert(['good','fair','poor'].includes(quality.level));assert(quality.rttMs>=0&&quality.rttMs<=600000);assert(quality.packetLossPct>=0&&quality.packetLossPct<=100);
-  s=await host.snapshot();assert.equal(participant(s,two.peerId).exchange.route,relay?'relay':'direct');assert.equal(s.performerPeerId,created.localPeerId);assert.equal(s.epoch,epoch);assert.equal((await second.snapshot()).readiness.ready,false,'connection is not musical readiness');
-  const query=await second.raw('engine.clock.probe');assert(!denied(query),'waiting DJ can inspect timing');assert(denied(await second.raw('deck.pause',{deck:'A'})),'waiting DJ cannot mutate shared deck');
+  s=await host.snapshot();assert.equal(participant(s,two.peerId).exchange.route,relay?'relay':'direct');assert.equal(s.performerPeerId,created.localPeerId);assert.equal(s.epoch,epoch);assert.notEqual((await second.snapshot()).turn.signal,'onair','connection alone never puts a DJ on air');
+  const query=await second.raw('engine.clock.probe');assert(!denied(query),'waiting DJ can inspect timing');assert(!denied(await second.raw('mixer.channel.gain',{deck:'A',gain:0})),'a waiting DJ prepares freely on their own mixer');
   const retry=await newInvite(host,one.peerId);assert.notEqual(retry.text,one.text);await first.command('junction.exchange.import',{text:retry.text});const newAnswer=await until(first.snapshot,s=>s.exchange?.responseText?.length>0,'replacement response');await host.command('junction.exchange.import',{text:newAnswer.exchange.responseText});await host.command('junction.peer.approve',{peerId:one.peerId,accept:true});await until(first.snapshot,s=>s.connection.state==='connected','second independent guest');
   await until(host.snapshot,s=>participant(s,one.peerId).exchange.state==='connected','both first guest channels connected');
   const recordedAt=Date.now();const recording=path.join(directory,'program.wav');await host.command('junction.program.record.start',{path:recording});first.suspend();await pause(5000);first.resume();await pause(600);assert.equal(participant(await host.snapshot(),one.peerId).exchange.state,'connected','a screen-sharing-sized scheduling pause stays connected');first.suspend();await until(host.snapshot,s=>participant(s,one.peerId).exchange.state==='interrupted','detect a real transient interruption',15000);first.resume();await until(host.snapshot,s=>participant(s,one.peerId).exchange.state==='connected','transient communication returns');assert.equal((await host.snapshot()).performerPeerId,created.localPeerId,'transient interruption never transfers ownership');
-  await host.command('junction.handoff.request',{targetPeerId:two.peerId});await until(second.snapshot,s=>s.readiness.ready,'real graph/music readiness',80000);await second.command('junction.handoff.accept');const owner=await until(second.snapshot,s=>s.performerPeerId===s.localPeerId&&BigInt(s.epoch)>BigInt(epoch),'actual manual-session handoff',80000);await until(host.snapshot,s=>s.handoffState==='playing'&&s.performerPeerId===two.peerId,'Program cutover');const afterHandoff=await host.snapshot();assert.equal(participant(afterHandoff,created.localPeerId).rosterStatus,'finished');assert.deepEqual(afterHandoff.participants.map(row=>row.peerId),[two.peerId,one.peerId,created.localPeerId],'current, waiting, then finished order is preserved');
+  assert(denied(await host.raw('junction.handoff.request',{targetPeerId:two.peerId})),'the nomination handoff is retired');
+  // Fader start: the second DJ is next in the timetable, prepares with the fader down, then raises it.
+  const secondSource=path.join(directory,'second.wav');await writeFile(secondSource,remoteTone(200,runSeed+7));
+  await second.command('mixer.channel.gain',{deck:'A',gain:0});await second.command('deck.load',{deck:'A',track:{trackId:'second-tone',path:secondSource,title:'Second tone'}});await until(()=>second.command('state.snapshot'),s=>['ready','paused'].includes(s.decks.A.status),'second tone decode');await second.command('deck.play',{deck:'A'});
+  await until(host.snapshot,s=>s.turn.nextPeerId===two.peerId,'second DJ is next');
+  await until(second.snapshot,s=>s.turn.signal==='ready'&&s.junctionInput.receiving,'second DJ READY on the host J relay',60000);
+  await second.command('mixer.channel.gain',{deck:'A',gain:1});
+  const owner=await until(second.snapshot,s=>s.performerPeerId===s.localPeerId&&BigInt(s.epoch)>BigInt(epoch),'fader start puts the second DJ on air',20000);
+  await until(host.snapshot,s=>s.performerPeerId===two.peerId&&s.turn.outgoingPeerId===s.localPeerId&&s.turn.tailDecks.includes('A'),'host sends its tail');
+  await second.command('junction.input.set',{volume:0});
+  await until(host.snapshot,s=>s.turn.outgoingPeerId==='','the new DJ fades the host tail out',15000);
+  const afterHandoff=await host.snapshot();assert.equal(participant(afterHandoff,created.localPeerId).rosterStatus,'finished');assert.deepEqual(afterHandoff.participants.map(row=>row.peerId),[two.peerId,one.peerId,created.localPeerId],'current, waiting, then finished order is preserved');
+  await until(host.snapshot,s=>s.turn.nextPeerId===one.peerId,'the next queued DJ becomes STANDBY after the release');
+  await until(first.snapshot,s=>s.junctionInput.receiving,'guest to guest J relays through the host',20000);
   console.info('re-exchange begins seconds', (Date.now()-recordedAt)/1000);const reconnect=await newInvite(host,two.peerId);await second.command('junction.exchange.import',{text:reconnect.text});const fresh=await until(second.snapshot,s=>s.exchange?.responseText&&s.exchange.responseText!==answerTwo,'live replacement response');await host.command('junction.exchange.import',{text:fresh.exchange.responseText});await host.command('junction.peer.approve',{peerId:two.peerId,accept:true});await until(host.snapshot,s=>participant(s,two.peerId)?.exchange.state==='connected','replacement P2P connection');
   s=await host.snapshot();assert.equal(s.performerPeerId,two.peerId);assert.equal(s.epoch,owner.epoch,'reconnection never changes epoch');assert.equal(participant(s,one.peerId).exchange.state,'connected','other DJ unaffected by re-exchange');assert(denied(await host.raw('junction.exchange.import',{text:answerTwo})),'old response cannot replace new connection');
   await pause(700);await host.command('junction.program.record.stop');console.info('recording ends seconds',(Date.now()-recordedAt)/1000);recordedPcm(await readFile(recording));second.suspend();await pause(650);second.resume();await until(host.snapshot,s=>s.handoffState==='playing'&&s.performerPeerId===two.peerId&&Number(s.program.rms)>.001,'current performer resumes after brief outage');assert.equal((await host.snapshot()).epoch,owner.epoch);
   first.suspend();await until(host.snapshot,s=>participant(s,one.peerId).exchange.state==='interrupted','prolonged outage enters automatic recovery',15000);await pause(17000);const kept=await host.snapshot();assert.equal(participant(kept,one.peerId).exchange.state,'interrupted','the old 15 second deadline no longer destroys a recoverable connection');assert.equal(kept.performerPeerId,two.peerId);assert.equal(kept.epoch,owner.epoch);assert.equal(participant(kept,two.peerId).exchange.state,'connected');
-  const renewed=await newInvite(host,one.peerId);first.resume();await first.command('junction.exchange.import',{text:renewed.text});const renewedReply=await until(first.snapshot,s=>s.exchange?.responseText,'new reply after prolonged outage');await host.command('junction.exchange.import',{text:renewedReply.exchange.responseText});await host.command('junction.peer.approve',{peerId:one.peerId,accept:true});await until(host.snapshot,s=>participant(s,one.peerId).exchange.state==='connected'&&participant(s,one.peerId).rosterStatus==='waiting','same peer after prolonged outage');await until(first.snapshot,s=>s.exchange.state==='connected'&&s.connection.state==='connected','guest sees restored connection');await pause(3500);assert.equal(participant(await host.snapshot(),one.peerId).exchange.state,'connected','old heartbeat does not immediately interrupt the fresh link');
+  const renewed=await newInvite(host,one.peerId);first.resume();await first.command('junction.exchange.import',{text:renewed.text});const renewedReply=await until(first.snapshot,s=>s.exchange?.responseText,'new reply after prolonged outage');await host.command('junction.exchange.import',{text:renewedReply.exchange.responseText});await host.command('junction.peer.approve',{peerId:one.peerId,accept:true});await until(host.snapshot,s=>participant(s,one.peerId).exchange.state==='connected'&&['waiting','next','ready'].includes(participant(s,one.peerId).rosterStatus),'same peer after prolonged outage');await until(first.snapshot,s=>s.exchange.state==='connected'&&s.connection.state==='connected','guest sees restored connection');await pause(3500);assert.equal(participant(await host.snapshot(),one.peerId).exchange.state,'connected','old heartbeat does not immediately interrupt the fresh link');
   await host.command('junction.end');await until(host.snapshot,s=>!s.active,'graceful host end');for(const guest of [first,second])await until(guest.snapshot,s=>!s.active,'guest end');
  }finally{const closed=await Promise.allSettled(peers.map(peer=>peer.close()));await rm(directory,{recursive:true,force:true});for(const result of closed)if(result.status==='rejected')throw result.reason;}
 });

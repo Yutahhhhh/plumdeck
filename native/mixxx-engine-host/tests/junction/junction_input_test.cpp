@@ -354,3 +354,8 @@ JTEST("junction-input","a live deck hands the takeover an anchor inside the seam
     // milliseconds past the audio actually being rendered.
     CHECK(elapsed-*rendered>kWire/100);
 }
+JTEST("junction input","a hold that begins from an audible deck counts a fade that already started"){
+ InputRelease release;const qint64 ms=1000000;
+ release.begin(0,true);CHECK(!release.observe(false,true,10*ms));CHECK(!release.observe(false,true,1500*ms));CHECK(release.observe(false,true,1511*ms));
+ InputRelease stale;stale.begin(0);CHECK(!stale.observe(false,true,10*ms));CHECK(!stale.observe(false,true,4000*ms));
+}

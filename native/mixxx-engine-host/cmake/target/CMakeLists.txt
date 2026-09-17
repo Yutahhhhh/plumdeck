@@ -89,15 +89,18 @@ endif()
 string(REPLACE "${PLUMDECK_RETURN_NEEDLE}" "    if (auto* plumdeckBridge = junction::audioBridge.load(std::memory_order_acquire)) {
         const int plumdeckExcluded = plumdeckBridge->localReturnExcluded.load(std::memory_order_relaxed);
         const int plumdeckSamples = std::min(iBufferSize, static_cast<int>(plumdeckBridge->localReturn.size()));
+        const quint64 plumdeckMask = plumdeckBridge->localReturnMask.load(std::memory_order_relaxed);
+        const float plumdeckFixedGain = plumdeckBridge->localReturnFixedGain.load(std::memory_order_relaxed);
         CSAMPLE* plumdeckLocal = plumdeckBridge->localReturn.data();
         SampleUtil::clear(plumdeckLocal, plumdeckSamples);
         for (int o = EngineChannel::LEFT; o <= EngineChannel::RIGHT; o++) {
             for (auto* pChannelInfo : m_activeBusChannels[o]) {
                 if (pChannelInfo->m_handle.handle() == plumdeckExcluded || pChannelInfo->m_pChannel->isTalkoverChannel()) continue;
+                if (plumdeckMask && (pChannelInfo->m_handle.handle() < 0 || pChannelInfo->m_handle.handle() >= 64 || !(plumdeckMask & (quint64(1) << pChannelInfo->m_handle.handle())))) continue;
                 SampleUtil::add(plumdeckLocal, pChannelInfo->m_pBuffer.data(), plumdeckSamples);
             }
         }
-        const auto plumdeckGain = static_cast<CSAMPLE_GAIN>(m_pMainGain->get());
+        const auto plumdeckGain = static_cast<CSAMPLE_GAIN>(plumdeckFixedGain >= 0 ? plumdeckFixedGain : m_pMainGain->get());
         SampleUtil::applyRampingGain(plumdeckLocal, plumdeckBridge->localReturnGainOld, plumdeckGain, plumdeckSamples);
         plumdeckBridge->localReturnGainOld = plumdeckGain;
         plumdeckBridge->localReturnWritten.store(true, std::memory_order_relaxed);

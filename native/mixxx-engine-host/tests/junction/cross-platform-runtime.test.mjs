@@ -175,6 +175,7 @@ async function connectLive(host, guest, guestTrack, hostPlatform) {
   await Promise.all([host.start(), guest.start()]);
   await guest.command('deck.load', {deck:'A', track:{trackId:`cross-${guest.label}`, path:guestTrack, title:'Cross-platform Junction Live', artist:guest.label}});
   await until(() => guest.command('state.snapshot'), (snapshot) => ['ready', 'paused'].includes(snapshot.decks.A.status), `${guest.label} track decode`, 30000);
+  await guest.command('mixer.channel.gain', {deck:'A', gain:0});
   await guest.command('deck.play', {deck:'A'});
   await host.command('junction.create', {
     djName:`${host.label} DJ`, sessionName:`${host.label} live`, programDevice:await programDevice(host, hostPlatform),
@@ -195,23 +196,22 @@ async function connectLive(host, guest, guestTrack, hostPlatform) {
     until(guest.snapshot, (snapshot) => snapshot.exchange?.state === 'connected', `${guest.label} connected`),
   ]);
   await host.command('junction.session.start', {performerPeerId:slot.peerId});
+  await until(guest.snapshot, (snapshot) => snapshot.turn?.signal === 'ready', `${guest.label} READY`, 90000);
+  await guest.command('mixer.channel.gain', {deck:'A', gain:1});
   await Promise.all([
-    until(host.snapshot, (snapshot) => snapshot.lifecycle === 'live' && snapshot.performerPeerId === slot.peerId, `${host.label} remote-first live`, 90000),
-    until(guest.snapshot, (snapshot) => snapshot.lifecycle === 'live' && snapshot.performerPeerId === snapshot.localPeerId, `${guest.label} performer live`, 90000),
+    until(host.snapshot, (snapshot) => snapshot.lifecycle === 'live' && snapshot.performerPeerId === slot.peerId, `${host.label} remote-first live`, 30000),
+    until(guest.snapshot, (snapshot) => snapshot.lifecycle === 'live' && snapshot.performerPeerId === snapshot.localPeerId, `${guest.label} performer live`, 30000),
   ]);
-  const monitored = await until(host.snapshot, (snapshot) => snapshot.junctionTracks?.some((track) =>
-    track.role === 'current' && track.title === 'Cross-platform Junction Live' && track.state === 'ready'), `${host.label} Junction Live asset`, 120000);
-  const current = monitored.junctionTracks.find((track) => track.role === 'current');
-  assert.match(current.assetId, /^[0-9a-f]{64}$/);
-  assert.equal(current.playing, true);
-  assert.notEqual(current.path, guestTrack, 'the coordinator uses its own verified cache path');
-  const waveform = await host.command('waveform.ensure', {junctionAssetId:current.assetId});
-  assert(waveform.assetKey, 'the coordinator can build a waveform without deck.load');
+  // Fader start sends J metadata only: the host, next in the timetable, sees the track on J.
+  const monitored = await until(host.snapshot, (snapshot) => snapshot.junctionInput?.decks?.some((deck) =>
+    deck.role === 'current' && deck.title === 'Cross-platform Junction Live' && deck.playing), `${host.label} J metadata`, 60000);
+  assert.deepEqual(monitored.junctionTracks, [], 'no audio file is transferred');
+  assert(!JSON.stringify(monitored).includes(guestTrack), 'the sender path never crosses the wire');
   const nativeState = await host.command('state.snapshot');
-  assert.equal(nativeState.decks.A.track, null, 'Junction Live never replaces the coordinator deck');
+  assert.equal(nativeState.decks.A.track, null, 'J never replaces the coordinator deck');
   await until(host.snapshot, (snapshot) => Number(snapshot.program?.rms) > .001, `${host.label} Program audio`, 15000);
-  const initialPosition = current.positionMs;
-  await until(host.snapshot, (snapshot) => snapshot.junctionTracks?.find((track) => track.role === 'current')?.positionMs > initialPosition + 200, `${host.label} live position`);
+  const initialPosition = monitored.junctionInput.decks.find((deck) => deck.role === 'current').positionMs;
+  await until(host.snapshot, (snapshot) => snapshot.junctionInput?.decks?.find((deck) => deck.role === 'current')?.positionMs > initialPosition + 200, `${host.label} live position`);
   await host.command('junction.end');
   await until(guest.snapshot, (snapshot) => !snapshot.active, `${guest.label} ended`);
 }
@@ -234,7 +234,7 @@ test('manual Junction connects with macOS host and Windows guest, then reversed'
   }
 });
 
-test('remote-first Junction Live transfers audio, exposes a waveform, and keeps Program audio live in both OS directions', {
+test('remote-first fader start shows J metadata without file transfer and keeps Program audio live in both OS directions', {
   timeout:360000,
   skip:!remote || !remoteBinary || !remoteTrack ? 'also set the Windows WAV path' : false,
 }, async () => {

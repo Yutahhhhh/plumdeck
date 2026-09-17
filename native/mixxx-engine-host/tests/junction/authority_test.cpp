@@ -75,3 +75,16 @@ JTEST("authority","an outgoing DJ still sending after losing the operator role s
  // The operator itself is never affected by the flag.
  a.owner=a.local;a.localPrep=false;a.sending=true;CHECK(a.authorize("deck.load",ticket(a,1),10).isEmpty());
 }
+JTEST("authority","fader start never refuses a DJ's own mixer and locks only the outgoing tail"){
+ auto a=authority();a.faderStart=true;a.local="peer-b";a.owner="peer-a";
+ // A turn change moves the epoch; the fader move that caused it must keep applying.
+ CHECK(a.authorize("mixer.channel.gain",QJsonObject{},0,QJsonObject{{"deck","A"},{"gain",.8}}).isEmpty());
+ CHECK(a.authorize("deck.play",ticket(a,99),0,QJsonObject{{"deck","B"}}).isEmpty());
+ a.phase="recovery";CHECK(a.authorize("deck.load",ticket(a,1),0,QJsonObject{{"deck","C"}}).isEmpty());
+ a.phase="playing";a.sending=true;a.tailDecks={0};
+ CHECK(!a.authorize("deck.play",ticket(a,1),0,QJsonObject{{"deck","A"}}).isEmpty());
+ CHECK(a.authorize("deck.loop.enable",ticket(a,1),0,QJsonObject{{"deck","A"},{"enabled",false}}).isEmpty());
+ CHECK(a.authorize("deck.load",ticket(a,1),0,QJsonObject{{"deck","B"}}).isEmpty());
+ CHECK(!a.authorize("mixer.crossfader",ticket(a,1),0,QJsonObject{{"position",0.0}}).isEmpty());
+ CHECK(a.authorize("mixer.channel.pfl",{},0,QJsonObject{{"deck","A"}}).isEmpty());
+}

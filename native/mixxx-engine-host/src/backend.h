@@ -37,6 +37,11 @@ public:
     /// JUNCTION input or a microphone) for the return feed. Without it a local
     /// return must be refused whenever JUNCTION MASTER is in main.
     virtual bool junctionLocalReturnBus() const { return false; }
+    /// Latest per-callback peak of the LOCAL NEXT bus: this DJ's own sound.
+    virtual float junctionLocalPeak() const { return 0; }
+    /// OUTGOING tail: restrict the LOCAL NEXT bus to `decks` at the current
+    /// main gain, and fix their tempo (SYNC off). Empty restores the full bus.
+    virtual void junctionTail(const QList<int>&) {}
     virtual bool available() const = 0;
     virtual QString implementation() const { return "unavailable"; }
     virtual void start() {}

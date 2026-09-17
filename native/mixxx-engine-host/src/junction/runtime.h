@@ -24,7 +24,8 @@ public:
     quint64 mediaFrameForSource(quint64 sourceFrame,unsigned rate=44100) const;
     QString authorize(const QString&,const QJsonObject&) const;
     void applied(const QString&,const QJsonObject&);
-    void capture(const float*,unsigned frames,quint64 sourceFrame,unsigned rate) noexcept;
+    /// `local`: the LOCAL NEXT bus of the same callback (may be null).
+    void capture(const float* master,const float* local,unsigned frames,quint64 sourceFrame,unsigned rate) noexcept;
     void captureLocalReturn(const float*,unsigned frames,quint64 sourceFrame,unsigned rate) noexcept;
     bool sharedAudible() const noexcept;
     bool localMasterAudible() const noexcept;

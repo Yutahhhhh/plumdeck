@@ -222,6 +222,7 @@ public:
         for (int index = 0; index < 4; ++index) {
             const auto orientation = (index == 0 || index == 2) ? EngineChannel::LEFT : EngineChannel::RIGHT;
             const auto handle = mixer_->registerChannelGroup(groups[index]);
+            deckHandles_[index] = handle.handle();
             decks_[index] = new ScratchDeck(handle, settings_, mixer_.get(), effects_.get(), orientation);
             mixer_->addChannel(decks_[index]); // mixer owns/deletes the decks.
             effects_->addDeck(handle);
@@ -359,7 +360,7 @@ public:
                 const bool localWritten=self->audioBridge_.localReturnWritten.exchange(false,std::memory_order_relaxed);
                 const float* local=localWritten?self->audioBridge_.localReturn.data():nullptr;
                 if(runtime&&master){
-                    runtime->capture(master,frames,frame,44100);
+                    runtime->capture(master,local,frames,frame,44100);
                     if(local)runtime->captureLocalReturn(local,frames,frame,44100);
                 }
                 self->meterBlock(master,pfl,local,frames);
@@ -936,6 +937,19 @@ public:
         ControlObject::set(ConfigKey(kJunctionGroup, "main_mix"), enabled ? 1 : 0);
     }
     bool junctionLocalReturnBus() const override { return junctionAux_ != nullptr; }
+    float junctionLocalPeak() const override { return localBlockPeak_.load(std::memory_order_relaxed); }
+    void junctionTail(const QList<int>& decks) override {
+        quint64 mask = 0;
+        for (int deck : decks) {
+            if (deck < 0 || deck >= 4 || deckHandles_[deck] < 0 || deckHandles_[deck] >= 64) continue;
+            mask |= quint64(1) << deckHandles_[deck];
+            sync(deck, false);
+        }
+        // A tail whose decks cannot be named keeps nothing: never the full bus.
+        if (!decks.isEmpty() && !mask) mask = quint64(1) << 63;
+        audioBridge_.localReturnFixedGain.store(decks.isEmpty() ? -1.f : float(ControlObject::get(ConfigKey("[Master]", "gain"))), std::memory_order_relaxed);
+        audioBridge_.localReturnMask.store(mask, std::memory_order_relaxed);
+    }
     /// Audio thread. Windowed peaks, published once per window so a reader
     /// never sees a half-built value and never has to reset anything.
     void meterBlock(const float* master, const float* pfl, const float* local, unsigned frames) noexcept {
@@ -946,7 +960,9 @@ public:
         };
         meterWindow_[0] = std::max(meterWindow_[0], blockPeak(master));
         meterWindow_[1] = std::max(meterWindow_[1], blockPeak(pfl));
-        meterWindow_[2] = std::max(meterWindow_[2], blockPeak(local));
+        const float localPeak = blockPeak(local);
+        localBlockPeak_.store(localPeak, std::memory_order_relaxed);
+        meterWindow_[2] = std::max(meterWindow_[2], localPeak);
         meterFrames_ += frames;
         if (meterFrames_ < 8820) return;
         programPeak_.store(meterWindow_[0], std::memory_order_relaxed);
@@ -1260,7 +1276,8 @@ private:
     // Audio-thread meter window and the peaks it publishes.
     std::array<float, 3> meterWindow_{};
     unsigned meterFrames_ = 0;
-    std::atomic<float> programPeak_{0}, pflPeak_{0}, localReturnPeak_{0};
+    std::atomic<float> programPeak_{0}, pflPeak_{0}, localReturnPeak_{0}, localBlockPeak_{0};
+    std::array<int, 4> deckHandles_{-1, -1, -1, -1};
     QString micDevice_, micDeviceKey_, micProblem_;
     int micChannel_ = 0;
     double micGain_ = 1, micDuckingStrength_ = 0.65;

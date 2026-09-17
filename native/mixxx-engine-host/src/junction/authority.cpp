@@ -10,8 +10,9 @@ bool Authority::readOnlyQuery(const QString& op) {
     static const QSet<QString> allowed={"engine.clock.probe","waveform.ensure","waveform.manifest","waveform.acquireReadLease","waveform.releaseReadLease","waveform.requestRange","waveform.cancelRequest","waveform.invalidate","meters.subscribe","deck.timing.trace","state.snapshot"};
     return allowed.contains(op);
 }
-QString Authority::authorize(const QString& op,const QJsonObject& ticket,quint64 frame) const {
+QString Authority::authorize(const QString& op,const QJsonObject& ticket,quint64 frame,const QJsonObject& params) const {
     if(sessionId.isEmpty() || localOnly(op) || readOnlyQuery(op)) return {};
+    if(faderStart) return sending?turn::TailLock::check(op,params,tailDecks):QString{};
     if(ticket["sessionId"].toString()!=sessionId || ticket["actorPeerId"].toString()!=local) return "共有セッションの操作情報が更新されています";
     const auto requested=parseU64(ticket["epoch"]);
     if(!requested || *requested!=epoch) return "交代前の操作は適用できません";

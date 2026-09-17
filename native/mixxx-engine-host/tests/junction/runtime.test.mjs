@@ -73,7 +73,7 @@ function assertProgramAudio(wav,continuous=false) {
   }
 }
 
-test('two real native peers admit explicitly, enforce owner epochs and handoff with continuous actual Program PCM',{timeout:180000},async()=>{
+test('two real native peers admit explicitly, turn over by fader start with continuous actual Program PCM, and recover',{timeout:180000},async()=>{
   const directory=await mkdtemp('/tmp/plumdeck-junction-runtime-');
   const turn = process.env.JUNCTION_TURN_ADDRESS ? {
     turnUrls:[`${process.env.JUNCTION_TURN_TLS ? 'turns' : 'turn'}:${process.env.JUNCTION_TURN_ADDRESS}`],
@@ -81,7 +81,7 @@ test('two real native peers admit explicitly, enforce owner epochs and handoff w
   } : {};
   const createServer=()=>createJunctionServer({...turn,port:0,host:'127.0.0.1',roomTtlSeconds:3600,maxPeersPerRoom:8,maxFrameBytes:65536,relayRatePerSecond:100,frameRatePerSecond:300,joinAttemptsPerMinute:20,allowedOrigins:null,trustProxy:false,logLevel:'error'},createLogger({level:'error',write:()=>{}}));
   let server=createServer();
-  let host,guest,third;let extraHandoffs=0;
+  let host,guest,third;
   try {
     await listen(server,0,'127.0.0.1');const signalingUrl=`ws://127.0.0.1:${server.address().port}`;
     await mkdir(path.join(directory,'host'));await mkdir(path.join(directory,'guest'));
@@ -124,88 +124,33 @@ test('two real native peers admit explicitly, enforce owner epochs and handoff w
     await host.command('junction.peer.approve',{peerId:guestPeer.peerId,accept:true});
     const joined=await until(()=>guest.command('junction.snapshot'),s=>s.active&&s.hostPeerId===created.hostPeerId&&s.performerPeerId===created.performerPeerId&&s.participants.length===2,'authenticated guest state',60000);
     assert.notEqual(joined.localPeerId,joined.performerPeerId);
-    for(const params of [{deck:'A'},{deck:'A',_junction:{sessionId:joined.sessionId,epoch:joined.epoch,actorPeerId:joined.localPeerId}}]){
-      const denied=await guest.raw('deck.pause',params);assert(denied.kind==='error'||denied.ok===false,'waiting guest must never control shared playback');
-    }
-    const stale=await host.raw('mixer.channel.gain',{deck:'A',gain:0,_junction:{sessionId:created.sessionId,epoch:'0',actorPeerId:created.localPeerId}});assert(stale.kind==='error'||stale.ok===false,'stale epoch cannot change Program');
+    // Every DJ operates only their own mixer; the old nomination handoff is gone.
+    const prepared=await guest.raw('mixer.channel.gain',{deck:'A',gain:0});assert(!(prepared.kind==='error'||prepared.ok===false),'a waiting guest prepares on its own mixer');
+    assert.equal((await host.command('state.snapshot')).decks.A.status,'playing','the ON AIR host is untouched by guest preparation');
+    const retired=await host.raw('junction.handoff.request',{targetPeerId:joined.localPeerId});assert(retired.kind==='error'||retired.ok===false,'the nomination handoff is retired');
     const before=await host.command('state.snapshot');assert.equal(before.decks.A.status,'playing');
     const recording=path.join(directory,'program.wav');await host.command('junction.program.record.start',{path:recording});await pause(1200);await host.command('junction.program.record.stop');assertProgramAudio(await readFile(recording));
-    await host.command('junction.handoff.request',{targetPeerId:joined.localPeerId});
-    await until(()=>guest.command('junction.snapshot'),s=>s.handoffState==='preparing','cancel preparation visible to guest');
-    await host.command('junction.handoff.cancel');
-    await until(()=>guest.command('junction.snapshot'),s=>s.handoffState==='playing'&&!s.nextPeerId,'cancellation reaches guest');
+    const guestSource=path.join(directory,'guest.wav');await writeFile(guestSource,tone(240,554.37));
+    await guest.command('deck.load',{deck:'A',track:{trackId:'guest-tone',path:guestSource,title:'Guest tone',durationMs:240000}});
+    await until(()=>guest.command('state.snapshot'),s=>['ready','paused'].includes(s.decks.A.status),'guest decode');await guest.command('deck.play',{deck:'A'});
     const handoffRecording=path.join(directory,'handoff.wav');await host.command('junction.program.record.start',{path:handoffRecording});
-    await host.command('junction.handoff.request',{targetPeerId:joined.localPeerId});
-    await until(()=>guest.command('junction.snapshot'),s=>s.nextPeerId===s.localPeerId&&s.readiness.ready,'guest warm graph readiness',60000);
-    await guest.command('junction.handoff.accept');
-    const owner=await until(()=>guest.command('junction.snapshot'),s=>BigInt(s.epoch)>BigInt(created.epoch)&&s.performerPeerId===s.localPeerId,'guest epoch activation',60000);
-    assert.equal(BigInt(owner.epoch),BigInt(created.epoch)+1n,'one handoff advances exactly one epoch');
-    if(process.env.PLUMDECK_JUNCTION_TEST_SAMPLER){
-      const visible=await guest.command('sampler.state');assert.equal(visible.bank,0);assert.equal(visible.slots[0].status,'playing');assert.equal(visible.gain,.08);
-      await guest.command('sampler.bank',{bank:3});const hidden=await guest.command('sampler.state');assert.equal(hidden.slots[15].status,'playing','voice in hidden bank survives handoff');await guest.command('sampler.bank',{bank:0});
-    }
-
-    await guest.command('mixer.channel.gain',{deck:'A',gain:.75,_junction:{sessionId:owner.sessionId,epoch:owner.epoch,actorPeerId:owner.localPeerId}});
-    if(process.env.PLUMDECK_JUNCTION_TEST_MUSIC_OPERATIONS){
-      const ticket={sessionId:owner.sessionId,epoch:owner.epoch,actorPeerId:owner.localPeerId};
-      const operations=process.env.PLUMDECK_JUNCTION_TEST_MUSIC_OPERATIONS;const wants=name=>operations==='1'||operations.split(',').includes(name);
-      if(wants('eq'))await guest.command('mixer.channel.eq',{deck:'D',band:'low',gain:.8,_junction:ticket});
-      if(wants('tempo'))await guest.command('deck.tempo.set',{deck:'D',rate:1.02,_junction:ticket});
-      if(operations.includes('keylock'))await guest.command('deck.keylock.set',{deck:'D',enabled:true,_junction:ticket});
-      if(wants('loop')){await guest.command('deck.loop.set',{deck:'D',startMs:0,endMs:16000,_junction:ticket});
-      await guest.command('deck.loop.enable',{deck:'D',enabled:true,_junction:ticket});}
-      if(wants('next')){const nextTrack=path.join(directory,'guest-next.wav');await writeFile(nextTrack,tone(60,554.37));
-      await guest.command('deck.load',{deck:'B',track:{trackId:'guest-next',path:nextTrack,title:'Next song',durationMs:60000},_junction:ticket});
-      await until(()=>guest.command('state.snapshot'),s=>['ready','paused'].includes(s.decks.B.status),'new DJ decodes next song');
-      await guest.command('mixer.channel.gain',{deck:'B',gain:.15,_junction:ticket});await guest.command('deck.play',{deck:'B',_junction:ticket});}
-    }
-    const oldOwner=await host.raw('deck.pause',{deck:'A',_junction:{sessionId:created.sessionId,epoch:created.epoch,actorPeerId:created.localPeerId}});
-    assert(oldOwner.kind==='error'||oldOwner.ok===false,'retired performer cannot affect the new graph');
-    await until(()=>host.command('junction.snapshot'),s=>s.performerPeerId===owner.localPeerId&&s.handoffState==='playing','host Program cutover completion',60000);
-    let currentOwnerEpoch=owner.epoch;
-    if(process.env.PLUMDECK_JUNCTION_TEST_THIRD){
-      await mkdir(path.join(directory,'third'));third=native(path.join(directory,'third'));await third.start();
-      await third.command('junction.join',{displayName:'Third DJ',invite:created.invite});
-      const admission=await until(()=>host.command('junction.snapshot'),s=>s.participants.some(p=>p.approved===false),'third peer admission');
-      const target=admission.participants.find(p=>p.approved===false);await host.command('junction.peer.approve',{peerId:target.peerId,accept:true});
-      await until(()=>third.command('junction.snapshot'),s=>s.participants.length===3&&s.connection.state==='connected','third peer roster');
-      await until(()=>guest.command('junction.snapshot'),s=>s.participants.length===3,'guest sees complete roster');
-      for(const [client,peerId] of [[third,target.peerId],[guest,joined.localPeerId]]){
-        await host.command('junction.handoff.request',{targetPeerId:peerId});
-        await until(()=>client.command('junction.snapshot'),s=>s.nextPeerId===peerId&&s.readiness.ready,'guest to guest warm readiness',60000);
-        await client.command('junction.handoff.accept');
-        const adopted=await until(()=>client.command('junction.snapshot'),s=>BigInt(s.epoch)>BigInt(currentOwnerEpoch)&&s.performerPeerId===peerId,'guest to guest epoch',60000);
-        currentOwnerEpoch=adopted.epoch;extraHandoffs++;
-        await client.command('mixer.channel.gain',{deck:'A',gain:.75,_junction:{sessionId:adopted.sessionId,epoch:adopted.epoch,actorPeerId:peerId}});
-        if(process.env.PLUMDECK_JUNCTION_TEST_DECKS==='4'){
-          const graph=await client.command('state.snapshot');for(const deck of ['A','B','C','D'])assert.equal(graph.decks[deck].status,'playing',`${deck} survives guest to guest adoption`);
-          const operations=process.env.PLUMDECK_JUNCTION_TEST_MUSIC_OPERATIONS ?? '';const wants=name=>operations==='1'||operations.split(',').includes(name);
-          if(wants('tempo'))assert(Math.abs(graph.decks.D.rate-1.02)<.000001);
-          if(operations.includes('keylock'))assert.equal(graph.decks.D.keylock,true);
-          if(wants('loop'))assert.equal(graph.decks.D.loopRegion.enabled,true);
-          if(wants('eq'))assert.equal(graph.mixer.channels.D.eqLow,.8);
-          if(wants('next'))assert.equal(graph.decks.B.track.title,'Next song');
-        }
-        await until(()=>host.command('junction.snapshot'),s=>s.epoch===currentOwnerEpoch&&s.handoffState==='playing','guest to guest Program completion',60000);
-      }
-    }
+    await until(()=>host.command('junction.snapshot'),s=>s.turn.nextPeerId===joined.localPeerId,'the guest is next in the timetable');
+    await until(()=>guest.command('junction.snapshot'),s=>s.turn.signal==='ready'&&s.junctionInput.receiving,'guest READY on the host J relay',60000);
+    await guest.command('mixer.channel.gain',{deck:'A',gain:.75});
+    const owner=await until(()=>guest.command('junction.snapshot'),s=>BigInt(s.epoch)>BigInt(created.epoch)&&s.performerPeerId===s.localPeerId,'fader start puts the guest on air',30000);
+    assert.equal(BigInt(owner.epoch),BigInt(created.epoch)+1n,'one turn advances exactly one epoch');
+    await until(()=>host.command('junction.snapshot'),s=>s.performerPeerId===owner.localPeerId&&s.turn.outgoingPeerId===s.localPeerId&&s.turn.tailDecks.includes('A'),'host sends its tail',20000);
+    const tailLocked=await host.raw('deck.pause',{deck:'A'});assert(tailLocked.kind==='error'||tailLocked.ok===false,'the outgoing tail keeps playing');
+    await guest.command('junction.input.set',{volume:0});
+    await until(()=>host.command('junction.snapshot'),s=>s.turn.outgoingPeerId==='','the guest fades the host out',15000);
+    const currentOwnerEpoch=owner.epoch;
     const signalPort=server.address().port;await server.close();
     await until(()=>host.command('junction.snapshot'),s=>s.connection.state!=='connected','discovery outage observed',10000);
     server=createServer();await listen(server,signalPort,'127.0.0.1');
     const rediscovered=await until(()=>host.command('junction.snapshot'),s=>s.connection.state==='connected','native host re-registration',15000);
     assert.equal(rediscovered.performerPeerId,owner.localPeerId);assert.equal(rediscovered.epoch,currentOwnerEpoch,'discovery restart preserves native authority');
     await pause(1500);await host.command('junction.program.record.stop');assertProgramAudio(await readFile(handoffRecording),true);
-    await host.command('junction.handoff.request',{targetPeerId:created.localPeerId});
-    await until(()=>host.command('junction.snapshot'),s=>s.nextPeerId===s.localPeerId&&s.readiness.ready,'host return warm readiness',60000);
-    await host.command('junction.handoff.accept');
-    const returned=await until(()=>host.command('junction.snapshot'),s=>BigInt(s.epoch)===BigInt(created.epoch)+2n+BigInt(extraHandoffs)&&s.performerPeerId===s.localPeerId,'host return epoch activation',60000);
-    await host.command('mixer.channel.gain',{deck:'A',gain:.8,_junction:{sessionId:returned.sessionId,epoch:returned.epoch,actorPeerId:returned.localPeerId}});
-    await until(()=>host.command('junction.snapshot'),s=>s.handoffState==='playing','return Program completion',60000);
-    await host.command('junction.handoff.request',{targetPeerId:joined.localPeerId});
-    await until(()=>guest.command('junction.snapshot'),s=>s.nextPeerId===s.localPeerId&&s.readiness.ready,'repeat guest warm readiness',60000);
-    await guest.command('junction.handoff.accept');
-    const again=await until(()=>guest.command('junction.snapshot'),s=>BigInt(s.epoch)===BigInt(created.epoch)+3n+BigInt(extraHandoffs)&&s.performerPeerId===s.localPeerId,'guest epoch activation',60000);
-    await until(()=>host.command('junction.snapshot'),s=>s.handoffState==='playing'&&s.epoch===again.epoch,'repeat Program completion',60000);
+    const again=await host.command('junction.snapshot');
     guest.suspend();
     const recovering=await until(()=>host.command('junction.snapshot'),s=>s.handoffState==='recovery','real producer loss detection',10000);
     assert.equal(recovering.epoch,again.epoch,'failure does not roll ownership back');

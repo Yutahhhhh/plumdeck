@@ -50,6 +50,8 @@ enum class MessageType {
     SessionEnd,
     MonitorRequest,
     TrackAnnounce,
+    /// Fader-start turn traffic; `payload.kind` names the event.
+    Turn,
 };
 
 QString messageTypeName(MessageType type);

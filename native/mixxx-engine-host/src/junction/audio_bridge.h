@@ -1,6 +1,7 @@
 #pragma once
 #include <atomic>
 #include <array>
+#include <QtGlobal>
 namespace junction {
 struct AudioBridge {
     using Before = bool(*)(void*,unsigned);
@@ -17,6 +18,11 @@ struct AudioBridge {
     /// the room. Owned by whichever driver currently processes the graph.
     std::array<float,maxFrames*2> localReturn{};
     std::atomic<int> localReturnExcluded{-1};
+    /// OUTGOING tail: when nonzero only these channel handles (bits 0..63)
+    /// reach the bus, and `localReturnFixedGain` (>= 0) replaces main gain so
+    /// the tail never follows the outgoing DJ's master or booth knobs.
+    std::atomic<quint64> localReturnMask{0};
+    std::atomic<float> localReturnFixedGain{-1};
     std::atomic<bool> localReturnWritten{false};
     float localReturnGainOld=0;
     std::atomic<bool> idle{false};

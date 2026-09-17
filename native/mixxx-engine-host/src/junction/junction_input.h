@@ -164,7 +164,9 @@ public:
     static constexpr qint64 kStreamEndedNanos=2000000000LL;
     /// Upper bound on the whole release, however the new operator mixes.
     static constexpr qint64 kMaxHoldNanos=300000000000LL; // 5 minutes.
-    void begin(qint64 nowNanos) {active_=true;heard_=false;silentSince_=0;startedAt_=nowNanos;goneSince_=0;}
+    /// `heard`: the receiver already had the deck audible when the hold began
+    /// (a fader-start DJ is READY only with J at unity).
+    void begin(qint64 nowNanos,bool heard=false) {active_=true;heard_=heard;silentSince_=0;startedAt_=nowNanos;goneSince_=0;}
     void clear() {active_=false;heard_=false;silentSince_=0;startedAt_=0;goneSince_=0;}
     bool active() const {return active_;}
     /// True once the deck has stayed faded for `kSilentNanos` after being heard,

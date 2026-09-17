@@ -140,7 +140,8 @@ Host::Host(std::unique_ptr<PlaybackBackend> backend) : backend_(std::move(backen
             rows.append(QJsonObject{{"deck", deckNames[index]}, {"path", path}, {"title", track["title"].toString()}, {"artist", track["artist"].toString()},
                 {"durationMs", track["durationMs"].toDouble()}, {"bpm", track["bpm"].toDouble()}, {"musicalKey", track["musicalKey"].toString()},
                 {"positionMs", backend_->positionMs(index)}, {"rate", backend_->playbackRate(index)}, {"audibility", audibility},
-                {"loadGeneration", double(slot.generation)}, {"playing", backend_->playing(index)}});
+                {"loadGeneration", double(slot.generation)}, {"playing", backend_->playing(index)},
+                {"firstBeatMs", track.contains("beatgridOffsetMs") ? track["beatgridOffsetMs"] : QJsonValue(QJsonValue::Null)}, {"pfl", channel["pfl"].toBool()}});
         }
         return rows;
     };
