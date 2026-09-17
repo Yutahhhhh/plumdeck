@@ -546,9 +546,24 @@ fn dispatch_action(
                 "profile.update" => ("junction.profile.update", &[]),
                 "roster.reorder" => ("junction.roster.reorder", &[]),
                 "session.start" => ("junction.session.start", &[]),
-                "handoff.request" => ("junction.handoff.request", &[]),
-                "handoff.cancel" => ("junction.handoff.cancel", &[]),
-                "handoff.accept" => ("junction.handoff.accept", &[]),
+                "turn.join" => ("junction.turn.join", &[]),
+                "turn.leave" => ("junction.turn.leave", &[]),
+                "turn.repeat" => ("junction.turn.repeat", &[]),
+                "turn.failover" => ("junction.turn.failover", &[]),
+                "turn.onair" => ("junction.turn.onair", &[]),
+                "turn.force" => ("junction.turn.force", &[]),
+                "turn.skip" => ("junction.turn.skip", &[]),
+                "turn.release" => ("junction.turn.release", &[]),
+                "turn.cue" => ("junction.turn.cue", &[]),
+                "input.set" => ("junction.input.set", &[]),
+                "input.release" => ("junction.input.release", &[]),
+                "handoff.request" | "handoff.cancel" | "handoff.accept" => {
+                    return bridge_error(
+                        "retired_action",
+                        "この操作は廃止されました。次のDJがフェーダーを上げると交代します",
+                        false,
+                    )
+                }
                 "recovery.resume" => ("junction.recovery.resume", &[]),
                 "leave" => ("junction.leave", &[]),
                 "end" => ("junction.end", &[]),

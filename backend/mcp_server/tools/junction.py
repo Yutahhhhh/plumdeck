@@ -28,6 +28,12 @@ Deck = Literal["A", "B", "C", "D"]
 JunctionInputAssign = Literal["left", "thru", "right"]
 TurnMode = Literal["rest", "temporary"]
 ExchangeKind = Literal["invite", "response", "notice"]
+TurnCue = Literal["one_more", "go_ahead", "hold", "ok"]
+_RETIRED_HANDOFF = (
+    "この操作は廃止されました。次のDJがフェーダーを上げると交代します。"
+    "順番は junction_join_turn / junction_leave_turn / junction_reorder_roster、"
+    "ホストの介入は junction_force_turn / junction_skip_turn / junction_release_tail を使ってください"
+)
 UnixEpochMilliseconds = Annotated[
     int,
     Field(
@@ -355,29 +361,86 @@ def junction_reorder_roster(peer_ids: List[str]) -> Dict[str, Any]:
 
 @mcp.tool()
 def junction_start_session(performer_peer_id: str) -> Dict[str, Any]:
-    """ホストとして最初に演奏するDJを選び、ロビーからProgram配信を開始する。"""
+    """ホストとしてロビーからセッションを開始する。指定したDJが最初の順番（STANDBY）になり、そのDJがフェーダーを上げた瞬間にON AIRになる。"""
     return _call("session.start", {"performerPeerId": _text(performer_peer_id, "performer_peer_id", 128)})
 
 
 @mcp.tool()
 def junction_request_handoff(target_peer_id: Optional[str] = None) -> Dict[str, Any]:
-    """演奏引き継ぎを要求する。ホストは対象peer_idを指定し、ゲストは省略して自分の順番を要求できる。"""
-    arguments: Dict[str, Any] = {}
-    if target_peer_id is not None:
-        arguments["targetPeerId"] = _text(target_peer_id, "target_peer_id", 128)
-    return _call("handoff.request", arguments)
+    """廃止：指名による引き継ぎ要求。フェーダースタート方式では常にエラーで理由を返す。"""
+    raise ToolError(_RETIRED_HANDOFF)
 
 
 @mcp.tool()
 def junction_cancel_handoff() -> Dict[str, Any]:
-    """ホストとしてコミット前の演奏引き継ぎを取り消す。"""
-    return _call("handoff.cancel")
+    """廃止：引き継ぎの取り消し。フェーダースタート方式では常にエラーで理由を返す（順番から外すには junction_leave_turn）。"""
+    raise ToolError(_RETIRED_HANDOFF)
 
 
 @mcp.tool()
 def junction_accept_handoff() -> Dict[str, Any]:
-    """準備完了した引き継ぎを受諾する。対象DJは準備完了を通知し、ホストは切替を確定する。"""
-    return _call("handoff.accept")
+    """廃止：準備OK・交代確定。フェーダースタート方式では常にエラーで理由を返す（READYのDJは junction_go_on_air）。"""
+    raise ToolError(_RETIRED_HANDOFF)
+
+
+@mcp.tool()
+def junction_join_turn(peer_id: Optional[str] = None) -> Dict[str, Any]:
+    """順番（タイムテーブル）の最後に入る。ホストはpeer_idで他のDJを入れられる。ゲストは省略して自分だけ。"""
+    arguments: Dict[str, Any] = {}
+    if peer_id is not None:
+        arguments["peerId"] = _text(peer_id, "peer_id", 128)
+    return _call("turn.join", arguments)
+
+
+@mcp.tool()
+def junction_leave_turn(peer_id: Optional[str] = None) -> Dict[str, Any]:
+    """順番から外れる。ON AIRのDJは外せない。ホストはpeer_idで他のDJを外せる。"""
+    arguments: Dict[str, Any] = {}
+    if peer_id is not None:
+        arguments["peerId"] = _text(peer_id, "peer_id", 128)
+    return _call("turn.leave", arguments)
+
+
+@mcp.tool()
+def junction_set_b2b_repeat(enabled: bool) -> Dict[str, Any]:
+    """ホスト：B2Bの繰り返し。有効にすると、交代を終えたDJを順番の最後に戻す（A,B,A,B…）。"""
+    return _call("turn.repeat", {"enabled": enabled})
+
+
+@mcp.tool()
+def junction_set_failover(automatic: bool) -> Dict[str, Any]:
+    """ホスト：ON AIRのDJが切断したとき、READYの次のDJへ自動で交代するか（False は確認してから）。"""
+    return _call("turn.failover", {"auto": automatic})
+
+
+@mcp.tool()
+def junction_go_on_air() -> Dict[str, Any]:
+    """自分がREADYのとき、フェーダーを上げずに今すぐON AIRにする。READYでなければ理由を返す。"""
+    return _call("turn.onair")
+
+
+@mcp.tool()
+def junction_force_turn() -> Dict[str, Any]:
+    """ホスト：次のDJを強制的にON AIRにする（フェーダーを待たない）。前のDJの曲が残っている間は使えない。"""
+    return _call("turn.force")
+
+
+@mcp.tool()
+def junction_skip_turn() -> Dict[str, Any]:
+    """ホスト：次のDJを順番の最後へ回し、その次のDJをSTANDBYにする。"""
+    return _call("turn.skip")
+
+
+@mcp.tool()
+def junction_release_tail() -> Dict[str, Any]:
+    """前のDJの残りの曲を止めて交代を完了する。ON AIRのDJかホストが使える。"""
+    return _call("turn.release")
+
+
+@mcp.tool()
+def junction_send_cue(kind: TurnCue) -> Dict[str, Any]:
+    """ブースの合図を送る：one_more（あと1曲）、go_ahead（次どうぞ）、hold（少し待って）、ok（OK）。"""
+    return _call("turn.cue", {"kind": kind})
 
 
 @mcp.tool()

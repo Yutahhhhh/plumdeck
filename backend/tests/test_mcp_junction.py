@@ -120,13 +120,29 @@ def test_tools_translate_typed_arguments(monkeypatch):
             cue=True,
         )
         junction.junction_release_input()
+        junction.junction_join_turn("peer-321")
+        junction.junction_leave_turn()
+        junction.junction_set_b2b_repeat(True)
+        junction.junction_set_failover(False)
+        junction.junction_go_on_air()
+        junction.junction_force_turn()
+        junction.junction_skip_turn()
+        junction.junction_release_tail()
+        junction.junction_send_cue("go_ahead")
 
         junction.junction_get_exchange_text("invite", "peer-789")
 
-    assert [call["body"]["action"] for call in calls] == [
+    actions = [call["body"]["action"] for call in calls]
+    assert actions == [
         "network.configure", "peer.reject", "live.attach", "mic.enabled",
         "input.set", "input.release",
+        "turn.join", "turn.leave", "turn.repeat", "turn.failover", "turn.onair",
+        "turn.force", "turn.skip", "turn.release", "turn.cue",
         "exchange.export",
+    ]
+    turn_arguments = [call["body"]["arguments"] for call in calls[6:15]]
+    assert turn_arguments == [
+        {"peerId": "peer-321"}, {}, {"enabled": True}, {"auto": False}, {}, {}, {}, {}, {"kind": "go_ahead"},
     ]
     assert calls[0]["body"]["arguments"] == {
         "stunUrls": ["stun:stun.example.test"],
@@ -150,7 +166,7 @@ def test_tools_translate_typed_arguments(monkeypatch):
         "pfl": True,
     }
     assert calls[5]["body"]["arguments"] == {}
-    assert calls[6]["body"]["arguments"] == {"kind": "invite", "peerId": "peer-789"}
+    assert calls[15]["body"]["arguments"] == {"kind": "invite", "peerId": "peer-789"}
 
 
 def test_guest_response_exchange_export_may_omit_peer_id(monkeypatch):
@@ -267,7 +283,8 @@ def test_junction_tool_schemas_are_specific_and_bounded():
     import mcp_server.server  # noqa: F401 - registers every tool
 
     tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
-    assert len([name for name in tools if name.startswith("junction_")]) == 41
+    assert len([name for name in tools if name.startswith("junction_")]) == 50
+    assert tools["junction_send_cue"].parameters["properties"]["kind"]["enum"] == ["one_more", "go_ahead", "hold", "ok"]
     exchange = tools["junction_inspect_exchange"].parameters["properties"]["exchange_text"]
     assert exchange["type"] == "string"
     assert exchange["minLength"] == 1
@@ -289,3 +306,10 @@ def test_junction_tool_schemas_are_specific_and_bounded():
     assert input_properties["assign"]["anyOf"][0]["enum"] == ["left", "thru", "right"]
     assert tools["junction_prepare_engine"].parameters.get("properties") == {}
     assert "action" not in tools["junction_get_state"].parameters.get("properties", {})
+
+
+@pytest.mark.parametrize("tool", ["junction_request_handoff", "junction_cancel_handoff", "junction_accept_handoff"])
+def test_retired_handoff_tools_explain_fader_start_without_calling_the_bridge(monkeypatch, tool):
+    monkeypatch.delenv(BRIDGE_URL_ENV, raising=False)
+    with pytest.raises(ToolError, match="フェーダーを上げると交代"):
+        getattr(junction, tool)()
