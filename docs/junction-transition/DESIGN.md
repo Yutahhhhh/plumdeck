@@ -2,6 +2,17 @@
 
 作成日: 2026-09-17。`CURRENT.md`（plumdeck/Mac）・`LITE.md`（share-musics/PlumDeck Lite）の実読結果に基づく。D1〜D4（ユーザー承認済み決定事項）を制約として、既存実装からの移行パスを設計する。
 
+## 実装との差分（2026-09-17 実装完了時点）
+
+以下は設計時の案から変えた点です。詳しい理由は PROGRESS.md の判断ログにあります。
+
+- `turnPhase` フィールドは作らず、信号は既存の役割（owner / next / releasingPeer）から `turn::derive()` で導出する。メッセージは種類ごとに分けず、デスクトップ間は `turn`（`payload.kind`）1 種類、Lite とは DataChannel の `hello` / `owner`（`turn` 付き）/ `report` / `onair` / `input-released` / `tail-ended` / `cue` / `join` / `leave` / `decks`。
+- 会場出力の遅延は 0.5 秒から 1.0 秒に固定変更（ゲストが受け手のときの経路が 0.5 秒では足りない）。セッション中は変えず、測定値が遅延の半分を超えると READY にしない。
+- 継ぎ目：次の DJ は ON AIR の瞬間に自分のキャプチャを J の再生フレームに合わせ直し、そのフレームとキャプチャ世代をホストへ送る。待機ストリームは次の epoch で送る。ホストが受け手のときは既存の TakeoverAnchor をそのまま使う。
+- 会場へ送る音（Program）と J への送出は、EngineMixer のメインゲイン（MASTER つまみ）より前から取る。MASTER はブース音量だけに効く。
+- 状態移送（グラフ書き出し・音声照合・未来フレームでの切り替え）は削除せず、fader-start ではそのメッセージを受け付けない形で到達不能にした（コントラクトテストで固定）。Junction Live（音源ファイル転送）も無効化し、MCP ツールは理由を返す。表示用の UI コードは残っている（データが来ないため表示されない）。
+- Lite はフレーム精度の継ぎ目を持たないため、Lite が絡む ON AIR は時刻で切り替える。Lite の送出音は MASTER つまみを通さず、J をゲート付きで含める。
+
 ---
 
 ## 0. 設計方針の要約
