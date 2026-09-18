@@ -42,6 +42,13 @@ mcp = MCPServer(
         "junction_get_state after mutations, and do not approve, reject, end, leave, start "
         "recording, or begin a handoff without the user's explicit intent. Junction Live "
         "deck attachment is display-only; Program remains the actual venue output."
+        " Assist: plumdeck's assist window suggests the next track from the rekordbox deck. "
+        "When the DJ asks for music there, call assist_get_state, rank with assist_recommend "
+        "or assist_search (defaults come from the window), then update the window: "
+        "assist_apply_settings when the request maps onto a preset and conditions, or "
+        "assist_show_tracks with your own picks and a short Japanese reason for each. "
+        "Requests like 'tracks like X' need your own musical judgement; like_track_id/"
+        "like_artist only add numeric sound-alike evidence."
     ),
 )
 

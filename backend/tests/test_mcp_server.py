@@ -219,7 +219,9 @@ async def test_list_tools_returns_all_tools(mcp_session):
     """list_tools で全ツールが返り、MCP-client reasoning toolsが含まれることを検証する。"""
     result = await mcp_session.list_tools()
     names = [t.name for t in result.tools]
-    assert len(names) == 96
+    assert len(names) == 102
+    assert {"assist_get_state", "assist_recommend", "assist_search", "assist_apply_settings",
+            "assist_show_tracks", "assist_clear_tracks"}.issubset(names)
     assert {"list_wordplay_pairs", "propose_wordplay_pairs", "approve_wordplay_pair", "reject_wordplay_pair"}.issubset(names)
     assert {"register_track_lyrics", "register_track_lyrics_batch"}.issubset(names)
     assert {"plan_track_analysis", "start_track_analysis", "get_track_analysis_status",

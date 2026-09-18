@@ -13,7 +13,14 @@ already registered in plumdeck.
 
 *Recommendation* ranks the library for a chosen intent, restricted to originals
 rekordbox already knows about and that still exist on disk — a suggestion the DJ
-cannot drag onto a deck is not a suggestion.
+cannot drag onto a deck is not a suggestion. Compound filters narrow the pool as
+hard conditions, the chosen preset (keep, hype, dance...) decides which way the
+floor should move, and the best pick of every other preset is shown alongside.
+Transition mode looks for half/double-time partners and titled tempo-changing
+edits instead of nearby tempos. "Like X" references exist for the chat agent's
+tools only; judging resemblance properly needs the agent's reasoning.
+
+*Search* applies the same filters and availability rule without a source deck.
 """
 from __future__ import annotations
 
@@ -28,11 +35,12 @@ from domain.models.lyrics import Lyrics
 from domain.models.track import Track, TrackEmbedding
 from domain.models.wordplay import WordplayPair
 from domain.services import assist_recommendation as scoring
+from domain.services.assist_filters import AssistFilters
 from infra import rekordbox_library
 from infra.rekordbox_library import RekordboxLibraryUnavailable
 from infra.repositories.recommendation_repository import RecommendationRepository
 from infra.repositories.track_repository import TrackRepository
-from utils.embedding import cosine_similarity
+from utils.embedding import cosine_similarity, embedding_space
 
 # Deck resolution states, surfaced verbatim so the UI never has to guess either.
 STATUS_EMPTY = "empty"
@@ -43,6 +51,22 @@ STATUS_NOT_IN_LIBRARY = "not_in_library"
 
 MAX_CANDIDATE_POOL = 400
 MAX_SUGGESTIONS = 50
+MAX_ARTIST_ANCHORS = 40
+# Picks shown under "another preset" must genuinely suit that preset.
+ALTERNATIVE_MIN_SCORE = 0.6
+
+
+class AssistInputError(ValueError):
+    """A request the caller can fix (bad filter value, unknown reference)."""
+
+
+def _conditions(filters) -> AssistFilters:
+    if isinstance(filters, AssistFilters):
+        return filters
+    try:
+        return AssistFilters.from_dict(filters)
+    except ValueError as error:
+        raise AssistInputError(str(error)) from error
 
 
 class AssistAppService:
@@ -211,164 +235,600 @@ class AssistAppService:
         self,
         source_track_id: int,
         intent: str,
-        energy_direction: str = "hold",
         limit: int = 12,
         exclude_track_ids: Optional[list[int]] = None,
         genres: Optional[list[str]] = None,
         genre_scope: str = "any",
+        filters: Optional[dict[str, Any]] = None,
+        transition: bool = False,
+        reference: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
-        if intent not in scoring.INTENTS:
-            raise ValueError(f"unknown intent: {intent}")
-        if energy_direction not in scoring.ENERGY_DIRECTIONS:
-            raise ValueError(f"unknown energy direction: {energy_direction}")
-
+        intent = scoring.resolve_intent(intent)
+        # Approved wordplay edges are the whole search space; no tempo rule applies.
+        transition = bool(transition) and intent != "wordplay"
         if genre_scope not in {"any", "same_genre", "same_subgenre"}:
             raise ValueError(f"unknown genre scope: {genre_scope}")
+        conditions = _conditions(filters)
 
         source = self.tracks.get_by_id(source_track_id)
         if not source:
             raise ValueError("Track not found")
+        target = self._reference_anchor(reference)
+        preset = scoring.PRESETS[intent]
+        caveats = list(scoring.TRANSITION_CAVEATS) if transition else []
 
+        def response(candidates=(), notes=(), unavailable=0, alternatives=()):
+            return {
+                "intent": intent,
+                "intent_label": preset.label,
+                "transition": transition,
+                "source_track_id": source_track_id,
+                "basis": scoring.describe_weights(intent),
+                "reference": self._anchor_summary(target) if target else None,
+                "filters": conditions.describe(),
+                "candidates": list(candidates),
+                "alternatives": list(alternatives),
+                "notes": list(notes),
+                "caveats": caveats,
+                "unavailable_originals": unavailable,
+            }
+
+        if reference and (reference.get("kind") or "source") != "source" and target is None:
+            return response(notes=[self._missing_reference_note(reference)])
         scope_field = {"same_genre": "genre", "same_subgenre": "subgenre"}.get(genre_scope)
         scope_value = rekordbox_library.normalize_text(getattr(source, scope_field)) if scope_field else None
         if scope_field and not scope_value:
             label = "ジャンル" if scope_field == "genre" else "サブジャンル"
-            return {
-                "intent": intent, "energy_direction": energy_direction,
-                "source_track_id": source_track_id, "candidates": [],
-                "notes": [f"元曲の{label}が未登録のため、同じ{label}の候補を提案できません"],
-                "unavailable_originals": 0,
-            }
-        excluded = sorted({source_track_id, *(exclude_track_ids or [])})
-        # Read only lightweight metadata, so strict normalized scopes and history
-        # identity apply before the repository's bounded embedding pool.
-        metadata = self.session.exec(select(Track.id, Track.title, Track.artist,
-                                             Track.genre, Track.subgenre)).all()
-        excluded_ids = set(excluded)
-        identities = {self._recording_identity(row.title, row.artist) for row in metadata
-                      if row.id in excluded_ids}
-        identities.discard(None)
-        excluded_ids.update(row.id for row in metadata
-                            if self._recording_identity(row.title, row.artist) in identities)
+            return response(notes=[f"元曲の{label}が未登録のため、同じ{label}の候補を提案できません"])
+        source_payload = self._track_payload(source)
+        leading_notes: list[str] = []
+        declared = scoring.parse_transition(source.title)
+        if declared is not None:
+            # After a tempo-changing edit the floor is at its closing tempo, and
+            # the analysed BPM may describe either end.
+            source_payload["bpm"] = declared[1]
+            leading_notes.append(
+                f"基準曲はタイトル上 {declared[0]:g}→{declared[1]:g} BPM のトランジション曲のため、"
+                f"出口の {declared[1]:g} BPM を基準にしています"
+            )
+        source_bpm = source_payload.get("bpm")
+        if not scoring._positive(source_bpm) and intent != "wordplay":
+            return response(notes=["基準曲の BPM が未解析のため、つなぎを判定できません"])
+        if intent == "throwback" and not scoring._positive(source.year):
+            return response(notes=["基準曲のリリース年が未登録のため、「時代を戻す」は使えません"])
+
+        excluded_ids = self._excluded_with_duplicates(
+            source_track_id, [*(exclude_track_ids or []), *(target["exclude_ids"] if target else [])]
+        )
         excluded = sorted(excluded_ids)
-        eligible_ids = [row.id for row in metadata if row.id not in excluded_ids
-                        and (scope_field is None or
-                             rekordbox_library.normalize_text(getattr(row, scope_field)) == scope_value)]
+        # Read only lightweight metadata, so strict normalized scopes, compound
+        # filters and history identity apply before the bounded embedding pool.
+        eligible = [row for row in self._metadata() if row.id not in excluded_ids
+                    and (scope_field is None or
+                         rekordbox_library.normalize_text(getattr(row, scope_field)) == scope_value)
+                    and conditions.matches(row)]
         pairs = self._approved_pairs(source_track_id)
-        notes: list[str] = []
+        notes: list[str] = [*leading_notes, *(target["notes"] if target else [])]
 
         if intent == "wordplay" and not pairs:
-            return {
-                "intent": intent,
-                "energy_direction": energy_direction,
-                "source_track_id": source_track_id,
-                "candidates": [],
-                "notes": [
-                    "この曲を起点とする承認済みワードプレイはまだありません。"
-                    "ワードプレイ画面で候補を承認すると出てきます"
-                ],
-                "unavailable_originals": 0,
-            }
-
-        pool = self._candidate_pool(source, intent, energy_direction, excluded, genres, pairs, eligible_ids)
+            return response(notes=[
+                "この曲を起点とする承認済みワードプレイはまだありません。"
+                "ワードプレイ画面で候補を承認すると出てきます"
+            ])
+        if not conditions.is_empty() and not eligible:
+            return response(notes=["指定した条件に合う曲がライブラリにありません"])
+        if transition:
+            fits = {row.id: scoring.transition_fit(source_bpm, {"title": row.title, "bpm": row.bpm})
+                    for row in eligible}
+            eligible = sorted((row for row in eligible if fits[row.id] is not None),
+                              key=lambda row: (-fits[row.id].score, row.id))
+            if not eligible:
+                return response(notes=[
+                    f"基準 {source_bpm:g} BPM から入れるトランジション曲・倍テン・ハーフテンの曲が見つかりません"
+                ])
 
         try:
             registered = rekordbox_library.registered_paths()
         except RekordboxLibraryUnavailable as error:
-            return {
-                "intent": intent,
-                "energy_direction": energy_direction,
-                "source_track_id": source_track_id,
-                "candidates": [],
-                "notes": [f"{error}。登録済みの原本を確認できないため、提案を停止しました"],
-                "unavailable_originals": 0,
-            }
+            return response(notes=[f"{error}。登録済みの原本を確認できないため、提案を停止しました"])
 
-        source_payload = self._track_payload(source)
-        source_embedding = self.session.get(TrackEmbedding, source_track_id)
-        source_vector = self._vector(source_embedding)
+        context = self._scoring_context(source, source_payload, pairs, transition, target)
+        eligible_ids = [row.id for row in eligible]
+        pool = self._candidate_pool(source, intent, excluded, genres, pairs, eligible_ids,
+                                    conditions, transition, source_bpm=source_bpm)
+        entries, unavailable, filtered = self._score_pool(pool, intent, registered, context)
 
-        scored: list[tuple[dict[str, Any], scoring.Scored]] = []
-        unavailable = 0
-        for candidate in pool:
-            track = candidate["track"]
-            filepath = track.filepath or ""
-            if not rekordbox_library.is_registered_path(filepath, registered):
-                unavailable += 1
-                continue
-            if not filepath or not os.path.exists(track.filepath):
-                unavailable += 1
-                continue
-
-            payload = self._track_payload(track, bool(candidate.get("has_lyrics")))
-            if not scoring.passes_intent_filter(intent, source_payload, payload):
-                continue
-
-            similarity = (
-                cosine_similarity(
-                    source_vector,
-                    candidate.get("vector"),
-                    source_embedding.model_name if source_embedding else None,
-                    candidate.get("embedding_model"),
-                )
-                if source_vector is not None and candidate.get("vector") is not None
-                else None
-            )
-            result = scoring.evaluate(
-                source_payload,
-                payload,
-                intent,
-                energy_direction,
-                vector_similarity=similarity,
-                pair=pairs.get(track.id),
-                has_analysis=candidate.get("vector") is not None,
-            )
-            scored.append((payload, result))
-
-        ranked = []
-        seen_recordings = set()
-        for payload, result in scoring.rank(scored, len(scored)):
-            identity = self._recording_identity(payload.get("title"), payload.get("artist"))
-            if identity is not None and identity in seen_recordings:
-                continue
-            if identity is not None:
-                seen_recordings.add(identity)
-            ranked.append((payload, result))
-            if len(ranked) >= min(limit, MAX_SUGGESTIONS):
-                break
+        ranked = self._rank(entries, self._order(target))[: min(limit, MAX_SUGGESTIONS)]
         if unavailable:
             notes.append(
                 f"rekordbox 未登録、またはファイルが見つからない {unavailable} 曲を除外しました"
             )
+        if not entries and filtered and not transition and intent != "wordplay":
+            low, high = preset.tempo_window
+            notes.append(
+                f"「{preset.label}」のテンポ範囲（{low:+g}〜{high:+g}%）に合う曲がありません。"
+                "テンポを大きく変えたいときは「トランジション」をオンにしてください"
+            )
+
+        # Other presets rank a general pool: throwback's own pool is only older
+        # records, which would make every alternative a throwback too.
+        general = pool
+        if intent == "throwback" and not transition:
+            general = self._candidate_pool(source, "keep", excluded, genres, pairs,
+                                           eligible_ids=None, conditions=conditions, transition=False,
+                                           metadata_ids=self._eligible_ids(scope_field, scope_value,
+                                                                           conditions, excluded_ids),
+                                           source_bpm=source_bpm)
+        return response(
+            candidates=[self._entry_payload(entry, pairs) for entry in ranked],
+            alternatives=self._alternatives(intent, ranked, general, registered, context, pairs, target),
+            notes=notes,
+            unavailable=unavailable,
+        )
+
+    def _eligible_ids(self, scope_field, scope_value, conditions, excluded_ids) -> list[int]:
+        return [row.id for row in self._metadata() if row.id not in excluded_ids
+                and (scope_field is None or
+                     rekordbox_library.normalize_text(getattr(row, scope_field)) == scope_value)
+                and conditions.matches(row)]
+
+    def _scoring_context(self, source, source_payload, pairs, transition, target) -> dict[str, Any]:
+        embedding = self.session.get(TrackEmbedding, source.id)
         return {
-            "intent": intent,
-            "energy_direction": energy_direction,
-            "source_track_id": source_track_id,
-            "candidates": [
-                {
-                    **payload,
-                    "score": round(result.score, 4),
-                    "components": {k: round(v, 4) for k, v in result.components.items()},
-                    "reasons": [reason.to_dict() for reason in result.reasons],
-                    "wordplay": pairs.get(payload["id"]),
-                }
-                for payload, result in ranked
-            ],
-            "notes": notes,
-            "unavailable_originals": unavailable,
+            "source": source_payload,
+            "embedding": embedding,
+            "vector": self._vector(embedding),
+            "pairs": pairs,
+            "transition": transition,
+            "target": target,
         }
+
+    def _score_pool(self, pool, intent, registered, context):
+        """Score an already-fetched pool for one preset.
+
+        Returns (entries, unavailable originals, dropped by the preset's rules).
+        """
+        source_payload = context["source"]
+        entries, unavailable, filtered = [], 0, 0
+        for candidate in pool:
+            track = candidate["track"]
+            if not self._is_available(track, registered):
+                unavailable += 1
+                continue
+            payload = self._track_payload(track, bool(candidate.get("has_lyrics")))
+            fit = None
+            if context["transition"]:
+                fit = scoring.transition_fit(source_payload.get("bpm"), payload)
+                if fit is None or not scoring.passes_transition_filter(intent, source_payload, payload):
+                    filtered += 1
+                    continue
+            elif not scoring.passes_intent_filter(intent, source_payload, payload):
+                filtered += 1
+                continue
+            result = self._evaluate(source_payload, context["embedding"], context["vector"],
+                                    payload, candidate, intent, context["pairs"], fit)
+            target = context["target"]
+            like = self._likeness(target, payload, candidate) if target else None
+            entries.append({"payload": payload, "result": result, "like": like, "target": target})
+        return entries, unavailable, filtered
+
+    @staticmethod
+    def _order(target):
+        if target is None:
+            return lambda entry: entry["result"].score
+        return lambda entry: scoring.blend(entry["result"].score, entry["like"])
+
+    def _rank(self, entries, key) -> list[dict[str, Any]]:
+        ordered = sorted(entries, key=lambda entry: (-key(entry), int(entry["payload"]["id"] or 0)))
+        seen = set()
+        distinct = []
+        for entry in ordered:
+            identity = self._recording_identity(entry["payload"].get("title"), entry["payload"].get("artist"))
+            if identity is not None and identity in seen:
+                continue
+            if identity is not None:
+                seen.add(identity)
+            distinct.append(entry)
+        return distinct
+
+    def _alternatives(self, intent, ranked, pool, registered, context, pairs, target) -> list[dict[str, Any]]:
+        """For each other preset, its best pick that the main list missed."""
+        taken = {entry["payload"]["id"] for entry in ranked}
+        taken_recordings = {
+            self._recording_identity(entry["payload"].get("title"), entry["payload"].get("artist"))
+            for entry in ranked
+        }
+        alternatives = []
+        for name in scoring.MOOD_PRESETS:
+            if name == intent:
+                continue
+            if name == "throwback" and not scoring._positive(context["source"].get("year")):
+                continue
+            entries, _, _ = self._score_pool(pool, name, registered, context)
+            for entry in self._rank(entries, self._order(target)):
+                if entry["result"].score < ALTERNATIVE_MIN_SCORE:
+                    break
+                payload = entry["payload"]
+                identity = self._recording_identity(payload.get("title"), payload.get("artist"))
+                if payload["id"] in taken or (identity is not None and identity in taken_recordings):
+                    continue
+                taken.add(payload["id"])
+                taken_recordings.add(identity)
+                alternatives.append({
+                    "intent": name,
+                    "label": f"{scoring.PRESETS[name].label}なら",
+                    "track": self._entry_payload(entry, pairs),
+                })
+                break
+        return alternatives
+
+    def _entry_payload(self, entry, pairs) -> dict[str, Any]:
+        payload, result = entry["payload"], entry["result"]
+        like = self._describe_like(entry.get("like"), entry.get("target"))
+        return {
+            **payload,
+            "score": round(result.score, 4),
+            "components": {k: round(v, 4) for k, v in result.components.items()},
+            "like": like,
+            "summary": f"{like['text']}／{result.summary}" if like else result.summary,
+            "strengths": result.strengths,
+            "reasons": [reason.to_dict() for reason in result.reasons],
+            "wordplay": pairs.get(payload["id"]),
+        }
+
+    @staticmethod
+    def _describe_like(like, target) -> Optional[dict[str, Any]]:
+        if target is None or like is None or like.score < scoring.LIKE_THRESHOLD:
+            return None
+        return {
+            "reference": AssistAppService._anchor_summary(target),
+            "score": round(like.score, 4),
+            "aspects": [scoring.LIKENESS_LABELS[name] for name in like.aspects],
+            "text": scoring.describe_like(target["label"], like),
+        }
+
+    def _evaluate(
+        self, source_payload, source_embedding, source_vector, payload, candidate,
+        intent, pairs, transition=None,
+    ) -> scoring.Scored:
+        similarity = (
+            cosine_similarity(
+                source_vector,
+                candidate.get("vector"),
+                source_embedding.model_name if source_embedding else None,
+                candidate.get("embedding_model"),
+            )
+            if source_vector is not None and candidate.get("vector") is not None
+            else None
+        )
+        return scoring.evaluate(
+            source_payload,
+            payload,
+            intent,
+            vector_similarity=similarity,
+            pair=pairs.get(payload["id"]),
+            has_analysis=candidate.get("vector") is not None,
+            transition=transition,
+        )
+
+    # ---------------------------------------------------------------- anchors
+
+    def _track_anchor(self, track: Track, kind: str, label: str) -> dict[str, Any]:
+        embedding = self.session.get(TrackEmbedding, track.id)
+        return {
+            "key": f"{kind}:{track.id}",
+            "kind": kind,
+            "label": label,
+            "track_id": track.id,
+            "artist": None,
+            "members": [(self._track_payload(track, False), self._vector(embedding),
+                         embedding.model_name if embedding else None)],
+            "exclude_ids": [track.id] if kind == "track" else [],
+            "notes": [],
+        }
+
+    def _reference_anchor(self, reference: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+        """The "like X" target, or None for the default (the deck track itself)."""
+        if not reference or (reference.get("kind") or "source") == "source":
+            return None
+        kind = reference.get("kind")
+        if kind == "track":
+            track = self.tracks.get_by_id(int(reference.get("track_id") or 0))
+            if track is None:
+                return None
+            return self._track_anchor(track, "track", f"『{track.title}』（{track.artist}）")
+        if kind == "artist":
+            wanted = rekordbox_library.normalize_text(reference.get("artist"))
+            if not wanted:
+                return None
+            rows = self.session.exec(select(Track).where(Track.artist.is_not(None))).all()
+            members = [t for t in rows if rekordbox_library.normalize_text(t.artist) == wanted]
+            if not members:
+                members = [t for t in rows if wanted in rekordbox_library.normalize_text(t.artist)]
+            if not members:
+                return None
+            members = sorted(members, key=lambda t: t.id)[:MAX_ARTIST_ANCHORS]
+            name = members[0].artist if len({rekordbox_library.normalize_text(t.artist) for t in members}) == 1 \
+                else reference.get("artist")
+            embeddings = {
+                row.track_id: row for row in self.session.exec(
+                    select(TrackEmbedding).where(TrackEmbedding.track_id.in_([t.id for t in members]))
+                ).all()
+            }
+            return {
+                "key": f"artist:{wanted}",
+                "kind": "artist",
+                "label": name,
+                "track_id": None,
+                "artist": name,
+                "members": [
+                    (self._track_payload(t, False), self._vector(embeddings.get(t.id)),
+                     embeddings[t.id].model_name if t.id in embeddings else None)
+                    for t in members
+                ],
+                # "Like the artist" means other artists; their own songs are one
+                # artist filter away and would otherwise fill the whole list.
+                "exclude_ids": [t.id for t in members],
+                "notes": [f"{name} 本人の曲は除外しています（アーティスト条件で絞り込めます）"],
+            }
+        raise AssistInputError(f"unknown reference kind: {kind}")
+
+    @staticmethod
+    def _missing_reference_note(reference: dict[str, Any]) -> str:
+        if reference.get("kind") == "artist":
+            return f"アーティスト「{reference.get('artist')}」がライブラリに見つかりません"
+        return "参照する曲がライブラリに見つかりません"
+
+    @staticmethod
+    def _anchor_summary(anchor: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "kind": anchor["kind"],
+            "label": anchor["label"],
+            "track_id": anchor.get("track_id"),
+            "artist": anchor.get("artist"),
+        }
+
+    @staticmethod
+    def _likeness(anchor, payload, candidate) -> Optional[scoring.Likeness]:
+        """Likeness to an anchor; for an artist, the mean of its three closest songs."""
+        vector, model = candidate.get("vector"), candidate.get("embedding_model")
+        likes = []
+        for member, member_vector, member_model in anchor["members"]:
+            if member.get("id") == payload.get("id"):
+                continue
+            similarity = None
+            if (member_vector is not None and vector is not None
+                    and embedding_space(member_model) == embedding_space(model)):
+                similarity = cosine_similarity(member_vector, vector, member_model, model)
+            like = scoring.likeness(member, payload, similarity)
+            if like is not None:
+                likes.append(like)
+        if not likes:
+            return None
+        likes.sort(key=lambda like: -like.score)
+        top = likes[:3]
+        return scoring.Likeness(score=sum(like.score for like in top) / len(top), aspects=top[0].aspects)
+
+    # ------------------------------------------------------------------ search
+
+    def search(
+        self,
+        filters: Optional[dict[str, Any]],
+        limit: int = 12,
+        exclude_track_ids: Optional[list[int]] = None,
+        reference: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        """Tracks matching the compound conditions, when there is no source deck.
+
+        Same availability rule as recommendations: only originals rekordbox knows
+        about and that exist on disk. Without a source there is no transition to
+        score: with a "like X" reference the order is likeness, otherwise plain
+        (tempo when a BPM range is given, else artist and title).
+        """
+        conditions = _conditions(filters)
+        target = self._reference_anchor(reference)
+
+        def response(candidates=(), notes=(), unavailable=0, total=0):
+            return {
+                "filters": conditions.describe(),
+                "reference": self._anchor_summary(target) if target else None,
+                "candidates": list(candidates),
+                "notes": list(notes),
+                "unavailable_originals": unavailable,
+                "total_matches": total,
+            }
+
+        if reference and (reference.get("kind") or "source") != "source" and target is None:
+            return response(notes=[self._missing_reference_note(reference)])
+        if conditions.is_empty() and target is None:
+            return response(notes=["検索条件か「〜のような曲」を1つ以上指定してください"])
+        excluded_ids = self._excluded_with_duplicates(
+            None, [*(exclude_track_ids or []), *(target["exclude_ids"] if target else [])]
+        )
+        rows = [row for row in self._metadata(with_path=True)
+                if row.id not in excluded_ids and conditions.matches(row)]
+        if not rows:
+            return response(notes=["指定した条件に合う曲がライブラリにありません"])
+        try:
+            registered = rekordbox_library.registered_paths()
+        except RekordboxLibraryUnavailable as error:
+            return response(notes=[f"{error}。登録済みの原本を確認できないため、検索を停止しました"])
+        notes = list(target["notes"]) if target else []
+
+        if target is not None:
+            candidate_ids = [row.id for row in rows]
+            targets: dict[str, Any] = {}
+            if len(candidate_ids) > MAX_CANDIDATE_POOL:
+                first = target["members"][0][0]
+                targets = {"bpm": first.get("bpm"), "energy": first.get("energy")}
+            pool = self.recommendations.fetch_candidates_pool(
+                targets, limit=MAX_CANDIDATE_POOL, exclude_ids=sorted(excluded_ids),
+                candidate_ids=candidate_ids,
+            )
+            entries, unavailable = [], 0
+            for candidate in pool:
+                track = candidate["track"]
+                if not self._is_available(track, registered):
+                    unavailable += 1
+                    continue
+                payload = self._track_payload(track, bool(candidate.get("has_lyrics")))
+                entries.append({"payload": payload, "like": self._likeness(target, payload, candidate)})
+            ranking = self._rank(
+                entries, lambda entry: entry["like"].score if entry["like"] else -1.0,
+            )[: min(limit, MAX_SUGGESTIONS)]
+            if unavailable:
+                notes.append(
+                    f"rekordbox 未登録、またはファイルが見つからない {unavailable} 曲を除外しました"
+                )
+            candidates = []
+            for entry in ranking:
+                like = self._describe_like(entry["like"], target)
+                item = self._search_payload_from(entry["payload"])
+                if like:
+                    item["like"] = like
+                    item["summary"] = like["text"]
+                candidates.append(item)
+            return response(candidates=candidates, notes=notes, unavailable=unavailable, total=len(rows))
+
+        by_tempo = conditions.bpm_min is not None or conditions.bpm_max is not None
+        rows.sort(key=lambda row: (
+            (row.bpm or 0.0) if by_tempo else 0.0,
+            rekordbox_library.normalize_text(row.artist),
+            rekordbox_library.normalize_text(row.title),
+            row.id,
+        ))
+        chosen, seen, unavailable = [], set(), 0
+        for row in rows:
+            if not self._is_available(row, registered):
+                unavailable += 1
+                continue
+            identity = self._recording_identity(row.title, row.artist)
+            if identity is not None and identity in seen:
+                continue
+            seen.add(identity)
+            chosen.append(row.id)
+            if len(chosen) >= min(limit, MAX_SUGGESTIONS):
+                break
+        tracks = self.recommendations.get_tracks_by_ids(chosen)
+        if unavailable:
+            notes.append(
+                f"rekordbox 未登録、またはファイルが見つからない {unavailable} 曲を除外しました"
+            )
+        return response(
+            candidates=[self._search_payload(tracks[track_id]) for track_id in chosen if track_id in tracks],
+            notes=notes,
+            unavailable=unavailable,
+            total=len(rows),
+        )
+
+    def _search_payload(self, track: Track) -> dict[str, Any]:
+        return self._search_payload_from(self._track_payload(track))
+
+    @staticmethod
+    def _search_payload_from(payload: dict[str, Any]) -> dict[str, Any]:
+        facts = [
+            f"{payload['bpm']:g} BPM" if payload.get("bpm") else "BPM 不明",
+            payload.get("key") or "キー不明",
+            payload.get("genre") or "ジャンル未登録",
+            str(payload["year"]) if payload.get("year") else "年不明",
+        ]
+        return {
+            **payload,
+            "score": None,
+            "components": {},
+            "like": None,
+            "summary": "条件に一致（つなぎの相性は基準デッキがあると判定できます）",
+            "strengths": [],
+            "reasons": [{"kind": "match", "tone": "neutral", "text": " · ".join(facts)}],
+            "wordplay": None,
+        }
+
+    # ------------------------------------------------------- agent-picked tracks
+
+    def describe_tracks(
+        self,
+        track_ids: list[int],
+        source_track_id: Optional[int] = None,
+        intent: str = "keep",
+    ) -> dict[str, Any]:
+        """Check and explain tracks someone else picked (e.g. a chat agent).
+
+        Each track is either offered, with the same objective reasons the assist
+        ranking would show against the source deck, or refused with the reason.
+        """
+        try:
+            intent = scoring.resolve_intent(intent)
+        except ValueError:
+            intent = "keep"
+        wanted = list(dict.fromkeys(int(track_id) for track_id in track_ids))
+        try:
+            registered = rekordbox_library.registered_paths()
+        except RekordboxLibraryUnavailable as error:
+            return {
+                "tracks": [],
+                "rejected": [{"track_id": track_id, "reason": str(error)} for track_id in wanted],
+            }
+        source = self.tracks.get_by_id(source_track_id) if source_track_id else None
+        source_payload = self._track_payload(source) if source else None
+        declared = scoring.parse_transition(source.title) if source else None
+        if declared is not None:
+            source_payload["bpm"] = declared[1]
+        source_embedding = self.session.get(TrackEmbedding, source.id) if source else None
+        source_vector = self._vector(source_embedding)
+        pairs = self._approved_pairs(source.id) if source else {}
+        pool = {
+            item["id"]: item
+            for item in self.recommendations.fetch_candidates_pool({}, limit=len(wanted), candidate_ids=wanted)
+        } if wanted else {}
+
+        offered, rejected = [], []
+        for track_id in wanted:
+            candidate = pool.get(track_id)
+            if candidate is None:
+                rejected.append({"track_id": track_id, "reason": "ライブラリに存在しない曲 ID です"})
+                continue
+            if source and track_id == source.id:
+                rejected.append({"track_id": track_id, "reason": "基準デッキの曲そのものです"})
+                continue
+            track = candidate["track"]
+            if not self._is_available(track, registered):
+                rejected.append({
+                    "track_id": track_id,
+                    "reason": "rekordbox 未登録、またはファイルが見つからないためデッキに載せられません",
+                })
+                continue
+            payload = self._track_payload(track, bool(candidate.get("has_lyrics")))
+            if source_payload is None:
+                offered.append(self._search_payload_from(payload))
+                continue
+            result = self._evaluate(
+                source_payload, source_embedding, source_vector, payload, candidate, intent, pairs,
+            )
+            offered.append(self._entry_payload({"payload": payload, "result": result}, pairs))
+        return {"tracks": offered, "rejected": rejected}
 
     def _candidate_pool(
         self,
         source: Track,
         intent: str,
-        energy_direction: str,
         excluded: list[int],
         genres: Optional[list[str]],
         pairs: dict[int, dict[str, Any]],
-        eligible_ids: list[int],
+        eligible_ids: Optional[list[int]],
+        conditions: Optional[AssistFilters] = None,
+        transition: bool = False,
+        metadata_ids: Optional[list[int]] = None,
+        source_bpm: Optional[float] = None,
     ) -> list[dict[str, Any]]:
-        """Pull candidates with intent-appropriate pre-filtering."""
+        """Pull candidates with preset-appropriate pre-filtering.
+
+        `eligible_ids` already carries scope, filters and, in transition mode,
+        the transition rule (ordered best first). Throwback narrows to older
+        records here, because a tempo-ordered pool of a large library would
+        otherwise be mostly recent releases.
+        """
+        if eligible_ids is None:
+            eligible_ids = metadata_ids or []
         if intent == "wordplay":
             # Approved targets are the whole search space; tempo/energy filters
             # must not silently drop an edge the DJ deliberately approved.
@@ -378,16 +838,42 @@ class AssistAppService:
                 exclude_ids=excluded,
                 candidate_ids=sorted(set(pairs) & set(eligible_ids)),
             )
+        if transition:
+            return self.recommendations.fetch_candidates_pool(
+                {}, limit=MAX_CANDIDATE_POOL, exclude_ids=excluded,
+                candidate_ids=eligible_ids[:MAX_CANDIDATE_POOL],
+            )
+        if intent == "throwback" and source.year:
+            older = set(
+                self.session.exec(
+                    select(Track.id).where(Track.year > 0)
+                    .where(Track.year <= source.year - scoring.THROWBACK_MIN_YEARS)
+                ).all()
+            )
+            eligible_ids = [track_id for track_id in eligible_ids if track_id in older]
 
-        targets: dict[str, Any] = {"bpm": source.bpm}
-        source_energy = source.energy if source.energy is not None else None
-        if source_energy is not None and energy_direction != "hold":
-            step = scoring.ENERGY_STEP if energy_direction == "up" else -scoring.ENERGY_STEP
-            targets["energy"] = max(0.0, min(1.0, source_energy + step))
-        elif source_energy is not None and intent == "groove":
-            targets["energy"] = source_energy
-        if intent == "groove":
-            targets["danceability"] = source.danceability
+        preset = scoring.PRESETS[intent]
+        targets: dict[str, Any] = {}
+        tempo = source_bpm if source_bpm is not None else source.bpm
+        if tempo:
+            targets["bpm"] = tempo * (1 + preset.tempo_center / 100)
+        for feature, direction in preset.directions.items():
+            value = getattr(source, feature, None)
+            if value is None:
+                continue
+            step = scoring.FEATURE_STEPS[feature]
+            offset = step if direction == "up" else -step if direction == "down" else 0.0
+            if feature == "energy" and direction in ("up", "down"):
+                targets["energy"] = max(0.0, min(1.0, value + offset))
+            elif feature in ("danceability", "brightness", "noisiness"):
+                targets[feature] = value + offset
+        if conditions is not None and not conditions.is_empty():
+            if len(eligible_ids) <= MAX_CANDIDATE_POOL:
+                # The DJ already narrowed the library; score all of it rather
+                # than letting the tempo/energy pre-filter second-guess them.
+                targets = {}
+            elif conditions.bpm_min is not None or conditions.bpm_max is not None:
+                targets.pop("bpm", None)
 
         pool = self.recommendations.fetch_candidates_pool(
             targets,
@@ -396,7 +882,7 @@ class AssistAppService:
             exclude_ids=excluded,
             candidate_ids=eligible_ids,
         )
-        # Approved wordplay targets are eligible under every intent, so make sure
+        # Approved wordplay targets are eligible under every preset, so make sure
         # the tempo-ordered pool cap never hides one.
         missing = sorted((set(pairs) & set(eligible_ids)) - {item["id"] for item in pool} - set(excluded))
         if missing:
@@ -440,6 +926,36 @@ class AssistAppService:
         return edges
 
     # --------------------------------------------------------------- helpers
+
+    def _metadata(self, with_path: bool = False):
+        columns = [Track.id, Track.title, Track.artist, Track.album, Track.genre,
+                   Track.subgenre, Track.bpm, Track.key, Track.year]
+        if with_path:
+            columns.append(Track.filepath)
+        return self.session.exec(select(*columns)).all()
+
+    def _excluded_with_duplicates(
+        self, source_track_id: Optional[int], exclude_track_ids: Optional[list[int]]
+    ) -> set[int]:
+        """Excluded ids plus every other copy of the same recording."""
+        excluded_ids = {*(exclude_track_ids or [])}
+        if source_track_id is not None:
+            excluded_ids.add(source_track_id)
+        if not excluded_ids:
+            return excluded_ids
+        rows = self.session.exec(select(Track.id, Track.title, Track.artist)).all()
+        identities = {self._recording_identity(row.title, row.artist) for row in rows
+                      if row.id in excluded_ids}
+        identities.discard(None)
+        excluded_ids.update(row.id for row in rows
+                            if self._recording_identity(row.title, row.artist) in identities)
+        return excluded_ids
+
+    @staticmethod
+    def _is_available(track, registered: frozenset[str]) -> bool:
+        filepath = track.filepath or ""
+        return bool(filepath) and rekordbox_library.is_registered_path(filepath, registered) \
+            and os.path.exists(filepath)
 
     @staticmethod
     def _recording_identity(title, artist):

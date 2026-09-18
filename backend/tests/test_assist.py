@@ -255,20 +255,36 @@ def test_groove_refuses_candidates_that_leave_the_pocket(session, library):
     assert library["far_tempo"].id not in ids
 
 
-def test_shift_keeps_the_wider_tempo_range_and_prefers_contrast(session, library):
-    result = AssistAppService(session).recommend(library["source"].id, "shift")
-    ids = [candidate["id"] for candidate in result["candidates"]]
-    assert library["contrast"].id in ids
-    assert ids.index(library["contrast"].id) < ids.index(library["near"].id)
-
-
-def test_energy_direction_changes_the_ordering(session, library):
+def test_presets_move_the_floor_in_their_own_direction(session, library):
     service = AssistAppService(session)
-    up = service.recommend(library["source"].id, "shift", energy_direction="up")
-    down = service.recommend(library["source"].id, "shift", energy_direction="down")
-    high = library["contrast"].id
-    assert up["candidates"][0]["id"] == high
-    assert down["candidates"][0]["id"] != high
+    loud = library["contrast"].id  # +0.35 energy, +2% tempo, key +1
+    hype = [c["id"] for c in service.recommend(library["source"].id, "hype")["candidates"]]
+    calm = [c["id"] for c in service.recommend(library["source"].id, "calm")["candidates"]]
+    assert hype[0] == loud
+    # +2.3% is outside calm's tempo window (it may slow down, barely speed up).
+    assert library["near"].id in calm and loud not in calm
+
+
+def test_legacy_groove_is_keep(session, library):
+    result = AssistAppService(session).recommend(library["source"].id, "groove")
+    assert result["intent"] == "keep"
+
+
+def test_a_candidate_explains_the_preset_with_measured_moves(session, library):
+    result = AssistAppService(session).recommend(library["source"].id, "hype")
+    top = result["candidates"][0]
+    assert top["summary"].startswith("盛り上げる向き")
+    assert "エネルギー +0.35" in top["summary"]
+    assert "9A→" not in top["summary"] and "10A→11A（+1）" in top["summary"]
+
+
+def test_other_presets_offer_their_own_best_pick(session, library):
+    result = AssistAppService(session).recommend(library["source"].id, "keep", limit=1)
+    main = {c["id"] for c in result["candidates"]}
+    labels = {item["label"] for item in result["alternatives"]}
+    assert "盛り上げるなら" in labels
+    assert all(item["track"]["id"] not in main for item in result["alternatives"])
+    assert "keep" not in {item["intent"] for item in result["alternatives"]}
 
 
 def test_candidates_outside_the_rekordbox_collection_are_dropped(session, library, mocker):
@@ -277,7 +293,7 @@ def test_candidates_outside_the_rekordbox_collection_are_dropped(session, librar
         "registered_paths",
         lambda: frozenset({rekordbox_library.normalize_path(library["source"].filepath)}),
     )
-    result = AssistAppService(session).recommend(library["source"].id, "shift")
+    result = AssistAppService(session).recommend(library["source"].id, "keep")
     assert result["candidates"] == []
     assert result["unavailable_originals"] >= 1
     assert any("rekordbox 未登録" in note for note in result["notes"])
@@ -287,7 +303,7 @@ def test_a_missing_file_is_not_offered_even_when_rekordbox_knows_it(session, lib
     import os
 
     os.remove(library["near"].filepath)
-    result = AssistAppService(session).recommend(library["source"].id, "shift")
+    result = AssistAppService(session).recommend(library["source"].id, "keep")
     assert library["near"].id not in [candidate["id"] for candidate in result["candidates"]]
 
 
@@ -296,7 +312,7 @@ def test_an_unreadable_collection_stops_recommendations(session, library, mocker
         raise RekordboxLibraryUnavailable("master.db を読み取れません")
 
     mocker.patch.object(rekordbox_library, "registered_paths", unavailable)
-    result = AssistAppService(session).recommend(library["source"].id, "shift")
+    result = AssistAppService(session).recommend(library["source"].id, "keep")
     assert result["candidates"] == []
     assert any("master.db" in note for note in result["notes"])
 
@@ -339,7 +355,7 @@ def test_wordplay_uses_only_approved_directed_pairs_and_keeps_the_caveat(session
 
 def test_the_track_on_the_other_deck_can_be_excluded(session, library):
     result = AssistAppService(session).recommend(
-        library["source"].id, "shift", exclude_track_ids=[library["contrast"].id]
+        library["source"].id, "keep", exclude_track_ids=[library["contrast"].id]
     )
     assert library["contrast"].id not in [c["id"] for c in result["candidates"]]
 
@@ -353,7 +369,7 @@ def test_a_track_without_analysis_is_still_ranked_and_says_what_is_missing(sessi
         )
     )
     session.commit()
-    result = AssistAppService(session).recommend(library["source"].id, "shift")
+    result = AssistAppService(session).recommend(library["source"].id, "keep")
     candidate = result["candidates"][0]
     similarity = next(r for r in candidate["reasons"] if r["kind"] == "similarity")
     assert "解析" in similarity["text"] or "音色比較" in similarity["text"]
@@ -373,13 +389,11 @@ def test_missing_key_information_is_dropped_rather_than_scored_as_neutral():
         {"bpm": 120, "key": "8A", "energy": 0.5},
         {"bpm": 120, "key": "9A", "energy": 0.5},
         "groove",
-        "hold",
     )
     unknown = scoring.evaluate(
         {"bpm": 120, "key": "8A", "energy": 0.5},
         {"bpm": 120, "key": "", "energy": 0.5},
         "groove",
-        "hold",
     )
     assert "key" in known.components
     assert "key" not in unknown.components
@@ -390,13 +404,13 @@ def test_missing_key_information_is_dropped_rather_than_scored_as_neutral():
                for reason in [r.to_dict() for r in unknown.reasons])
 
 
-def test_energy_alignment_follows_the_requested_direction():
+def test_feature_direction_follows_the_preset():
     quiet = {"energy": 0.4}
     loud = {"energy": 0.7}
-    assert scoring.energy_alignment(quiet, loud, "up") > 0.5
-    assert scoring.energy_alignment(quiet, loud, "down") < 0.5
-    assert scoring.energy_alignment(quiet, quiet, "hold") == pytest.approx(1.0)
-    assert scoring.energy_alignment({}, loud, "up") is None
+    assert scoring.feature_score(quiet, loud, "energy", "up") > 0.5
+    assert scoring.feature_score(quiet, loud, "energy", "down") < 0.5
+    assert scoring.feature_score(quiet, quiet, "energy", "hold") == pytest.approx(1.0)
+    assert scoring.feature_score({}, loud, "energy", "up") is None
 
 
 def test_half_time_transitions_are_recognised_as_compatible():
@@ -404,7 +418,6 @@ def test_half_time_transitions_are_recognised_as_compatible():
         {"bpm": 174, "key": "8A", "energy": 0.5},
         {"bpm": 87, "key": "8A", "energy": 0.5},
         "groove",
-        "hold",
     )
     tempo = next(r for r in result.reasons if r.kind == "tempo")
     assert "2倍換算" in tempo.text
@@ -416,7 +429,6 @@ def test_similarity_is_never_described_as_a_groove_match():
         {"bpm": 120, "key": "8A", "energy": 0.5},
         {"bpm": 121, "key": "8A", "energy": 0.5},
         "groove",
-        "hold",
         vector_similarity=0.93,
     )
     similarity = next(r for r in result.reasons if r.kind == "similarity")
@@ -505,14 +517,14 @@ def test_tested_wordplay_edge_preferred_over_unverified(session, library):
     (100, 102, "BPM 100 → 102（+2.0%）"),
 ])
 def test_tempo_reason_uses_effective_matched_tempo(source, candidate, expected):
-    result = scoring.evaluate({"bpm": source}, {"bpm": candidate}, "groove", "hold")
+    result = scoring.evaluate({"bpm": source}, {"bpm": candidate}, "groove")
     assert next(reason.text for reason in result.reasons if reason.kind == "tempo") == expected
 
 
 @pytest.mark.parametrize("energy,expected", [(0.51, "エネルギーを維持"),
                          (0.8, "エネルギーを上げる"), (0.2, "エネルギーを下げる")])
 def test_energy_reason_describes_actual_direction_without_raw_values(energy, expected):
-    result = scoring.evaluate({"energy": 0.5}, {"energy": energy}, "shift", "hold")
+    result = scoring.evaluate({"energy": 0.5}, {"energy": energy}, "keep")
     assert next(reason.text for reason in result.reasons if reason.kind == "energy") == expected
     assert "energy" in result.components
 
@@ -526,7 +538,7 @@ def test_genre_scope_applies_normalized_exact_match_before_pool_cap(session, lib
         session.add(track)
     session.commit()
     mocker.patch("app.services.assist_app_service.MAX_CANDIDATE_POOL", 1)
-    result = AssistAppService(session).recommend(library["source"].id, "shift", genre_scope=scope)
+    result = AssistAppService(session).recommend(library["source"].id, "keep", genre_scope=scope)
     assert [candidate["id"] for candidate in result["candidates"]] == [library["near"].id]
 
 
@@ -535,7 +547,7 @@ def test_missing_source_scope_metadata_never_relaxes_filter(session, library, sc
     setattr(library["source"], field, " ")
     session.add(library["source"])
     session.commit()
-    result = AssistAppService(session).recommend(library["source"].id, "shift", genre_scope=scope)
+    result = AssistAppService(session).recommend(library["source"].id, "keep", genre_scope=scope)
     assert result["candidates"] == []
     assert "未登録" in result["notes"][0]
 
@@ -557,11 +569,11 @@ def test_recording_history_excludes_duplicates_but_preserves_remixes(session, li
         path.write_bytes(b"")
         library[name] = make_track(session, str(path), title=title, artist=artist)
     service = AssistAppService(session)
-    initial = service.recommend(library["source"].id, "shift")
+    initial = service.recommend(library["source"].id, "keep")
     ids = [candidate["id"] for candidate in initial["candidates"]]
     assert len(set(ids) & {library["near"].id, library["copy"].id}) == 1
     assert library["source_copy"].id not in ids
-    result = service.recommend(library["source"].id, "shift", exclude_track_ids=[library["near"].id])
+    result = service.recommend(library["source"].id, "keep", exclude_track_ids=[library["near"].id])
     ids = [candidate["id"] for candidate in result["candidates"]]
     assert not set(ids) & {library["near"].id, library["copy"].id, library["source_copy"].id}
     assert library["remix"].id in ids

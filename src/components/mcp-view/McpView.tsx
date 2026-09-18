@@ -71,6 +71,8 @@ export function McpView() {
       )
     : "";
 
+  const codexSnippet = info ? `[mcp_servers.plumdeck]\nurl = "${info.url}"` : "";
+
   return (
     <div className="h-full overflow-y-auto p-6 space-y-6">
       <div className="flex items-center justify-between">
@@ -80,7 +82,7 @@ export function McpView() {
             MCP
           </h1>
           <p className="text-muted-foreground text-sm mt-1">
-            plumdeck の楽曲管理と Junction を、Claude Desktop / Claude Code など外部の
+            plumdeck の楽曲管理と Junction を、Claude Desktop / Claude Code / Codex など外部の
             MCP クライアントから操作できます。チャットで依頼し、結果と現在の状態をこのアプリでも確認します。
           </p>
         </div>
@@ -132,6 +134,13 @@ export function McpView() {
             Claude Code の場合は <code>claude mcp add --transport http plumdeck {info?.url}</code>{" "}
             でも登録できます。設定後、クライアントを再起動すると plumdeck のツールが利用可能になります。
           </p>
+          <div className="space-y-1.5 pt-1">
+            <p className="text-xs font-medium">Codex</p>
+            <p className="text-xs text-muted-foreground">
+              <code>codex mcp add plumdeck --url {info?.url}</code> で登録するか、<code>~/.codex/config.toml</code> に以下を追記します。
+            </p>
+            <pre className="rounded-md border bg-muted/40 p-3 text-xs overflow-x-auto">{codexSnippet}</pre>
+          </div>
         </CardContent>
       </Card>
 
@@ -147,7 +156,7 @@ export function McpView() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-muted-foreground">
-            Junction操作では、最初にAIから音声エンジンの準備と状態取得を実行できます。参加承認、開始、強制交代、録音、退出、終了は実際のセッションへ反映されるため、AIへ対象と意図を明示してください。
+            アシストでは、assist_get_state で画面の状態を読み、assist_apply_settings で条件を変え、assist_show_tracks で選んだ曲を画面に表示できます。Junction操作では、最初にAIから音声エンジンの準備と状態取得を実行できます。参加承認、開始、強制交代、録音、退出、終了は実際のセッションへ反映されるため、AIへ対象と意図を明示してください。
           </div>
           <div className="grid gap-2">
             {info?.tools.map((tool, i) => (

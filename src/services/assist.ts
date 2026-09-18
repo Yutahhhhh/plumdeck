@@ -2,9 +2,10 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { apiClient } from "./api-client";
 import type { Track } from "@/types";
 
-export type AssistIntent = "groove" | "shift" | "wordplay";
+/** Which way to move the floor. "wordplay" is the separate approved-pair mode. */
+export type AssistIntent =
+  | "keep" | "hype" | "dance" | "calm" | "emotional" | "bright" | "throwback" | "wordplay";
 export type GenreScope = "any" | "same_genre" | "same_subgenre";
-export type EnergyDirection = "up" | "hold" | "down";
 export type ReasonTone = "good" | "neutral" | "caution";
 export type DeckStatus = "empty" | "resolved" | "ambiguous" | "unresolved" | "not_in_library";
 export type MatchConfidence = "title_and_artist" | "title_only";
@@ -76,20 +77,109 @@ export interface AssistWordplay {
   verification_status: string;
 }
 
+/** Compound conditions: AND across fields, OR inside a list. */
+export interface AssistFilters {
+  bpm_min: number | null;
+  bpm_max: number | null;
+  genres: string[];
+  subgenres: string[];
+  artists: string[];
+  keys: string[];
+  year_min: number | null;
+  year_max: number | null;
+  query: string;
+}
+
+export const EMPTY_FILTERS: AssistFilters = {
+  bpm_min: null, bpm_max: null, genres: [], subgenres: [], artists: [], keys: [],
+  year_min: null, year_max: null, query: "",
+};
+
+export const hasFilters = (filters: AssistFilters) =>
+  filters.bpm_min != null || filters.bpm_max != null || filters.genres.length > 0
+  || filters.subgenres.length > 0 || filters.artists.length > 0 || filters.keys.length > 0
+  || filters.year_min != null || filters.year_max != null || filters.query.trim() !== "";
+
 export interface AssistCandidate extends Track {
-  score: number;
+  /** Preset fit; null for plain search results that have no deck to mix from. */
+  score: number | null;
   components: Record<string, number>;
+  /** One line: what the preset asked for and the measured moves behind it. */
+  summary: string;
+  strengths: string[];
   reasons: AssistReason[];
   wordplay: AssistWordplay | null;
+  /** Set on tracks a chat agent picked: its own reason for the pick. */
+  agent_reason?: string | null;
+}
+
+export interface AssistAlternative {
+  intent: AssistIntent;
+  label: string;
+  track: AssistCandidate;
 }
 
 export interface AssistRecommendations {
   intent: AssistIntent;
-  energy_direction: EnergyDirection;
+  intent_label: string;
+  transition: boolean;
   source_track_id: number;
+  basis: string;
+  filters: string[];
+  candidates: AssistCandidate[];
+  alternatives: AssistAlternative[];
+  notes: string[];
+  caveats: string[];
+  unavailable_originals: number;
+}
+
+export interface AssistSearchResult {
+  filters: string[];
   candidates: AssistCandidate[];
   notes: string[];
   unavailable_originals: number;
+  total_matches: number;
+}
+
+/** What the window is showing, reported so an MCP agent can read it. */
+export interface AssistWindowState {
+  deck_slot: number | null;
+  source_track_id: number | null;
+  intent: AssistIntent;
+  transition: boolean;
+  genre_scope: GenreScope;
+  limit: number;
+  filters: AssistFilters;
+  exclude_track_ids: number[];
+  shown_track_ids: number[];
+}
+
+/** Settings an MCP agent asked the window to switch to. */
+export interface AssistAgentSettings {
+  revision: number;
+  agent_name: string | null;
+  intent?: AssistIntent;
+  transition?: boolean;
+  genre_scope?: GenreScope;
+  limit?: number;
+  filters?: AssistFilters;
+}
+
+/** Tracks an MCP agent put on the window, already checked as loadable. */
+export interface AssistAgentList {
+  revision: number;
+  title: string;
+  note: string | null;
+  tracks: AssistCandidate[];
+  rejected: { track_id: number; reason: string }[];
+  agent_name: string | null;
+  created_at: number;
+}
+
+export interface AssistAgentUpdates {
+  revision: number;
+  settings: AssistAgentSettings | null;
+  list: AssistAgentList | null;
 }
 
 export interface CompactWindowResult {
@@ -163,17 +253,32 @@ export const assistService = {
   recommendations: (params: {
     sourceTrackId: number;
     intent: AssistIntent;
-    energyDirection: EnergyDirection;
+    transition?: boolean;
     genreScope?: GenreScope;
     limit?: number;
     excludeTrackIds?: number[];
+    filters?: AssistFilters;
   }) =>
     apiClient.post<AssistRecommendations>("/assist/recommendations", {
       source_track_id: params.sourceTrackId,
       intent: params.intent,
-      energy_direction: params.energyDirection,
+      transition: params.transition ?? false,
       genre_scope: params.genreScope ?? "any",
       limit: params.limit ?? 12,
       exclude_track_ids: params.excludeTrackIds ?? [],
+      filters: params.filters ?? EMPTY_FILTERS,
     }, 60_000),
+
+  search: (params: { filters: AssistFilters; limit?: number; excludeTrackIds?: number[] }) =>
+    apiClient.post<AssistSearchResult>("/assist/search", {
+      filters: params.filters,
+      limit: params.limit ?? 12,
+      exclude_track_ids: params.excludeTrackIds ?? [],
+    }, 60_000),
+
+  reportWindow: (state: AssistWindowState) => apiClient.put<{ ok: boolean }>("/assist/window", state),
+
+  agentUpdates: () => apiClient.get<AssistAgentUpdates>("/assist/agent"),
+
+  dismissAgentList: () => apiClient.delete("/assist/agent/list"),
 };
