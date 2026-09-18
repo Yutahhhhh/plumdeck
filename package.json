@@ -1,7 +1,7 @@
 {
   "name": "plumdeck",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.6.1",
   "type": "module",
   "scripts": {
     "docker:start": "colima start plumdeck --cpu 5 --memory 8",

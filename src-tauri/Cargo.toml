@@ -1,6 +1,6 @@
 [package]
 name = "plumdeck"
-version = "0.6.0"
+version = "0.6.1"
 description = "plumdeck Music Library"
 authors = ["you"]
 edition = "2021"
