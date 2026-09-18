@@ -30,6 +30,17 @@
 #if defined(PLUMDECK_JUNCTION_WITH_LIBDATACHANNEL)
 #include <rtc/rtc.hpp>
 #endif
+#ifdef _WIN32
+// SetThreadExecutionState keeps the machine awake during a Junction session.
+// Lean and after rtc.hpp, so winsock2.h is never preceded by the old winsock.h.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 namespace junction {
 namespace {
 // Desktop screen sharing, power management and a busy audio engine can all
