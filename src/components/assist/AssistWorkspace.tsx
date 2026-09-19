@@ -65,12 +65,11 @@ export function AssistWorkspace() {
   const historyFull = history.excludedIds.length > MAX_EXCLUDED_TRACKS;
   const filtered = hasFilters(filters);
   const filterKey = JSON.stringify(filters);
-  const requestKey = JSON.stringify([sourceId, intent, transition, genreScope, limit, filterKey, excluded, revision]);
-  const routeKey = JSON.stringify([sourceId, destination?.id, intent, transition, genreScope, filterKey, excluded, routeRevision]);
-
-  useEffect(() => {
-    if (destination?.id === sourceId) setDestination(null);
-  }, [destination?.id, sourceId]);
+  // Loading a suggestion onto the other rekordbox deck should not invalidate
+  // the current Assist result. A new request is for search conditions, the
+  // selected source deck track, or an explicit refresh only.
+  const requestKey = JSON.stringify([sourceId, intent, transition, genreScope, limit, filterKey, revision]);
+  const routeKey = JSON.stringify([sourceId, destination?.id, intent, transition, genreScope, filterKey, routeRevision]);
 
   useEffect(() => {
     const current = ++generation.current;
@@ -95,12 +94,11 @@ export function AssistWorkspace() {
       .finally(() => { if (generation.current === current && !freeze.current) setBusy(false); });
     return () => { generation.current += 1; };
     // `filters` itself is tracked through filterKey (and requestKey).
-  }, [sourceId, intent, transition, genreScope, limit, filterKey, excluded, revision, dragging, historyFull, requestKey, filtered]);
+  }, [sourceId, intent, transition, genreScope, limit, filterKey, revision, requestKey, filtered]);
 
   useEffect(() => {
     const current = ++routeGeneration.current;
     if (freeze.current || !sourceId || !destination || historyFull) {
-      setRoute(null);
       setRouteError(null);
       setRouteBusy(false);
       return;
@@ -121,14 +119,13 @@ export function AssistWorkspace() {
       if (routeGeneration.current === current && !freeze.current) setRoute(value);
     }).catch(failure => {
       if (routeGeneration.current === current && !freeze.current) {
-        setRoute(null);
         setRouteError(getErrorDetail(failure));
       }
     }).finally(() => {
       if (routeGeneration.current === current && !freeze.current) setRouteBusy(false);
     });
     return () => { routeGeneration.current += 1; };
-  }, [sourceId, destination?.id, intent, transition, genreScope, filterKey, excluded, routeRevision, dragging, historyFull, routeKey]);
+  }, [sourceId, destination?.id, intent, transition, genreScope, filterKey, routeRevision, routeKey]);
 
   const refresh = () => {
     if (freeze.current) return;
