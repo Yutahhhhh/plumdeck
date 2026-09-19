@@ -5,8 +5,10 @@ the same measurements (tempo, Camelot key movement, analysed features, release
 year) in its own direction rather than reordering one fixed score:
 
 * ``keep``      — stay in the current pocket.
-* ``hype``      — raise the heat: energy up, key +1 / +7, tempo nudged up.
-* ``dance``     — more groove: danceability up, tempo held.
+* ``hype``      — raise the heat: energy up, while preserving a playable
+  stylistic bridge.
+* ``dance``     — more groove: danceability up, while preserving a playable
+  stylistic bridge.
 * ``calm``      — cool down: energy and noise down, key -1 / to minor.
 * ``emotional`` — deeper and more wistful: minor keys, darker tone, energy held.
 * ``bright``    — open and euphoric: major keys, brighter tone, energy held.
@@ -49,37 +51,44 @@ PRESETS: dict[str, Preset] = {
     "keep": Preset(
         "キープ", "今の流れを保つ", (-6.0, 6.0), 0.0,
         {"energy": "hold", "danceability": "hold", "noisiness": "hold"},
-        {"bpm": 0.30, "key": 0.22, "vector": 0.18, "energy": 0.12, "danceability": 0.10, "noisiness": 0.08},
+        {"bpm": 0.25, "key": 0.17, "vector": 0.16, "continuity": 0.22,
+         "energy": 0.08, "danceability": 0.06, "noisiness": 0.06},
     ),
     "hype": Preset(
         "盛り上げる", "熱量を上げる", (-2.0, 8.0), 3.0,
         {"energy": "up", "noisiness": "not_down"},
-        {"bpm": 0.22, "key": 0.22, "vector": 0.08, "energy": 0.36, "noisiness": 0.12},
+        {"bpm": 0.20, "key": 0.19, "vector": 0.06, "continuity": 0.04,
+         "energy": 0.37, "noisiness": 0.14},
     ),
     "dance": Preset(
         "踊らせる", "体が動くグルーヴへ", (-6.0, 6.0), 0.0,
         {"danceability": "up", "energy": "not_down"},
-        {"bpm": 0.26, "key": 0.16, "vector": 0.10, "danceability": 0.32, "energy": 0.16},
+        {"bpm": 0.20, "key": 0.12, "vector": 0.10, "continuity": 0.08,
+         "danceability": 0.36, "energy": 0.14},
     ),
     "calm": Preset(
         "落ち着かせる", "クールダウン", (-8.0, 2.0), -3.0,
         {"energy": "down", "noisiness": "down"},
-        {"bpm": 0.22, "key": 0.22, "vector": 0.08, "energy": 0.34, "noisiness": 0.14},
+        {"bpm": 0.18, "key": 0.17, "vector": 0.07, "continuity": 0.08,
+         "energy": 0.34, "noisiness": 0.16},
     ),
     "emotional": Preset(
         "エモく", "切なく・深く", (-6.0, 6.0), 0.0,
         {"brightness": "down", "energy": "hold"},
-        {"bpm": 0.22, "key": 0.30, "vector": 0.08, "brightness": 0.24, "energy": 0.16},
+        {"bpm": 0.18, "key": 0.23, "vector": 0.08, "continuity": 0.08,
+         "brightness": 0.23, "energy": 0.20},
     ),
     "bright": Preset(
         "明るく", "開放感・多幸感へ", (-6.0, 6.0), 0.0,
         {"brightness": "up", "energy": "hold"},
-        {"bpm": 0.22, "key": 0.30, "vector": 0.08, "brightness": 0.24, "energy": 0.16},
+        {"bpm": 0.18, "key": 0.23, "vector": 0.08, "continuity": 0.08,
+         "brightness": 0.23, "energy": 0.20},
     ),
     "throwback": Preset(
         "時代を戻す", "懐かしい曲で沸かせる", (-6.0, 6.0), 0.0,
         {"energy": "hold", "danceability": "hold"},
-        {"bpm": 0.24, "key": 0.18, "vector": 0.10, "era": 0.30, "energy": 0.10, "danceability": 0.08},
+        {"bpm": 0.20, "key": 0.15, "vector": 0.08, "continuity": 0.08,
+         "era": 0.30, "energy": 0.10, "danceability": 0.09},
     ),
     "wordplay": Preset(
         "ワードプレイ", "言葉でつなぐ", (-100.0, 100.0), 0.0,
@@ -104,11 +113,15 @@ FEATURE_LABELS: dict[str, str] = {
 }
 COMPONENT_LABELS: dict[str, str] = {
     "bpm": "テンポ", "key": "キー", "vector": "音色", "era": "年代",
-    "wordplay": "ワードプレイ", **FEATURE_LABELS,
+    "continuity": "系統の連続性", "wordplay": "ワードプレイ", **FEATURE_LABELS,
 }
 
 THROWBACK_MIN_YEARS = 5
 TEMPO_SIGMA_PERCENT = 3.0
+# A half/double-time reading can be musically useful, but it is not as close as
+# a direct BPM match. Keep it available outside transition mode while preventing
+# it from tying with an ordinary near-tempo candidate.
+HALF_DOUBLE_TEMPO_FACTOR = 0.72
 # Transition mode: how closely a half/double partner or an edit's opening tempo
 # must match the deck.
 TRANSITION_TOLERANCE = math.log2(1.04)
@@ -204,7 +217,8 @@ def tempo_score(source_bpm: Any, candidate_bpm: Any, center: float = 0.0) -> Opt
     matched = matched_tempo(source_bpm, candidate_bpm)
     if matched is None:
         return None
-    return math.exp(-0.5 * ((matched[1] - center) / TEMPO_SIGMA_PERCENT) ** 2)
+    score = math.exp(-0.5 * ((matched[1] - center) / TEMPO_SIGMA_PERCENT) ** 2)
+    return score * HALF_DOUBLE_TEMPO_FACTOR if matched[2] else score
 
 
 _TRANSITION_PATTERN = re.compile(
@@ -384,6 +398,16 @@ def feature_closeness(source: dict, candidate: dict) -> Optional[float]:
     return max(0.0, 1.0 - min(1.0, mean_delta / 0.35))
 
 
+def genre_continuity_score(source: dict, candidate: dict) -> Optional[float]:
+    """How safely the candidate preserves the source's broad musical lane.
+
+    This is deliberately a soft score. A DJ may want to cross genres, but a
+    cross-genre pick should not look as if it were a normal continuity match.
+    Missing labels remain unknown rather than being treated as compatible.
+    """
+    return _genre_likeness(source, candidate)
+
+
 # ---------------------------------------------------------------- filters
 
 def passes_intent_filter(intent: str, source: dict, candidate: dict) -> bool:
@@ -435,6 +459,7 @@ def evaluate(
         tempo_score(source.get("bpm"), candidate.get("bpm"), preset.tempo_center),
         "key": key_score(source.get("key"), candidate.get("key"), intent),
         "vector": _number(vector_similarity),
+        "continuity": genre_continuity_score(source, candidate),
         "era": era_score(source, candidate),
         "wordplay": wordplay_score(pair),
     }
@@ -498,7 +523,10 @@ def summarize(
     else:
         matched = matched_tempo(source.get("bpm"), candidate.get("bpm"))
         if matched is not None:
-            facts.append(f"BPM {matched[1]:+.1f}%")
+            tempo_fact = f"BPM {matched[1]:+.1f}%"
+            if matched[2]:
+                tempo_fact += "（倍テン／ハーフテン扱い）"
+            facts.append(tempo_fact)
 
     total = sum(weights[name] * value for name, value in components.items())
     available = sum(weights[name] for name in components)
@@ -621,6 +649,7 @@ def build_reasons(
                 f"タイトル上テンポが変わる曲（{declared[0]:g}→{declared[1]:g}）：解析 BPM は参考値です",
             ))
     reasons.append(_key_reason(source, candidate, values.get("key"), intent))
+    reasons.append(_continuity_reason(source, candidate, values.get("continuity")))
     for feature, direction in PRESETS[intent].directions.items():
         reasons.append(_feature_reason(source, candidate, feature, direction))
     if intent == "throwback":
@@ -674,6 +703,16 @@ def _key_reason(source: dict, candidate: dict, score: Optional[float], intent: s
     move = key_move(left, right)
     tone = "good" if score >= 0.85 else "neutral" if score >= 0.5 else "caution"
     return Reason("key", tone, f"キー {left} → {right}：{_KEY_MOVE_TEXT[move]}")
+
+
+def _continuity_reason(source: dict, candidate: dict, score: Optional[float]) -> Reason:
+    if score is None:
+        return Reason("continuity", "caution", "ジャンル情報がないため系統の連続性は判定できません")
+    if score >= 0.95:
+        return Reason("continuity", "good", "同じサブジャンルで流れを保ちやすい")
+    if score >= 0.75:
+        return Reason("continuity", "neutral", "同じジャンルだがサブジャンルは異なります")
+    return Reason("continuity", "caution", "ジャンルが変わるため流れの連続性は弱めです")
 
 
 def _feature_reason(source: dict, candidate: dict, feature: str, direction: str) -> Reason:

@@ -125,6 +125,28 @@ def test_transition_mode_offers_matching_edits_and_double_time(session, crate):
     assert any("入り 100 → 出口 128" in r["text"] for r in edit["reasons"])
 
 
+def test_route_reaches_the_exact_destination_through_a_bridge(session, crate, tmp_path):
+    crate["bridge"] = add(session, tmp_path, "Bridge", bpm=105.0, key="8A", genre="House")
+    crate["destination"] = add(session, tmp_path, "Destination", bpm=110.0, key="8A", genre="House")
+    result = AssistAppService(session).route(
+        crate["source"].id, crate["destination"].id, max_intermediate=1, limit=3,
+    )
+    assert result["routes"]
+    route = result["routes"][0]
+    assert [track["id"] for track in route["tracks"]] == [
+        crate["source"].id, crate["bridge"].id, crate["destination"].id,
+    ]
+    assert route["steps"][-1]["to_track_id"] == crate["destination"].id
+
+
+def test_route_does_not_substitute_a_different_destination(session, crate):
+    result = AssistAppService(session).route(
+        crate["source"].id, crate["fast"].id, max_intermediate=0,
+    )
+    assert result["routes"] == []
+    assert any("目的曲まで" in note for note in result["notes"])
+
+
 def test_a_titled_edit_in_normal_mode_warns_its_analysed_tempo_is_approximate(session, crate):
     crate["edit"].bpm = 101.0
     session.add(crate["edit"])
@@ -237,6 +259,17 @@ def test_recommend_and_search_routes(client, crate):
     assert search.status_code == 200 and search.json()["candidates"]
 
 
+def test_route_api_keeps_the_requested_destination(client, crate):
+    response = client.post("/api/assist/routes", json={
+        "source_track_id": crate["source"].id,
+        "target_track_id": crate["steady"].id,
+        "max_intermediate": 0,
+    })
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["routes"] and body["routes"][0]["tracks"][-1]["id"] == crate["steady"].id
+
+
 def test_window_and_agent_routes(client, mocker):
     bridge = AssistBridge()
     mocker.patch("api.routers.assist.assist_bridge", bridge)
@@ -263,6 +296,9 @@ def test_mcp_tools_read_and_drive_the_window(session, crate, mocker):
     ranked = tools.assist_recommend(intent="hype")
     assert ranked["mode"] == "recommend" and ranked["intent"] == "hype"
     assert crate["steady"].id not in [c["id"] for c in ranked["candidates"]]
+
+    route = tools.assist_route(crate["steady"].id, source_track_id=crate["source"].id, max_intermediate=0)
+    assert route["mode"] == "route" and route["routes"]
 
     applied = tools.assist_apply_settings(intent="groove", filters={"keys": ["A minor"]}, agent_name="Codex")
     assert applied["applied"]["intent"] == "keep"

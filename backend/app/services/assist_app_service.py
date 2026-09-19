@@ -52,6 +52,8 @@ STATUS_NOT_IN_LIBRARY = "not_in_library"
 MAX_CANDIDATE_POOL = 400
 MAX_SUGGESTIONS = 50
 MAX_ARTIST_ANCHORS = 40
+MAX_ROUTE_INTERMEDIATE = 4
+MAX_ROUTE_BEAM = 18
 # Picks shown under "another preset" must genuinely suit that preset.
 ALTERNATIVE_MIN_SCORE = 0.6
 
@@ -365,6 +367,265 @@ class AssistAppService:
             notes=notes,
             unavailable=unavailable,
         )
+
+    def route(
+        self,
+        source_track_id: int,
+        target_track_id: int,
+        intent: str = "keep",
+        max_intermediate: int = 2,
+        limit: int = 3,
+        exclude_track_ids: Optional[list[int]] = None,
+        genre_scope: str = "any",
+        filters: Optional[dict[str, Any]] = None,
+        transition: bool = False,
+    ) -> dict[str, Any]:
+        """Find short, playable paths from one exact track to another.
+
+        The target is always the requested track; it is never replaced with a
+        merely similar result. Intermediate tracks use the same mixability and
+        intent scoring as ordinary Assist recommendations. A small beam search
+        keeps the route useful on a large library without pretending to solve a
+        complete set-planning problem.
+        """
+        intent = scoring.resolve_intent(intent)
+        transition = bool(transition) and intent != "wordplay"
+        if genre_scope not in {"any", "same_genre", "same_subgenre"}:
+            raise ValueError(f"unknown genre scope: {genre_scope}")
+        if intent == "wordplay":
+            return {
+                "source": None,
+                "target": None,
+                "intent": intent,
+                "intent_label": scoring.PRESETS[intent].label,
+                "transition": False,
+                "max_intermediate": max_intermediate,
+                "routes": [],
+                "notes": ["ワードプレイは承認済みの直接ペアを使う機能のため、ルート提案には対応していません"],
+                "caveats": [],
+            }
+        max_intermediate = max(0, min(int(max_intermediate), MAX_ROUTE_INTERMEDIATE))
+        limit = max(1, min(int(limit), 5))
+        conditions = _conditions(filters)
+        source = self.tracks.get_by_id(source_track_id)
+        target = self.tracks.get_by_id(target_track_id)
+        if source is None:
+            raise ValueError("Source track not found")
+        if target is None:
+            raise ValueError("Target track not found")
+        if source.id == target.id or self._recording_identity(source.title, source.artist) == \
+                self._recording_identity(target.title, target.artist):
+            return {
+                "source": self._track_payload(source),
+                "target": self._track_payload(target),
+                "intent": intent,
+                "intent_label": scoring.PRESETS[intent].label,
+                "transition": transition,
+                "max_intermediate": max_intermediate,
+                "routes": [],
+                "notes": ["出発曲と目的曲が同じ録音のため、ルートを作れません"],
+                "caveats": list(scoring.TRANSITION_CAVEATS) if transition else [],
+            }
+
+        try:
+            registered = rekordbox_library.registered_paths()
+        except RekordboxLibraryUnavailable as error:
+            return {
+                "source": self._track_payload(source),
+                "target": self._track_payload(target),
+                "intent": intent,
+                "intent_label": scoring.PRESETS[intent].label,
+                "transition": transition,
+                "max_intermediate": max_intermediate,
+                "routes": [],
+                "notes": [f"{error}。登録済みの原本を確認できないため、ルート提案を停止しました"],
+                "caveats": list(scoring.TRANSITION_CAVEATS) if transition else [],
+            }
+
+        response_base = {
+            "source": self._track_payload(source),
+            "target": self._track_payload(target),
+            "intent": intent,
+            "intent_label": scoring.PRESETS[intent].label,
+            "transition": transition,
+            "max_intermediate": max_intermediate,
+            "caveats": list(scoring.TRANSITION_CAVEATS) if transition else [],
+        }
+        if not self._is_available(source, registered):
+            return {**response_base, "routes": [], "notes": ["出発曲が rekordbox に登録されていないか、ファイルが見つかりません"]}
+        if not self._is_available(target, registered):
+            return {**response_base, "routes": [], "notes": ["目的曲が rekordbox に登録されていないか、ファイルが見つかりません"]}
+
+        scope_field = {"same_genre": "genre", "same_subgenre": "subgenre"}.get(genre_scope)
+        source_scope_value = (
+            rekordbox_library.normalize_text(getattr(source, scope_field)) if scope_field else None
+        )
+        if scope_field and not source_scope_value:
+            label = "ジャンル" if scope_field == "genre" else "サブジャンル"
+            return {**response_base, "routes": [], "notes": [f"元曲の{label}が未登録のため、ルートを作れません"]}
+        if scope_field and rekordbox_library.normalize_text(getattr(target, scope_field)) != source_scope_value:
+            label = "ジャンル" if scope_field == "genre" else "サブジャンル"
+            return {**response_base, "routes": [], "notes": [f"目的曲が元曲と同じ{label}ではないため、現在の範囲では到達できません"]}
+
+        excluded_ids = self._excluded_with_duplicates(source.id, exclude_track_ids or [])
+        # An explicitly selected destination is allowed even if it was in the
+        # loaded-history list; it remains the fixed endpoint of the route.
+        excluded_ids.discard(target.id)
+        conditions_rows = [
+            row for row in self._metadata()
+            if row.id not in excluded_ids
+            and row.id != target.id
+            and (scope_field is None or
+                 rekordbox_library.normalize_text(getattr(row, scope_field)) == source_scope_value)
+            and conditions.matches(row)
+        ]
+        eligible_ids = [row.id for row in conditions_rows]
+        if not conditions.is_empty() and not eligible_ids:
+            return {**response_base, "routes": [], "notes": ["中継曲に指定した条件に合う曲がライブラリにありません"]}
+
+        source_payload = self._route_source_payload(source)
+        target_info = self.recommendations.fetch_candidates_pool(
+            {}, limit=1, candidate_ids=[target.id], exclude_ids=[]
+        )
+        if not target_info:
+            return {**response_base, "routes": [], "notes": ["目的曲の解析情報を読み込めませんでした"]}
+        target_info = target_info[0]
+        target_anchor = self._track_anchor(target, "track", f"『{target.title}』（{target.artist}）")
+
+        states = [{
+            "track": source,
+            "payload": source_payload,
+            "ids": {source.id},
+            "steps": [],
+            "scores": [],
+            "priority": 1.0,
+        }]
+        routes: list[dict[str, Any]] = []
+        notes: list[str] = []
+        if not eligible_ids and max_intermediate:
+            notes.append("条件に合う中継曲がありません。出発曲から目的曲への直接接続だけを確認しました")
+
+        for depth in range(max_intermediate + 1):
+            next_states: list[dict[str, Any]] = []
+            for state in states:
+                direct = self._route_edge(
+                    state["track"], state["payload"], target_info,
+                    intent, transition,
+                )
+                if direct is not None:
+                    routes.append(self._route_payload(
+                        source, target, state["steps"], direct, state["scores"],
+                    ))
+                if depth >= max_intermediate:
+                    continue
+                blocked = excluded_ids | state["ids"] | {target.id}
+                pool = self._candidate_pool(
+                    state["track"], intent, sorted(blocked), None, {}, eligible_ids,
+                    conditions, transition,
+                    source_bpm=state["payload"].get("bpm"),
+                )
+                context = self._scoring_context(
+                    state["track"], state["payload"], {}, transition, None,
+                )
+                entries, _, _ = self._score_pool(pool, intent, registered, context)
+                by_id = {item["id"]: item for item in pool}
+                for entry in entries:
+                    track_id = int(entry["payload"]["id"])
+                    if track_id in blocked:
+                        continue
+                    candidate_info = by_id.get(track_id)
+                    if candidate_info is None:
+                        continue
+                    like = self._likeness(target_anchor, entry["payload"], candidate_info)
+                    edge_score = entry["result"].score
+                    scores = [*state["scores"], edge_score]
+                    average = sum(scores) / len(scores)
+                    destination_likeness = like.score if like else 0.0
+                    next_states.append({
+                        "track": candidate_info["track"],
+                        "payload": self._route_source_payload(candidate_info["track"]),
+                        "ids": state["ids"] | {track_id},
+                        "steps": [*state["steps"], {
+                            "from_track_id": state["payload"]["id"],
+                            "to_track_id": track_id,
+                            "result": entry["result"],
+                            "payload": entry["payload"],
+                        }],
+                        "scores": scores,
+                        "priority": 0.65 * average + 0.35 * destination_likeness,
+                    })
+            if not next_states:
+                break
+            next_states.sort(key=lambda state: (-state["priority"], tuple(sorted(state["ids"]))))
+            states = next_states[:MAX_ROUTE_BEAM]
+
+        unique: dict[tuple[int, ...], dict[str, Any]] = {}
+        for route in routes:
+            key = tuple(track["id"] for track in route["tracks"])
+            unique.setdefault(key, route)
+        ordered = sorted(unique.values(), key=lambda route: (-route["score"], len(route["steps"]),
+                                                               tuple(track["id"] for track in route["tracks"])))
+        if not ordered:
+            notes.append("指定した条件では、目的曲までのつなぎやすいルートが見つかりません")
+            if genre_scope == "any":
+                notes.append("BPM・キー・系統の条件を緩めるか、中継曲の条件を減らして試してください")
+        elif genre_scope == "any" and any(
+            scoring.genre_continuity_score(route["tracks"][0], route["tracks"][1]) is not None
+            and scoring.genre_continuity_score(route["tracks"][0], route["tracks"][1]) < 0.75
+            for route in ordered
+            if len(route["tracks"]) > 1
+        ):
+            notes.append("一部のルートでジャンルが変わります。各ステップの連続性を確認してください")
+        return {**response_base, "routes": ordered[:limit], "notes": notes}
+
+    def _route_source_payload(self, track: Track) -> dict[str, Any]:
+        payload = self._track_payload(track)
+        declared = scoring.parse_transition(track.title)
+        if declared is not None:
+            payload["bpm"] = declared[1]
+        return payload
+
+    def _route_edge(self, source_track, source_payload, candidate, intent, transition):
+        payload = self._track_payload(candidate["track"], bool(candidate.get("has_lyrics")))
+        fit = scoring.transition_fit(source_payload.get("bpm"), payload) if transition else None
+        if transition:
+            if fit is None or not scoring.passes_transition_filter(intent, source_payload, payload):
+                return None
+        elif not scoring.passes_intent_filter(intent, source_payload, payload):
+            return None
+        embedding = self.session.get(TrackEmbedding, source_track.id)
+        result = self._evaluate(
+            source_payload, embedding, self._vector(embedding), payload,
+            candidate, intent, {}, fit,
+        )
+        return {
+            "from_track_id": source_track.id,
+            "to_track_id": payload["id"],
+            "result": result,
+            "payload": payload,
+        }
+
+    def _route_payload(self, source, target, previous_steps, direct, previous_scores):
+        steps = [*previous_steps, direct]
+        scores = [*previous_scores, direct["result"].score]
+        tracks = [self._track_payload(source)]
+        tracks.extend(step["payload"] for step in steps[:-1])
+        tracks.append(self._track_payload(target))
+        quality = sum(scores) / len(scores) - 0.03 * max(0, len(steps) - 1)
+        return {
+            "score": round(max(0.0, quality), 4),
+            "tracks": tracks,
+            "steps": [
+                {
+                    "from_track_id": step["from_track_id"],
+                    "to_track_id": step["to_track_id"],
+                    "score": round(step["result"].score, 4),
+                    "summary": step["result"].summary,
+                    "reasons": [reason.to_dict() for reason in step["result"].reasons],
+                }
+                for step in steps
+            ],
+        }
 
     def _eligible_ids(self, scope_field, scope_value, conditions, excluded_ids) -> list[int]:
         return [row.id for row in self._metadata() if row.id not in excluded_ids

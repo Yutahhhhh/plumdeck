@@ -167,6 +167,55 @@ def assist_search(
 
 
 @mcp.tool()
+def assist_route(
+    target_track_id: int,
+    source_track_id: Optional[int] = None,
+    intent: Optional[str] = None,
+    transition: Optional[bool] = None,
+    max_intermediate: int = 2,
+    limit: int = 3,
+    genre_scope: Optional[str] = None,
+    filters: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Find short playable routes from the current deck track to an exact song.
+
+    The target is fixed; the returned tracks are only intermediate bridges and
+    the requested destination. Read-only. Use assist_get_state first when the
+    source deck is not supplied explicitly.
+    """
+    state = _window_state()
+    source = source_track_id if source_track_id is not None else state.get("source_track_id")
+    if not source:
+        raise ValueError("Assist has no resolved source deck track")
+    chosen_filters = filters if filters is not None else state.get("filters") or {}
+    chosen_intent = intent or state.get("intent") or "keep"
+    chosen_scope = genre_scope or state.get("genre_scope") or "any"
+    if chosen_scope not in _GENRE_SCOPES:
+        raise ValueError(f"genre_scope must be one of {', '.join(_GENRE_SCOPES)}")
+    with db_session() as session:
+        result = AssistAppService(session).route(
+            source_track_id=int(source),
+            target_track_id=int(target_track_id),
+            intent=chosen_intent,
+            transition=transition if transition is not None else bool(state.get("transition")),
+            max_intermediate=max(0, min(int(max_intermediate), 4)),
+            limit=max(1, min(int(limit), 5)),
+            exclude_track_ids=list(state.get("exclude_track_ids") or []),
+            genre_scope=chosen_scope,
+            filters=chosen_filters,
+        )
+    result["routes"] = [
+        {
+            **route,
+            "tracks": [_brief(track) for track in route["tracks"]],
+        }
+        for route in result["routes"]
+    ]
+    result["mode"] = "route"
+    return result
+
+
+@mcp.tool()
 def assist_apply_settings(
     intent: Optional[str] = None,
     transition: Optional[bool] = None,

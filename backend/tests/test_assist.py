@@ -421,7 +421,20 @@ def test_half_time_transitions_are_recognised_as_compatible():
     )
     tempo = next(r for r in result.reasons if r.kind == "tempo")
     assert "2倍換算" in tempo.text
-    assert result.components["bpm"] > 0.9
+    assert result.components["bpm"] == pytest.approx(scoring.HALF_DOUBLE_TEMPO_FACTOR)
+    assert scoring.tempo_score(174, 174) > result.components["bpm"]
+
+
+def test_cross_genre_continuity_is_soft_but_visible():
+    source = {"bpm": 120, "key": "8A", "energy": 0.5, "genre": "House", "subgenre": "Deep House"}
+    same = {"bpm": 121, "key": "8A", "energy": 0.5, "genre": "House", "subgenre": "Deep House"}
+    cross = {"bpm": 121, "key": "8A", "energy": 0.5, "genre": "Latin", "subgenre": "House"}
+    same_result = scoring.evaluate(source, same, "keep")
+    cross_result = scoring.evaluate(source, cross, "keep")
+    assert cross_result.components["continuity"] == 0.0
+    assert cross_result.score < same_result.score
+    continuity = next(reason for reason in cross_result.reasons if reason.kind == "continuity")
+    assert continuity.tone == "caution"
 
 
 def test_similarity_is_never_described_as_a_groove_match():

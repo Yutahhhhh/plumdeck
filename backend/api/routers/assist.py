@@ -9,6 +9,7 @@ from sqlmodel import Session
 
 from api.schemas.assist import (
     AssistRecommendRequest,
+    AssistRouteRequest,
     AssistSearchRequest,
     AssistWindowStateIn,
     DeckResolveRequest,
@@ -46,6 +47,27 @@ def recommendations(payload: AssistRecommendRequest, session: Session = Depends(
             limit=payload.limit,
             exclude_track_ids=payload.exclude_track_ids,
             genres=payload.genres,
+            filters=payload.filters.model_dump(),
+        )
+    except AssistInputError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@router.post("/routes")
+def routes(payload: AssistRouteRequest, session: Session = Depends(get_session)):
+    """Find short, playable routes to an exact destination track."""
+    try:
+        return AssistAppService(session).route(
+            source_track_id=payload.source_track_id,
+            target_track_id=payload.target_track_id,
+            intent=payload.intent,
+            transition=payload.transition,
+            max_intermediate=payload.max_intermediate,
+            limit=payload.limit,
+            exclude_track_ids=payload.exclude_track_ids,
+            genre_scope=payload.genre_scope,
             filters=payload.filters.model_dump(),
         )
     except AssistInputError as error:

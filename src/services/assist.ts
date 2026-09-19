@@ -133,6 +133,32 @@ export interface AssistRecommendations {
   unavailable_originals: number;
 }
 
+export interface AssistRouteStep {
+  from_track_id: number;
+  to_track_id: number;
+  score: number;
+  summary: string;
+  reasons: AssistReason[];
+}
+
+export interface AssistRoute {
+  score: number;
+  tracks: Track[];
+  steps: AssistRouteStep[];
+}
+
+export interface AssistRoutes {
+  source: Track | null;
+  target: Track | null;
+  intent: AssistIntent;
+  intent_label: string;
+  transition: boolean;
+  max_intermediate: number;
+  routes: AssistRoute[];
+  notes: string[];
+  caveats: string[];
+}
+
 export interface AssistSearchResult {
   filters: string[];
   candidates: AssistCandidate[];
@@ -145,6 +171,7 @@ export interface AssistSearchResult {
 export interface AssistWindowState {
   deck_slot: number | null;
   source_track_id: number | null;
+  destination_track_id: number | null;
   intent: AssistIntent;
   transition: boolean;
   genre_scope: GenreScope;
@@ -265,6 +292,29 @@ export const assistService = {
       transition: params.transition ?? false,
       genre_scope: params.genreScope ?? "any",
       limit: params.limit ?? 12,
+      exclude_track_ids: params.excludeTrackIds ?? [],
+      filters: params.filters ?? EMPTY_FILTERS,
+    }, 60_000),
+
+  routes: (params: {
+    sourceTrackId: number;
+    targetTrackId: number;
+    intent: AssistIntent;
+    transition?: boolean;
+    maxIntermediate?: number;
+    limit?: number;
+    genreScope?: GenreScope;
+    excludeTrackIds?: number[];
+    filters?: AssistFilters;
+  }) =>
+    apiClient.post<AssistRoutes>("/assist/routes", {
+      source_track_id: params.sourceTrackId,
+      target_track_id: params.targetTrackId,
+      intent: params.intent,
+      transition: params.transition ?? false,
+      max_intermediate: params.maxIntermediate ?? 2,
+      limit: params.limit ?? 3,
+      genre_scope: params.genreScope ?? "any",
       exclude_track_ids: params.excludeTrackIds ?? [],
       filters: params.filters ?? EMPTY_FILTERS,
     }, 60_000),

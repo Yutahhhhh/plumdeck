@@ -66,6 +66,20 @@ class AssistRecommendRequest(BaseModel):
     filters: AssistFiltersIn = Field(default_factory=AssistFiltersIn)
 
 
+class AssistRouteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_track_id: int
+    target_track_id: int
+    intent: Intent = "keep"
+    transition: bool = False
+    max_intermediate: int = Field(default=2, ge=0, le=4)
+    limit: int = Field(default=3, ge=1, le=5)
+    exclude_track_ids: List[int] = Field(default_factory=list, max_length=10000)
+    genre_scope: Literal["any", "same_genre", "same_subgenre"] = "any"
+    filters: AssistFiltersIn = Field(default_factory=AssistFiltersIn)
+
+
 class AssistSearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -81,6 +95,7 @@ class AssistWindowStateIn(BaseModel):
 
     deck_slot: Optional[int] = Field(default=None, ge=1, le=4)
     source_track_id: Optional[int] = None
+    destination_track_id: Optional[int] = None
     intent: Intent = "keep"
     transition: bool = False
     genre_scope: Literal["any", "same_genre", "same_subgenre"] = "any"
@@ -93,6 +108,7 @@ class AssistWindowStateIn(BaseModel):
 __all__ = [
     "AssistFiltersIn",
     "AssistRecommendRequest",
+    "AssistRouteRequest",
     "AssistSearchRequest",
     "AssistWindowStateIn",
     "DeckObservationIn",

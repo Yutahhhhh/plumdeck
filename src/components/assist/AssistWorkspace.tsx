@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { Bot, Pin, PinOff, RefreshCw, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { assistService, EMPTY_FILTERS, hasFilters, type AssistAgentSettings, type AssistFilters, type AssistIntent, type AssistRecommendations, type AssistSearchResult, type GenreScope } from "@/services/assist";
+import { assistService, EMPTY_FILTERS, hasFilters, type AssistAgentSettings, type AssistFilters, type AssistIntent, type AssistRecommendations, type AssistSearchResult, type AssistRoutes, type GenreScope } from "@/services/assist";
+import type { Track } from "@/types";
 import { getErrorDetail } from "@/services/api-client";
 import { useCompactWindow } from "./useCompactWindow";
 import { useRekordboxDecks } from "./useRekordboxDecks";
 import { StatusBanner } from "./StatusBanner";
 import { startFileDrag } from "./native-drag";
 import { CandidateCard } from "./CandidateCard";
+import { RouteCard } from "./RouteCard";
 import { FilterPanel } from "./FilterPanel";
 import { useAgentBridge } from "./useAgentBridge";
 
@@ -41,6 +43,14 @@ export function AssistWorkspace() {
   const [genreScope, setGenreScope] = useState<GenreScope>("any");
   const [limit, setLimit] = useState(8);
   const [filters, setFilters] = useState<AssistFilters>(EMPTY_FILTERS);
+  const [destination, setDestination] = useState<Track | null>(null);
+  const [destinationQuery, setDestinationQuery] = useState("");
+  const [destinationSearch, setDestinationSearch] = useState<AssistSearchResult | null>(null);
+  const [destinationSearching, setDestinationSearching] = useState(false);
+  const [route, setRoute] = useState<AssistRoutes | null>(null);
+  const [routeError, setRouteError] = useState<string | null>(null);
+  const [routeBusy, setRouteBusy] = useState(false);
+  const [routeRevision, setRouteRevision] = useState(0);
   const history = useLoadedHistory(decks.decks, dragging, freeze);
   const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -48,6 +58,7 @@ export function AssistWorkspace() {
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
   const generation = useRef(0);
+  const routeGeneration = useRef(0);
   const selected = decks.decks.find(deck => deck.slot === slot);
   const sourceId = selected?.status === "resolved" ? selected.track?.id : undefined;
   const excluded = history.excludedIds.join(",");
@@ -55,6 +66,11 @@ export function AssistWorkspace() {
   const filtered = hasFilters(filters);
   const filterKey = JSON.stringify(filters);
   const requestKey = JSON.stringify([sourceId, intent, transition, genreScope, limit, filterKey, excluded, revision]);
+  const routeKey = JSON.stringify([sourceId, destination?.id, intent, transition, genreScope, filterKey, excluded, routeRevision]);
+
+  useEffect(() => {
+    if (destination?.id === sourceId) setDestination(null);
+  }, [destination?.id, sourceId]);
 
   useEffect(() => {
     const current = ++generation.current;
@@ -81,12 +97,46 @@ export function AssistWorkspace() {
     // `filters` itself is tracked through filterKey (and requestKey).
   }, [sourceId, intent, transition, genreScope, limit, filterKey, excluded, revision, dragging, historyFull, requestKey, filtered]);
 
+  useEffect(() => {
+    const current = ++routeGeneration.current;
+    if (freeze.current || !sourceId || !destination || historyFull) {
+      setRoute(null);
+      setRouteError(null);
+      setRouteBusy(false);
+      return;
+    }
+    setRouteBusy(true);
+    setRouteError(null);
+    void assistService.routes({
+      sourceTrackId: sourceId,
+      targetTrackId: destination.id,
+      intent,
+      transition,
+      maxIntermediate: 2,
+      limit: 3,
+      genreScope,
+      excludeTrackIds: history.excludedIds,
+      filters,
+    }).then(value => {
+      if (routeGeneration.current === current && !freeze.current) setRoute(value);
+    }).catch(failure => {
+      if (routeGeneration.current === current && !freeze.current) {
+        setRoute(null);
+        setRouteError(getErrorDetail(failure));
+      }
+    }).finally(() => {
+      if (routeGeneration.current === current && !freeze.current) setRouteBusy(false);
+    });
+    return () => { routeGeneration.current += 1; };
+  }, [sourceId, destination?.id, intent, transition, genreScope, filterKey, excluded, routeRevision, dragging, historyFull, routeKey]);
+
   const refresh = () => {
     if (freeze.current) return;
     generation.current += 1;
     setResult(null);
     decks.refresh();
     setRevision(value => value + 1);
+    setRouteRevision(value => value + 1);
   };
   const drag = async (filepath: string, label: string) => {
     if (freeze.current) return;
@@ -113,6 +163,40 @@ export function AssistWorkspace() {
   const candidates = visible?.value.candidates ?? [];
   const presetLabel = presets.find(item => item.value === intent)?.label ?? "";
 
+  const otherDeckTargets = decks.decks
+    .filter(deck => deck.slot !== slot && deck.status === "resolved" && deck.track)
+    .map(deck => ({ slot: deck.slot, track: deck.track as Track }));
+
+  const searchDestination = async () => {
+    const query = destinationQuery.trim();
+    if (!query || destinationSearching || dragging) return;
+    setDestinationSearching(true);
+    try {
+      setDestinationSearch(await assistService.search({
+        filters: { ...EMPTY_FILTERS, query },
+        limit: 8,
+      }));
+    } catch (failure) {
+      setDestinationSearch({ filters: [], candidates: [], notes: [getErrorDetail(failure)], unavailable_originals: 0, total_matches: 0 });
+    } finally {
+      setDestinationSearching(false);
+    }
+  };
+
+  const chooseDestination = (track: Track) => {
+    setDestination(track);
+    setDestinationSearch(null);
+    setRouteRevision(value => value + 1);
+  };
+
+  const clearDestination = () => {
+    setDestination(null);
+    setDestinationSearch(null);
+    setRoute(null);
+    setRouteError(null);
+    setRouteRevision(value => value + 1);
+  };
+
   const presetOf = (value: AssistIntent) => presets.find(item => item.value === value)?.label ?? value;
   const applyAgentSettings = (settings: AssistAgentSettings) => {
     if (freeze.current) return false;
@@ -126,6 +210,7 @@ export function AssistWorkspace() {
   const agent = useAgentBridge({
     deck_slot: slot,
     source_track_id: sourceId ?? null,
+    destination_track_id: destination?.id ?? null,
     intent,
     transition,
     genre_scope: genreScope,
@@ -172,6 +257,49 @@ export function AssistWorkspace() {
           {!sourceId && sourceTitle && !selected && <p className="mt-2 text-[11px] text-slate-500">ライブラリの曲と照合中…</p>}
         </section>
 
+        <section aria-label="目的地" className="shrink-0 rounded-xl border border-sky-300/20 bg-sky-300/[0.035] p-2.5">
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <span className="text-[10px] text-sky-200/80">目的地（任意）</span>
+            {destination && <button type="button" disabled={dragging} onClick={clearDestination} className="text-[10px] text-slate-500 underline underline-offset-2 hover:text-slate-300 disabled:opacity-40">解除</button>}
+          </div>
+          {destination ? (
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <p className="truncate text-xs font-medium">{destination.title}</p>
+                <p className="truncate text-[10px] text-slate-400">{destination.artist} · {destination.bpm || "—"} BPM · {destination.genre || "ジャンル未登録"}</p>
+              </div>
+              <span className="shrink-0 rounded bg-sky-300/10 px-1.5 py-0.5 text-[9px] text-sky-200">GOAL</span>
+            </div>
+          ) : (
+            <p className="text-[10px] text-slate-500">もう一方のデッキ、またはライブラリ検索から指定できます</p>
+          )}
+          {otherDeckTargets.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {otherDeckTargets.map(item => (
+                <button type="button" key={item.slot} disabled={dragging} onClick={() => chooseDestination(item.track)} className="max-w-full truncate rounded border border-white/10 bg-white/5 px-2 py-1 text-[10px] text-slate-300 hover:border-sky-300/30 hover:bg-sky-300/10 disabled:opacity-40">
+                  Deck {item.slot}: {item.track.title}
+                </button>
+              ))}
+            </div>
+          )}
+          <form className="mt-2 flex gap-1.5" onSubmit={event => { event.preventDefault(); void searchDestination(); }}>
+            <input aria-label="目的曲を検索" value={destinationQuery} onChange={event => setDestinationQuery(event.target.value)} placeholder="曲名・アーティストで目的曲を検索" disabled={dragging} className="min-w-0 flex-1 rounded border border-slate-700 bg-slate-950/70 px-2 py-1.5 text-[10px] text-slate-200 outline-none placeholder:text-slate-600 focus:border-sky-300/50 disabled:opacity-40" />
+            <button type="submit" disabled={dragging || destinationSearching || !destinationQuery.trim()} className="shrink-0 rounded border border-sky-300/30 px-2 py-1 text-[10px] text-sky-200 hover:bg-sky-300/10 disabled:opacity-40">{destinationSearching ? "検索中…" : "探す"}</button>
+          </form>
+          {destinationSearch && (
+            <div className="mt-2 space-y-1">
+              {destinationSearch.candidates.map(track => (
+                <button type="button" key={track.id} disabled={dragging} onClick={() => chooseDestination(track)} className="block w-full rounded border border-white/5 bg-white/[0.025] px-2 py-1.5 text-left hover:border-sky-300/30 disabled:opacity-40">
+                  <span className="block truncate text-[10px] text-slate-200">{track.title}</span>
+                  <span className="block truncate text-[9px] text-slate-500">{track.artist} · {track.bpm || "—"} BPM · {track.genre || "ジャンル未登録"}</span>
+                </button>
+              ))}
+              {destinationSearch.notes.map((note, index) => <p key={index} className="text-[9px] text-slate-500">{note}</p>)}
+              {!destinationSearch.candidates.length && !destinationSearch.notes.length && <p className="text-[10px] text-slate-500">目的曲が見つかりません</p>}
+            </div>
+          )}
+        </section>
+
         {agent.list && (
           <section aria-label="エージェントの提案" className="space-y-2 rounded-xl border border-sky-300/25 bg-sky-300/[0.04] p-2.5">
             <div className="flex items-start justify-between gap-2">
@@ -196,12 +324,29 @@ export function AssistWorkspace() {
               トランジション（テンポを移る）
             </label>
             <div className="flex items-center gap-1.5">
-              <select aria-label="ジャンルの範囲" value={genreScope} onChange={event => setGenreScope(event.target.value as GenreScope)} className="rounded border border-slate-700 bg-slate-900 px-1.5 py-1 text-[10px] text-slate-300"><option value="any">ジャンル指定なし</option><option value="same_genre">同一ジャンル</option><option value="same_subgenre">同一サブジャンル</option></select>
+              <select aria-label="ジャンルの範囲" value={genreScope} onChange={event => setGenreScope(event.target.value as GenreScope)} className="rounded border border-slate-700 bg-slate-900 px-1.5 py-1 text-[10px] text-slate-300"><option value="any">同系統を優先</option><option value="same_genre">同一ジャンル</option><option value="same_subgenre">同一サブジャンル</option></select>
               <select aria-label="おすすめの件数" value={limit} onChange={event => setLimit(Number(event.target.value))} className="rounded border border-slate-700 bg-slate-900 px-1.5 py-1 text-[10px] text-slate-300">{limits.map(value => <option key={value} value={value}>{value}件</option>)}</select>
             </div>
           </div>
         </fieldset>
         <FilterPanel value={filters} onChange={setFilters} disabled={dragging} />
+        {destination && (
+          <section aria-label="目的地までのルート" aria-busy={routeBusy} className="space-y-2 rounded-xl border border-sky-300/25 bg-sky-300/[0.04] p-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <p className="text-[11px] font-semibold text-sky-100">目的地までのルート</p>
+                <p className="text-[9px] text-sky-200/60">{sourceTitle || "出発曲"} → {destination.title} · {presetLabel}方針</p>
+              </div>
+              {routeBusy && <RefreshCw className="size-3 animate-spin text-sky-200/70" />}
+            </div>
+            {routeError && <p role="alert" className="rounded bg-rose-950/40 p-2 text-[10px] text-rose-200">ルートを取得できませんでした。{routeError}</p>}
+            {route?.caveats.map((caveat, index) => <p key={index} className="text-[10px] text-amber-200/80">・{caveat}</p>)}
+            {route?.notes.map((note, index) => <p key={index} className="text-[10px] leading-relaxed text-slate-400">{note}</p>)}
+            {routeBusy && !route && <p className="py-3 text-center text-[10px] text-slate-500">目的地までのつなぎ方を探しています…</p>}
+            {route?.routes.map((item, index) => <RouteCard key={`${item.tracks.map(track => track.id).join("-")}-${index}`} route={item} index={index} dragging={dragging} freeze={freeze} onDrag={(filepath, label) => void drag(filepath, label)} />)}
+            {route && !route.routes.length && !routeBusy && <p className="py-3 text-center text-[10px] text-slate-400">この条件では目的地までのルートが見つかりません。</p>}
+          </section>
+        )}
         <div className="flex items-center justify-between text-[10px]"><span className="text-slate-500">ロード済み {history.excludedIds.length}曲を除外</span><button type="button" disabled={dragging} onClick={() => { if (freeze.current) return; generation.current += 1; setResult(null); history.reset(); setRevision(value => value + 1); }} className="text-slate-400 underline underline-offset-2 hover:text-slate-200 disabled:opacity-40">履歴をリセット</button></div>
         {history.message && <p role="status" className="text-[10px] text-slate-400">{history.message}</p>}
         {historyFull && <p role="alert" className="text-[11px] text-amber-200">除外履歴が10,000曲を超えました。おすすめを再開するには履歴をリセットしてください。</p>}
