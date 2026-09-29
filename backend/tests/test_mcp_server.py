@@ -219,7 +219,8 @@ async def test_list_tools_returns_all_tools(mcp_session):
     """list_tools で全ツールが返り、MCP-client reasoning toolsが含まれることを検証する。"""
     result = await mcp_session.list_tools()
     names = [t.name for t in result.tools]
-    assert len(names) == 103
+    assert len(names) == 106
+    assert {"list_rekordbox_playlists", "get_rekordbox_playlist_tracks", "plan_phased_setlist"}.issubset(names)
     assert {"assist_get_state", "assist_recommend", "assist_search", "assist_apply_settings",
             "assist_show_tracks", "assist_clear_tracks"}.issubset(names)
     assert {"list_wordplay_pairs", "propose_wordplay_pairs", "approve_wordplay_pair", "reject_wordplay_pair"}.issubset(names)
@@ -870,3 +871,16 @@ async def test_wordplay_review_generate_save_and_reject_over_mcp(mcp_session, se
     persisted = _result_dict(await mcp_session.call_tool('get_setlist_tracks', {'setlist_id': saved['id']}))
     assert len(persisted['tracks']) == 2
     assert persisted['tracks'][1]['wordplay_json'] is not None
+
+
+@pytest.mark.asyncio
+async def test_plan_phased_setlist_mcp_orders_phases(mcp_session, session: Session):
+    warm = [_add_track(session, f"/phase-warm-{i}.mp3", f"Warm{i}", artist=f"W{i}", bpm=100) for i in range(2)]
+    peak = _add_track(session, "/phase-peak.mp3", "Peak", artist="P", bpm=102)
+    result = _result_dict(await mcp_session.call_tool("plan_phased_setlist", {"phases": [
+        {"label": "warm", "count": 2, "track_ids": [track.id for track in warm]},
+        {"label": "peak", "count": 1, "anchor_track_ids": [peak.id]},
+    ]}))
+    assert [track["phase"] for track in result["tracks"]] == ["warm", "warm", "peak"]
+    assert result["tracks"][-1]["id"] == peak.id
+    assert result["tracks"][-1]["phase_switch"] is True

@@ -12,6 +12,7 @@ from mcp_server.tools import analysis  # noqa: F401
 from mcp_server.tools import wordplay  # noqa: F401
 from mcp_server.tools import junction  # noqa: F401
 from mcp_server.tools import assist  # noqa: F401
+from mcp_server.tools import set_planning  # noqa: F401
 
 MCP_HTTP_PATH = "/mcp"
 

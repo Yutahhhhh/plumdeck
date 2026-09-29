@@ -50,6 +50,10 @@ mcp = MCPServer(
         "assist_show_tracks with your own picks and a short Japanese reason for each. "
         "Requests like 'tracks like X' need your own musical judgement; like_track_id/"
         "like_artist only add numeric sound-alike evidence."
+        " Whole-set planning: to build a set from the DJ's rekordbox folders, read them with "
+        "list_rekordbox_playlists / get_rekordbox_playlist_tracks; to build one from stated "
+        "tastes, interview the DJ first (see the setlist_questionnaire prompt). Either way, you "
+        "decide the phases (展開), counts and energy/BPM ramps, then call plan_phased_setlist."
     ),
 )
 
