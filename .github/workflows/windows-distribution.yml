@@ -51,7 +51,7 @@ jobs:
           python-version: '3.11'
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version-file: .node-version
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
@@ -187,7 +187,7 @@ jobs:
           version: 9.15.9
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version-file: .node-version
           cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
