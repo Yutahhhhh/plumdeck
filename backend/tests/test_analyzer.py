@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import MagicMock
 import numpy as np
+from domain.services.analysis import constants
 from domain.services.analysis.analyzer import AudioAnalyzer
 
 # Mock constants to avoid import errors if constants.py depends on something
@@ -17,6 +18,7 @@ class MockConstants:
     NORM_NOISINESS = (0, 1)
     NORM_FLUX = (0, 1)
     NORM_LOUDNESS_RANGE = (0, 1)
+    COMPONENT_VERSIONS = constants.COMPONENT_VERSIONS
 
 @pytest.fixture
 def mock_analyzer(mocker):

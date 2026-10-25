@@ -13,7 +13,7 @@ from api.schemas.performance_metadata import BeatGrid
 from app.services.grid_candidate_service import GridCandidateService, analysis_candidate
 from domain.models.track import TrackAnalysis
 from domain.services.analysis.rhythm_grid import GridAnalysisError
-from infra import rekordbox_grid
+from infra import rekordbox_grid, rekordbox_timing
 from infra.database import connection as db_connection
 from tests.test_performance_metadata import _track
 
@@ -104,6 +104,9 @@ def source_file(tmp_path, monkeypatch):
     path = tmp_path / "ANLZ0000.DAT"
     path.write_bytes(anlz([(3, 12000, 137), (4, 12000, 637), (1, 10000, 1237)]))
     monkeypatch.setattr(rekordbox_grid, "find_analysis", lambda _: (path, "external-123"))
+    # The catalog track has no audio file to read MP3 headers from; the decoder
+    # timing offset is covered by workflow_integrity/test_rekordbox_timing.py.
+    monkeypatch.setattr(rekordbox_timing, "timing_offset_ms", lambda _: 0.0)
     return path
 
 

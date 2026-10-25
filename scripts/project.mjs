@@ -80,6 +80,20 @@ async function backendBuild() {
     copyFileSync(join(root, `backend/dist/plumdeck-server${win ? '.exe' : ''}`), destination);
     return destination;
 }
+// These suites exercise real Essentia/mutagen, which the top-level conftest
+// mocks, so they run with their own conftest only, as CI runs them. Extra
+// arguments (for example -q or -x) are passed to every run.
+const isolatedSuites = ['portable_audio', 'portability', 'workflow_integrity'];
+async function backendTest(args) {
+    requireVenv();
+    const env = { ...process.env, PYTHONPATH: join(root, 'backend') };
+    const ignored = isolatedSuites.map((suite) => `--ignore=backend/tests/${suite}`);
+    await run(venv, ['-m', 'pytest', 'backend/tests', ...ignored, ...args], { env });
+    for (const suite of isolatedSuites) {
+        const directory = `backend/tests/${suite}`;
+        await run(venv, ['-m', 'pytest', `--confcutdir=${directory}`, directory, ...args], { env });
+    }
+}
 async function engineBuild() {
     if (win) await run(python, [join(host, 'scripts/build-windows.py')]);
     else if (process.platform === 'darwin') await run('bash', [join(host, 'scripts/build-macos.sh')]);
@@ -123,10 +137,7 @@ try {
             requireVenv();
             await run(venv, [join(root, 'scripts/maintenance.py'), ...process.argv.slice(3)]);
             break;
-        case 'backend-test':
-            requireVenv();
-            await run(venv, ['-m', 'pytest', 'backend/tests', ...process.argv.slice(3)]);
-            break;
+        case 'backend-test': await backendTest(process.argv.slice(3)); break;
         case 'backend-build': await backendBuild(); break;
         case 'junction-test': {
             const executable = join(host, win ? 'build-seam/junction-core-tests.exe' : 'build-junction/junction-core-tests');
