@@ -51,43 +51,43 @@ PRESETS: dict[str, Preset] = {
     "keep": Preset(
         "キープ", "今の流れを保つ", (-6.0, 6.0), 0.0,
         {"energy": "hold", "danceability": "hold", "noisiness": "hold"},
-        {"bpm": 0.25, "key": 0.17, "vector": 0.16, "continuity": 0.22,
-         "energy": 0.08, "danceability": 0.06, "noisiness": 0.06},
+        {"bpm": 0.24, "key": 0.06, "vector": 0.22, "continuity": 0.22, "era_proximity": 0.10,
+         "energy": 0.06, "danceability": 0.05, "noisiness": 0.05},
     ),
     "hype": Preset(
         "盛り上げる", "熱量を上げる", (-2.0, 8.0), 3.0,
         {"energy": "up", "noisiness": "not_down"},
-        {"bpm": 0.20, "key": 0.19, "vector": 0.06, "continuity": 0.04,
-         "energy": 0.37, "noisiness": 0.14},
+        {"bpm": 0.19, "key": 0.18, "vector": 0.06, "continuity": 0.04, "era_proximity": 0.05,
+         "energy": 0.35, "noisiness": 0.13},
     ),
     "dance": Preset(
         "踊らせる", "体が動くグルーヴへ", (-6.0, 6.0), 0.0,
         {"danceability": "up", "energy": "not_down"},
-        {"bpm": 0.20, "key": 0.12, "vector": 0.10, "continuity": 0.08,
-         "danceability": 0.36, "energy": 0.14},
+        {"bpm": 0.19, "key": 0.06, "vector": 0.12, "continuity": 0.09, "era_proximity": 0.05,
+         "danceability": 0.35, "energy": 0.14},
     ),
     "calm": Preset(
         "落ち着かせる", "クールダウン", (-8.0, 2.0), -3.0,
         {"energy": "down", "noisiness": "down"},
-        {"bpm": 0.18, "key": 0.17, "vector": 0.07, "continuity": 0.08,
-         "energy": 0.34, "noisiness": 0.16},
+        {"bpm": 0.17, "key": 0.16, "vector": 0.07, "continuity": 0.08, "era_proximity": 0.05,
+         "energy": 0.32, "noisiness": 0.15},
     ),
     "emotional": Preset(
         "エモく", "切なく・深く", (-6.0, 6.0), 0.0,
         {"brightness": "down", "energy": "hold"},
-        {"bpm": 0.18, "key": 0.23, "vector": 0.08, "continuity": 0.08,
-         "brightness": 0.23, "energy": 0.20},
+        {"bpm": 0.17, "key": 0.22, "vector": 0.08, "continuity": 0.08, "era_proximity": 0.05,
+         "brightness": 0.21, "energy": 0.19},
     ),
     "bright": Preset(
         "明るく", "開放感・多幸感へ", (-6.0, 6.0), 0.0,
         {"brightness": "up", "energy": "hold"},
-        {"bpm": 0.18, "key": 0.23, "vector": 0.08, "continuity": 0.08,
-         "brightness": 0.23, "energy": 0.20},
+        {"bpm": 0.17, "key": 0.22, "vector": 0.08, "continuity": 0.08, "era_proximity": 0.05,
+         "brightness": 0.21, "energy": 0.19},
     ),
     "throwback": Preset(
         "時代を戻す", "懐かしい曲で沸かせる", (-6.0, 6.0), 0.0,
         {"energy": "hold", "danceability": "hold"},
-        {"bpm": 0.20, "key": 0.15, "vector": 0.08, "continuity": 0.08,
+        {"bpm": 0.20, "key": 0.07, "vector": 0.12, "continuity": 0.12,
          "era": 0.30, "energy": 0.10, "danceability": 0.09},
     ),
     "wordplay": Preset(
@@ -112,7 +112,7 @@ FEATURE_LABELS: dict[str, str] = {
     "brightness": "明るさ", "noisiness": "ノイズ感",
 }
 COMPONENT_LABELS: dict[str, str] = {
-    "bpm": "テンポ", "key": "キー", "vector": "音色", "era": "年代",
+    "bpm": "テンポ", "key": "キー", "vector": "音色", "era": "年代", "era_proximity": "年代の近さ",
     "continuity": "系統の連続性", "wordplay": "ワードプレイ", **FEATURE_LABELS,
 }
 
@@ -134,6 +134,21 @@ TRANSITION_CAVEATS = [
     "倍テン・ハーフテンは BPM の比率だけで判定しています。実際に半分・倍のノリに聞こえるかは試聴で確認してください",
 ]
 
+# MusiCNN cosine similarity is compressed into the upper range: two unrelated
+# tracks at a mixable tempo typically sit near 0.78, and tracks a DJ actually
+# played back to back near 0.85. Spread that band over 0..1 so timbre can
+# separate candidates instead of lifting all of them alike.
+TIMBRE_FLOOR = 0.55
+TIMBRE_CEILING = 0.95
+
+# How far the DJ's own history (play_history.Evidence.affinity, 0..1) lifts a
+# pick above its preset score in the ranking. Replaying earlier sets against
+# later ones, "keep" improved most around 0.45; the directional presets keep
+# more of their weight on the move they were asked for. Approved wordplay edges
+# are already the DJ's own choice.
+HISTORY_WEIGHTS: dict[str, float] = {"keep": 0.45, "wordplay": 0.0}
+DEFAULT_HISTORY_WEIGHT = 0.25
+
 # An aspect counts as a strength or a weakness only past these values.
 STRENGTH_THRESHOLD = 0.7
 WEAKNESS_THRESHOLD = 0.4
@@ -146,6 +161,10 @@ REFERENCE_BLEND = 0.55
 LIKE_THRESHOLD = 0.7
 ERA_SPAN_YEARS = 10.0
 FEEL_FEATURES = ("energy", "danceability", "noisiness")
+
+
+def history_weight(intent: str) -> float:
+    return HISTORY_WEIGHTS.get(intent, DEFAULT_HISTORY_WEIGHT)
 
 
 def resolve_intent(intent: str) -> str:
@@ -374,6 +393,13 @@ def era_score(source: dict, candidate: dict) -> Optional[float]:
     return min(1.0, 0.6 + 0.4 * (older - THROWBACK_MIN_YEARS) / 5)
 
 
+def timbre_score(similarity: Any) -> Optional[float]:
+    value = _number(similarity)
+    if value is None:
+        return None
+    return max(0.0, min(1.0, (value - TIMBRE_FLOOR) / (TIMBRE_CEILING - TIMBRE_FLOOR)))
+
+
 def wordplay_score(pair: Optional[dict]) -> Optional[float]:
     """Approved wordplay edges only; a tested one outranks an untested one."""
     if not pair:
@@ -458,9 +484,10 @@ def evaluate(
         "bpm": transition.score if transition else
         tempo_score(source.get("bpm"), candidate.get("bpm"), preset.tempo_center),
         "key": key_score(source.get("key"), candidate.get("key"), intent),
-        "vector": _number(vector_similarity),
+        "vector": timbre_score(vector_similarity),
         "continuity": genre_continuity_score(source, candidate),
         "era": era_score(source, candidate),
+        "era_proximity": _era_likeness(source, candidate),
         "wordplay": wordplay_score(pair),
     }
     for feature, direction in preset.directions.items():

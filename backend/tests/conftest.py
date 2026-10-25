@@ -103,3 +103,9 @@ def mock_external_deps(mocker):
     mocker.patch("mutagen.id3.ID3")
     mocker.patch("mutagen.mp4.MP4")
     mocker.patch("mutagen.flac.FLAC")
+
+@pytest.fixture(autouse=True)
+def no_real_rekordbox_history(mocker):
+    """Never let a test read the developer's own rekordbox HISTORY."""
+    from infra import rekordbox_library
+    mocker.patch.object(rekordbox_library, "play_sessions", return_value=())

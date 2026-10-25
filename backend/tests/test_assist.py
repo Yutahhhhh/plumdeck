@@ -597,3 +597,83 @@ def test_assist_history_request_accepts_long_session():
     request = AssistRecommendRequest(source_track_id=1, exclude_track_ids=list(range(10000)),
                                      genre_scope="same_subgenre")
     assert len(request.exclude_track_ids) == 10000
+
+
+# ------------------------------------------------------------- play history
+
+
+def played_sets(*sets, days_ago=20):
+    """rekordbox HISTORY playlists; short sets are padded with unknown files."""
+    from datetime import datetime, timedelta
+    from domain.services import play_history
+
+    started = datetime.now() - timedelta(days=days_ago)
+    padding = [f"/elsewhere/{index}.mp3" for index in range(play_history.MIN_SESSION_TRACKS)]
+    return tuple(
+        rekordbox_library.PlaySession(started, tuple([*paths, *padding][: max(len(paths), len(padding))]))
+        for paths in sets
+    )
+
+
+@pytest.fixture
+def history_library(session, library, tmp_path, mocker):
+    """A second near-tempo pick that loses on features but was played after the source."""
+    path = tmp_path / "played.mp3"
+    path.write_bytes(b"")
+    library["played"] = make_track(session, str(path), title="Played Before", artist="D", bpm=88.5,
+                                   key="10A", energy=0.60, danceability=0.50, noisiness=0.45, genre="R&B")
+    mocker.patch.object(rekordbox_library, "registered_paths", lambda: frozenset(
+        rekordbox_library.normalize_path(track.filepath) for track in library.values()))
+    return library
+
+
+def test_a_track_played_after_the_source_before_is_lifted_and_explained(session, history_library, mocker):
+    lib = history_library
+    service = AssistAppService(session)
+    without = [c["id"] for c in service.recommend(lib["source"].id, "keep")["candidates"]]
+    assert without.index(lib["near"].id) < without.index(lib["played"].id)
+
+    mocker.patch.object(rekordbox_library, "play_sessions", return_value=played_sets(
+        [lib["source"].filepath, lib["played"].filepath],
+        [lib["source"].filepath, lib["played"].filepath],
+    ))
+    result = AssistAppService(session).recommend(lib["source"].id, "keep")
+    top = result["candidates"][0]
+    assert top["id"] == lib["played"].id
+    assert top["history"]["followed"] == 2
+    assert top["summary"].startswith("実績：直後に2回／")
+    assert top["reasons"][0]["kind"] == "history"
+    # The preset's own score is unchanged; history only reorders.
+    near = next(c for c in result["candidates"] if c["id"] == lib["near"].id)
+    assert near["score"] > top["score"]
+
+
+def test_history_neighbours_survive_the_pool_cap(session, history_library, mocker):
+    lib = history_library
+    mocker.patch.object(rekordbox_library, "play_sessions", return_value=played_sets(
+        [lib["played"].filepath, lib["source"].filepath],
+    ))
+    mocker.patch.object(AssistAppService, "_candidate_pool", return_value=[])
+    result = AssistAppService(session).recommend(lib["source"].id, "keep")
+    assert [c["id"] for c in result["candidates"]] == [lib["played"].id]
+    assert result["candidates"][0]["history"]["nearby"] == 1
+
+
+def test_history_never_overrides_exclusions_or_hard_rules(session, history_library, mocker):
+    lib = history_library
+    mocker.patch.object(rekordbox_library, "play_sessions", return_value=played_sets(
+        [lib["source"].filepath, lib["far_tempo"].filepath, lib["played"].filepath],
+    ))
+    result = AssistAppService(session).recommend(
+        lib["source"].id, "keep", exclude_track_ids=[lib["played"].id])
+    ids = [c["id"] for c in result["candidates"]]
+    assert lib["played"].id not in ids
+    # Played next to the source, but 27% faster is still outside "keep".
+    assert lib["far_tempo"].id not in ids
+
+
+def test_an_unreadable_history_only_removes_the_lift(session, history_library, mocker):
+    mocker.patch.object(rekordbox_library, "play_sessions",
+                        side_effect=RekordboxLibraryUnavailable("rekordbox の再生履歴を読み取れませんでした"))
+    result = AssistAppService(session).recommend(history_library["source"].id, "keep")
+    assert result["candidates"] and all(c["history"] is None for c in result["candidates"])

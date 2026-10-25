@@ -1,8 +1,8 @@
 """Read-only lookups against the local rekordbox collection.
 
-Assist mode needs two things from rekordbox: what a given open file actually is,
-and which of plumdeck's tracks rekordbox knows about at all. Both are answered with
-plain SELECTs over the encrypted master.db through the same read-only,
+Assist mode needs three things from rekordbox: what a given open file actually
+is, which of plumdeck's tracks rekordbox knows about at all, and what the DJ has
+actually played (the HISTORY playlists). All are answered with plain SELECTs over the encrypted master.db through the same read-only,
 ``query_only`` connection the beat-grid reader uses. Nothing here writes, and no
 higher-level pyrekordbox API is instantiated, so the running rekordbox is never
 disturbed.
@@ -10,6 +10,7 @@ disturbed.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from functools import lru_cache
 import ntpath
 import sys
@@ -44,6 +45,14 @@ class RekordboxEntry:
     title: str
     artist: str
     bpm: float | None
+
+
+@dataclass(frozen=True)
+class PlaySession:
+    """One rekordbox HISTORY playlist: the files played, in play order."""
+
+    started_at: datetime | None
+    filepaths: tuple[str, ...]
 
 
 def normalize_path(filepath: str) -> str:
@@ -240,16 +249,16 @@ def lookup_by_identities(
     return entries
 
 
-class _CollectionPathCache:
-    """Caches the set of paths rekordbox has in its collection."""
+class _MasterDbCache:
+    """Caches one read of master.db until the file or its WAL changes."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._paths: frozenset[str] | None = None
+        self._value = None
         self._stamp: tuple | None = None
         self._loaded_at = 0.0
 
-    def get(self) -> frozenset[str]:
+    def get(self):
         database = _database()
         status = database.stat()
         try:
@@ -261,14 +270,28 @@ class _CollectionPathCache:
                  status.st_size, wal_stamp)
         with self._lock:
             fresh = time.monotonic() - self._loaded_at < _COLLECTION_TTL_SECONDS
-            if self._paths is not None and self._stamp == stamp and fresh:
-                return self._paths
-        paths = self._load(database)
+            if self._value is not None and self._stamp == stamp and fresh:
+                return self._value
+        value = self._load(database)
         with self._lock:
-            self._paths = paths
+            self._value = value
             self._stamp = stamp
             self._loaded_at = time.monotonic()
-        return paths
+        return value
+
+    @staticmethod
+    def _load(database: Path):
+        raise NotImplementedError
+
+    def invalidate(self) -> None:
+        with self._lock:
+            self._value = None
+            self._stamp = None
+            self._loaded_at = 0.0
+
+
+class _CollectionPathCache(_MasterDbCache):
+    """The set of paths rekordbox has in its collection."""
 
     @staticmethod
     def _load(database: Path) -> frozenset[str]:
@@ -286,14 +309,45 @@ class _CollectionPathCache:
             connection.close()
         return frozenset(str(row[0]) for row in rows if row[0])
 
-    def invalidate(self) -> None:
-        with self._lock:
-            self._paths = None
-            self._stamp = None
-            self._loaded_at = 0.0
+
+class _PlayHistoryCache(_MasterDbCache):
+    """Every HISTORY playlist, oldest first (~50 ms for 46k plays)."""
+
+    @staticmethod
+    def _load(database: Path) -> tuple[PlaySession, ...]:
+        connection = _connect(database)
+        try:
+            rows = connection.execute(
+                "SELECT h.ID, h.DateCreated, c.FolderPath FROM djmdHistory h "
+                "JOIN djmdSongHistory s ON s.HistoryID = h.ID AND s.rb_local_deleted = 0 "
+                "JOIN djmdContent c ON c.ID = s.ContentID "
+                "WHERE h.rb_local_deleted = 0 AND c.FolderPath IS NOT NULL "
+                "ORDER BY h.DateCreated, h.ID, s.TrackNo"
+            ).fetchall()
+        except Exception as error:
+            raise RekordboxLibraryUnavailable(
+                "rekordbox の再生履歴を読み取れませんでした"
+            ) from error
+        finally:
+            connection.close()
+        sessions: dict[str, tuple[datetime | None, list[str]]] = {}
+        for history_id, created, folder_path in rows:
+            started_at, paths = sessions.setdefault(str(history_id), (_parse_time(created), []))
+            paths.append(str(folder_path))
+        return tuple(PlaySession(started_at, tuple(paths)) for started_at, paths in sessions.values())
+
+
+def _parse_time(value) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).strip()[:19])
+    except ValueError:
+        return None
 
 
 _collection_paths = _CollectionPathCache()
+_play_history = _PlayHistoryCache()
 
 
 def registered_paths() -> frozenset[str]:
@@ -301,6 +355,12 @@ def registered_paths() -> frozenset[str]:
     return _collection_paths.get()
 
 
+def play_sessions() -> tuple[PlaySession, ...]:
+    """The DJ's rekordbox HISTORY playlists, oldest first."""
+    return _play_history.get()
+
+
 def reset_cache() -> None:
     """Drops the cached collection. Used by tests and after an import."""
     _collection_paths.invalidate()
+    _play_history.invalidate()

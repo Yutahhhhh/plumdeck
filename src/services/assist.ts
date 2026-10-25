@@ -100,6 +100,17 @@ export const hasFilters = (filters: AssistFilters) =>
   || filters.subgenres.length > 0 || filters.artists.length > 0 || filters.keys.length > 0
   || filters.year_min != null || filters.year_max != null || filters.query.trim() !== "";
 
+export interface AssistHistoryEvidence {
+  /** Sets where this track came right after the source deck's track. */
+  followed: number;
+  /** Times it was played within a few positions of the source. */
+  nearby: number;
+  /** Sets that played it at all. */
+  plays: number;
+  days_since: number | null;
+  affinity: number;
+}
+
 export interface AssistCandidate extends Track {
   /** Preset fit; null for plain search results that have no deck to mix from. */
   score: number | null;
@@ -109,6 +120,8 @@ export interface AssistCandidate extends Track {
   strengths: string[];
   reasons: AssistReason[];
   wordplay: AssistWordplay | null;
+  /** What the DJ's rekordbox HISTORY says about this pick after the source deck. */
+  history?: AssistHistoryEvidence | null;
   /** Set on tracks a chat agent picked: its own reason for the pick. */
   agent_reason?: string | null;
 }

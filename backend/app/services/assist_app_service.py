@@ -18,23 +18,31 @@ hard conditions, the chosen preset (keep, hype, dance...) decides which way the
 floor should move, and the best pick of every other preset is shown alongside.
 Transition mode looks for half/double-time partners and titled tempo-changing
 edits instead of nearby tempos. "Like X" references exist for the chat agent's
-tools only; judging resemblance properly needs the agent's reasoning.
+tools only; judging resemblance properly needs the agent's reasoning. The DJ's
+own rekordbox HISTORY adds tracks they played next to the source before and
+lifts proven picks in the ranking, without changing what a preset measures.
 
 *Search* applies the same filters and availability rule without a source deck.
 """
 from __future__ import annotations
 
+from datetime import datetime
 import json
+import ntpath
 import os
+import sys
+import threading
 from typing import Any, Optional
 
 import numpy as np
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from domain.models.lyrics import Lyrics
 from domain.models.track import Track, TrackEmbedding
 from domain.models.wordplay import WordplayPair
 from domain.services import assist_recommendation as scoring
+from domain.services import play_history
 from domain.services.assist_filters import AssistFilters
 from infra import rekordbox_library
 from infra.rekordbox_library import RekordboxLibraryUnavailable
@@ -56,6 +64,13 @@ MAX_ROUTE_INTERMEDIATE = 4
 MAX_ROUTE_BEAM = 18
 # Picks shown under "another preset" must genuinely suit that preset.
 ALTERNATIVE_MIN_SCORE = 0.6
+# Tracks played next to the source in earlier sets join the pool even when the
+# tempo-ordered cap would have cut them.
+MAX_HISTORY_RELATED = 200
+# The built history is reused until rekordbox's history, the library or the
+# hour (rotation recency) changes.
+_history_lock = threading.Lock()
+_history_cache: dict[str, Any] = {"key": None, "value": None}
 
 
 class AssistInputError(ValueError):
@@ -71,11 +86,20 @@ def _conditions(filters) -> AssistFilters:
         raise AssistInputError(str(error)) from error
 
 
+def _history_path_key(filepath: str) -> str:
+    path = rekordbox_library.normalize_path(filepath)
+    return ntpath.normcase(path) if sys.platform == "win32" else path
+
+
 class AssistAppService:
-    def __init__(self, session: Session):
+    def __init__(self, session: Session, history: Optional[play_history.PlayHistory] = None):
         self.session = session
         self.tracks = TrackRepository(session)
         self.recommendations = RecommendationRepository(session)
+        # An explicit history (tests, offline evaluation) replaces rekordbox's.
+        self._history_value = history
+        self._history_loaded = history is not None
+        self._identity_ids_value: Optional[dict[tuple[str, str], list[int]]] = None
 
     # ------------------------------------------------------------------ decks
 
@@ -334,13 +358,15 @@ class AssistAppService:
         except RekordboxLibraryUnavailable as error:
             return response(notes=[f"{error}。登録済みの原本を確認できないため、提案を停止しました"])
 
-        context = self._scoring_context(source, source_payload, pairs, transition, target)
+        history = self._history() if intent != "wordplay" else None
+        context = self._scoring_context(source, source_payload, pairs, transition, target, history)
         eligible_ids = [row.id for row in eligible]
         pool = self._candidate_pool(source, intent, excluded, genres, pairs, eligible_ids,
                                     conditions, transition, source_bpm=source_bpm)
+        pool = self._with_related(pool, context, eligible_ids)
         entries, unavailable, filtered = self._score_pool(pool, intent, registered, context)
 
-        ranked = self._rank(entries, self._order(target))[: min(limit, MAX_SUGGESTIONS)]
+        ranked = self._rank(entries, self._order(target, intent))[: min(limit, MAX_SUGGESTIONS)]
         if unavailable:
             notes.append(
                 f"rekordbox 未登録、またはファイルが見つからない {unavailable} 曲を除外しました"
@@ -361,6 +387,7 @@ class AssistAppService:
                                            metadata_ids=self._eligible_ids(scope_field, scope_value,
                                                                            conditions, excluded_ids),
                                            source_bpm=source_bpm)
+            general = self._with_related(general, context, eligible_ids)
         return response(
             candidates=[self._entry_payload(entry, pairs) for entry in ranked],
             alternatives=self._alternatives(intent, ranked, general, registered, context, pairs, target),
@@ -633,7 +660,8 @@ class AssistAppService:
                      rekordbox_library.normalize_text(getattr(row, scope_field)) == scope_value)
                 and conditions.matches(row)]
 
-    def _scoring_context(self, source, source_payload, pairs, transition, target) -> dict[str, Any]:
+    def _scoring_context(self, source, source_payload, pairs, transition, target,
+                         history: Optional[play_history.PlayHistory] = None) -> dict[str, Any]:
         embedding = self.session.get(TrackEmbedding, source.id)
         return {
             "source": source_payload,
@@ -642,6 +670,8 @@ class AssistAppService:
             "pairs": pairs,
             "transition": transition,
             "target": target,
+            "history": history,
+            "history_source": self._recording_identity(source.title, source.artist),
         }
 
     def _score_pool(self, pool, intent, registered, context):
@@ -670,14 +700,25 @@ class AssistAppService:
                                     payload, candidate, intent, context["pairs"], fit)
             target = context["target"]
             like = self._likeness(target, payload, candidate) if target else None
-            entries.append({"payload": payload, "result": result, "like": like, "target": target})
+            history = context.get("history")
+            evidence = history.evidence(
+                context["history_source"],
+                self._recording_identity(payload.get("title"), payload.get("artist")),
+            ) if history is not None else None
+            entries.append({"payload": payload, "result": result, "like": like, "target": target,
+                            "history": evidence})
         return entries, unavailable, filtered
 
     @staticmethod
-    def _order(target):
-        if target is None:
-            return lambda entry: entry["result"].score
-        return lambda entry: scoring.blend(entry["result"].score, entry["like"])
+    def _order(target, intent):
+        """Preset fit (blended with likeness for "like X"), lifted by the DJ's history."""
+        weight = scoring.history_weight(intent)
+
+        def key(entry):
+            score = entry["result"].score if target is None else scoring.blend(entry["result"].score, entry["like"])
+            evidence = entry.get("history")
+            return score + weight * evidence.affinity if evidence is not None else score
+        return key
 
     def _rank(self, entries, key) -> list[dict[str, Any]]:
         ordered = sorted(entries, key=lambda entry: (-key(entry), int(entry["payload"]["id"] or 0)))
@@ -706,9 +747,11 @@ class AssistAppService:
             if name == "throwback" and not scoring._positive(context["source"].get("year")):
                 continue
             entries, _, _ = self._score_pool(pool, name, registered, context)
-            for entry in self._rank(entries, self._order(target)):
+            for entry in self._rank(entries, self._order(target, name)):
+                # The order includes likeness and history, so a weak fit can
+                # precede a strong one; skip it rather than stop.
                 if entry["result"].score < ALTERNATIVE_MIN_SCORE:
-                    break
+                    continue
                 payload = entry["payload"]
                 identity = self._recording_identity(payload.get("title"), payload.get("artist"))
                 if payload["id"] in taken or (identity is not None and identity in taken_recordings):
@@ -726,14 +769,23 @@ class AssistAppService:
     def _entry_payload(self, entry, pairs) -> dict[str, Any]:
         payload, result = entry["payload"], entry["result"]
         like = self._describe_like(entry.get("like"), entry.get("target"))
+        evidence = entry.get("history")
+        summary = f"{like['text']}／{result.summary}" if like else result.summary
+        reasons = [reason.to_dict() for reason in result.reasons]
+        if evidence is not None:
+            if evidence.related:
+                summary = f"{play_history.headline(evidence)}／{summary}"
+            reasons.insert(0, {"kind": "history", "tone": "good" if evidence.related else "neutral",
+                               "text": play_history.describe(evidence)})
         return {
             **payload,
             "score": round(result.score, 4),
             "components": {k: round(v, 4) for k, v in result.components.items()},
             "like": like,
-            "summary": f"{like['text']}／{result.summary}" if like else result.summary,
+            "history": evidence.to_dict() if evidence is not None else None,
+            "summary": summary,
             "strengths": result.strengths,
-            "reasons": [reason.to_dict() for reason in result.reasons],
+            "reasons": reasons,
             "wordplay": pairs.get(payload["id"]),
         }
 
@@ -1037,6 +1089,8 @@ class AssistAppService:
         source_embedding = self.session.get(TrackEmbedding, source.id) if source else None
         source_vector = self._vector(source_embedding)
         pairs = self._approved_pairs(source.id) if source else {}
+        history = self._history() if source else None
+        source_identity = self._recording_identity(source.title, source.artist) if source else None
         pool = {
             item["id"]: item
             for item in self.recommendations.fetch_candidates_pool({}, limit=len(wanted), candidate_ids=wanted)
@@ -1065,7 +1119,10 @@ class AssistAppService:
             result = self._evaluate(
                 source_payload, source_embedding, source_vector, payload, candidate, intent, pairs,
             )
-            offered.append(self._entry_payload({"payload": payload, "result": result}, pairs))
+            evidence = history.evidence(
+                source_identity, self._recording_identity(payload.get("title"), payload.get("artist")),
+            ) if history is not None else None
+            offered.append(self._entry_payload({"payload": payload, "result": result, "history": evidence}, pairs))
         return {"tracks": offered, "rejected": rejected}
 
     def _candidate_pool(
@@ -1151,6 +1208,75 @@ class AssistAppService:
                 {}, limit=len(missing), exclude_ids=excluded, candidate_ids=missing
             )
         return pool
+
+    def _with_related(self, pool, context, eligible_ids) -> list[dict[str, Any]]:
+        """The pool plus eligible tracks the DJ played next to the source before."""
+        history = context.get("history")
+        if history is None or context.get("history_source") is None:
+            return pool
+        present = {item["id"] for item in pool}
+        eligible = set(eligible_ids)
+        by_identity = self._identity_ids()
+        missing: list[int] = []
+        for identity in history.related(context["history_source"]):
+            missing.extend(track_id for track_id in by_identity.get(identity, ())
+                           if track_id in eligible and track_id not in present)
+            if len(missing) >= MAX_HISTORY_RELATED:
+                break
+        if not missing:
+            return pool
+        missing = missing[:MAX_HISTORY_RELATED]
+        return pool + self.recommendations.fetch_candidates_pool(
+            {}, limit=len(missing), candidate_ids=missing,
+        )
+
+    def _history(self) -> Optional[play_history.PlayHistory]:
+        """The DJ's rekordbox HISTORY, or None when it cannot be read."""
+        if not self._history_loaded:
+            self._history_loaded = True
+            self._history_value = self._load_history()
+        return self._history_value
+
+    def _load_history(self) -> Optional[play_history.PlayHistory]:
+        try:
+            sessions = rekordbox_library.play_sessions()
+        except RekordboxLibraryUnavailable:
+            return None
+        if not sessions:
+            return None
+        now = datetime.now()
+        count, latest = self.session.exec(select(func.count(Track.id), func.max(Track.id))).one()
+        key = (count, latest, now.strftime("%Y-%m-%d %H"))
+        with _history_lock:
+            if _history_cache["key"] == key and _history_cache.get("sessions") is sessions:
+                history, self._identity_ids_value = _history_cache["value"]
+                return history
+        identities = self._identities_by_path()
+        history = play_history.PlayHistory(
+            ((played.started_at, [identities.get(_history_path_key(path)) for path in played.filepaths])
+             for played in sessions),
+            now,
+        )
+        with _history_lock:
+            _history_cache.update(key=key, sessions=sessions, value=(history, self._identity_ids()))
+        return history
+
+    def _identities_by_path(self) -> dict[str, tuple[str, str]]:
+        rows = self.session.exec(select(Track.id, Track.title, Track.artist, Track.filepath)).all()
+        identities, ids = {}, {}
+        for row in rows:
+            identity = self._recording_identity(row.title, row.artist)
+            if identity is None:
+                continue
+            identities[_history_path_key(row.filepath)] = identity
+            ids.setdefault(identity, []).append(row.id)
+        self._identity_ids_value = ids
+        return identities
+
+    def _identity_ids(self) -> dict[tuple[str, str], list[int]]:
+        if self._identity_ids_value is None:
+            self._identities_by_path()
+        return self._identity_ids_value
 
     def _approved_pairs(self, source_track_id: int) -> dict[int, dict[str, Any]]:
         """Approved, directed wordplay edges out of the source, keyed by target."""
