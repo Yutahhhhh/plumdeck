@@ -12,6 +12,9 @@ import { CandidateCard } from "./CandidateCard";
 import { RouteCard } from "./RouteCard";
 import { FilterPanel } from "./FilterPanel";
 import { useAgentBridge } from "./useAgentBridge";
+import { BaseDeckPicker } from "./BaseDeckPicker";
+import { useBaseDeck } from "./useBaseDeck";
+import { useAudition } from "./useAudition";
 
 import { useLoadedHistory } from "./useLoadedHistory";
 import { MAX_EXCLUDED_TRACKS } from "./loaded-history";
@@ -37,7 +40,9 @@ export function AssistWorkspace() {
   const freeze = useRef(false);
   const [dragging, setDragging] = useState(false);
   const decks = useRekordboxDecks(true, dragging, freeze);
-  const [slot, setSlot] = useState(1);
+  const base = useBaseDeck(decks.snapshot);
+  const slot = base.slot;
+  const audition = useAudition();
   const [intent, setIntent] = useState<AssistIntent>("keep");
   const [transition, setTransition] = useState(false);
   const [genreScope, setGenreScope] = useState<GenreScope>("any");
@@ -138,6 +143,7 @@ export function AssistWorkspace() {
   const drag = async (filepath: string, label: string) => {
     if (freeze.current) return;
     freeze.current = true;
+    audition.stop();
     generation.current += 1;
     setDragging(true);
     setDragMessage(null);
@@ -216,6 +222,12 @@ export function AssistWorkspace() {
     exclude_track_ids: history.excludedIds,
     shown_track_ids: candidates.map(track => track.id),
   }, applyAgentSettings);
+  // A preview with no card to stop it from must not keep playing.
+  const shownIds = [...(agent.list?.tracks ?? []), ...candidates, ...(recommended?.alternatives.map(item => item.track) ?? []), ...(route?.routes.flatMap(item => item.tracks.slice(1)) ?? [])].map(track => track.id).join(",");
+  const { playingId: auditionId, stop: stopAudition } = audition;
+  useEffect(() => {
+    if (auditionId !== null && !shownIds.split(",").includes(String(auditionId))) stopAudition();
+  }, [auditionId, shownIds, stopAudition]);
   const agentChange = agent.lastSettings && [
     agent.lastSettings.intent ? `プリセット「${presetOf(agent.lastSettings.intent)}」` : null,
     agent.lastSettings.transition !== undefined ? `トランジション${agent.lastSettings.transition ? "オン" : "オフ"}` : null,
@@ -246,7 +258,7 @@ export function AssistWorkspace() {
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-2">
         <fieldset disabled={dragging}><StatusBanner snapshot={decks.snapshot} libraryError={decks.resolution?.library_error ?? null} readError={decks.error} windowMessage={compact.message} onRefresh={refresh} /></fieldset>
         <section aria-label="基準デッキ" className="shrink-0 rounded-xl border border-white/10 bg-white/[0.025] p-2.5">
-          <div className="mb-1 flex items-center justify-between"><span className="text-[10px] text-slate-400">基準デッキ</span><div className="flex gap-1">{slots.map(value => <button type="button" key={value} disabled={dragging} aria-pressed={slot === value} onClick={() => setSlot(value)} className={cn("rounded px-3 py-1 text-xs transition-colors disabled:opacity-50", slot === value ? "bg-amber-300 text-slate-950" : "bg-white/5 text-slate-400 hover:bg-white/10")}>{value}</button>)}</div></div>
+          <div className="mb-1 flex items-center justify-between"><span className="text-[10px] text-slate-400">基準デッキ</span><BaseDeckPicker slots={slots} base={base} hasDecks={observations.length > 0} disabled={dragging} /></div>
           <p className="truncate text-sm font-semibold">{sourceTitle || (decks.loading ? "デッキを確認中…" : "曲が読み込まれていません")}</p>
           <div className="mt-1 flex items-center justify-between gap-2"><p className="truncate text-[11px] text-slate-400">{sourceArtist || "—"}</p>
           {sourceTitle && <p className="shrink-0 text-[10px] tabular-nums text-slate-400">{observed?.tempo_bpm ?? observed?.track_bpm ?? selected?.track?.bpm ?? "—"} BPM <span className="mx-2 text-slate-700">/</span>{observed?.display_key ?? selected?.track?.key ?? "—"}</p>}</div>
@@ -307,7 +319,7 @@ export function AssistWorkspace() {
               <button type="button" aria-label="提案を閉じる" title="提案を閉じる" disabled={dragging} onClick={() => void agent.dismiss()} className="rounded p-1 text-slate-400 hover:bg-white/5 hover:text-slate-200 disabled:opacity-40"><X className="size-3.5" /></button>
             </div>
             {agent.list.note && <p className="whitespace-pre-wrap text-[10px] leading-relaxed text-slate-300">{agent.list.note}</p>}
-            {agent.list.tracks.map((track, index) => <CandidateCard key={`agent-${agent.list?.revision}-${track.id}`} track={track} badge={String(index + 1).padStart(2, "0")} dragging={dragging} freeze={freeze} onDrag={(filepath, label) => void drag(filepath, label)} />)}
+            {agent.list.tracks.map((track, index) => <CandidateCard key={`agent-${agent.list?.revision}-${track.id}`} track={track} badge={String(index + 1).padStart(2, "0")} dragging={dragging} freeze={freeze} onDrag={(filepath, label) => void drag(filepath, label)} audition={audition.control} />)}
             {agent.list.rejected.length > 0 && <p className="text-[10px] text-slate-500">デッキに載せられない {agent.list.rejected.length} 曲は表示していません（{agent.list.rejected[0].reason}）</p>}
           </section>
         )}
@@ -340,7 +352,7 @@ export function AssistWorkspace() {
             {route?.caveats.map((caveat, index) => <p key={index} className="text-[10px] text-amber-200/80">・{caveat}</p>)}
             {route?.notes.map((note, index) => <p key={index} className="text-[10px] leading-relaxed text-slate-400">{note}</p>)}
             {routeBusy && !route && <p className="py-3 text-center text-[10px] text-slate-500">目的地までのつなぎ方を探しています…</p>}
-            {route?.routes.map((item, index) => <RouteCard key={`${item.tracks.map(track => track.id).join("-")}-${index}`} route={item} index={index} dragging={dragging} freeze={freeze} onDrag={(filepath, label) => void drag(filepath, label)} />)}
+            {route?.routes.map((item, index) => <RouteCard key={`${item.tracks.map(track => track.id).join("-")}-${index}`} route={item} index={index} dragging={dragging} freeze={freeze} onDrag={(filepath, label) => void drag(filepath, label)} audition={audition.control} />)}
             {route && !route.routes.length && !routeBusy && <p className="py-3 text-center text-[10px] text-slate-400">この条件では目的地までのルートが見つかりません。</p>}
           </section>
         )}
@@ -356,14 +368,14 @@ export function AssistWorkspace() {
           {dragMessage && <p role="status" className="text-xs text-amber-200">{dragMessage}</p>}
           {busy && !visible && <p className="py-6 text-center text-xs text-slate-500">次の一曲を探しています…</p>}
           {!busy && !error && !sourceId && !filtered && <p className="py-5 text-center text-xs text-slate-500">基準デッキの曲が確認できると候補が表示されます。デッキなしでも「条件で絞り込む」で検索できます。</p>}
-          {candidates.map((track, index) => <CandidateCard key={track.id} track={track} badge={String(index + 1).padStart(2, "0")} dragging={dragging} freeze={freeze} onDrag={(filepath, label) => void drag(filepath, label)} />)}
+          {candidates.map((track, index) => <CandidateCard key={track.id} track={track} badge={String(index + 1).padStart(2, "0")} dragging={dragging} freeze={freeze} onDrag={(filepath, label) => void drag(filepath, label)} audition={audition.control} />)}
           {visible && !candidates.length && <p className="py-4 text-center text-xs text-slate-400">条件に合う曲がありません。プリセットや条件を変えてお試しください。</p>}
           {visible?.value.notes.map((note, i) => <p key={i} className="text-[10px] leading-relaxed text-slate-500">{note}</p>)}
         </section>
         {recommended && recommended.alternatives.length > 0 && (
           <section aria-label="他のプリセットなら" className="space-y-2 pt-1">
             <p className="text-[10px] text-slate-500">他のプリセットなら</p>
-            {recommended.alternatives.map(item => <CandidateCard key={`${item.intent}-${item.track.id}`} track={item.track} badge={item.label.replace(/なら$/, "")} dragging={dragging} freeze={freeze} onDrag={(filepath, label) => void drag(filepath, label)} />)}
+            {recommended.alternatives.map(item => <CandidateCard key={`${item.intent}-${item.track.id}`} track={item.track} badge={item.label.replace(/なら$/, "")} dragging={dragging} freeze={freeze} onDrag={(filepath, label) => void drag(filepath, label)} audition={audition.control} />)}
           </section>
         )}
         <details className="text-[10px] text-slate-500">

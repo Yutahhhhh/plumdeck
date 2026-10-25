@@ -48,7 +48,8 @@ export function useRekordboxDecks(active: boolean, paused: boolean, freezeRef?: 
         setResolution(cache.value);
         const key = JSON.stringify([identity, [...new Set(next.open_audio_paths)].sort()]);
         if (key === fingerprint && version === lastRevision && Date.now() - resolvedAt < (retry ? 5000 : 30000)) return;
-        const result = await assistService.resolveDecks(next.decks, next.open_audio_paths);
+        // The playback readout changes every tick and the backend rejects unknown fields.
+        const result = await assistService.resolveDecks(next.decks.map(({ elapsed_seconds: _elapsed, ...deck }) => deck), next.open_audio_paths);
         if (!live || frozen() || version !== revision.current) return;
         if (Date.now() - next.captured_at_ms > 10_000) {
           cache.clear();

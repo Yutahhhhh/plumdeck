@@ -37,6 +37,10 @@ pub struct DeckObservation {
     pub tempo_bpm: Option<f64>,
     /// Key exactly as displayed (classical or Camelot, depending on the user's setting).
     pub display_key: Option<String>,
+    /// The elapsed-time readout in the deck header, in seconds. rekordbox exposes
+    /// no play state, so the UI infers "playing" from this advancing between
+    /// snapshots. It changes every tick, so it must never feed `signature`.
+    pub elapsed_seconds: Option<f64>,
 }
 
 #[derive(Serialize, Clone, Debug, Default)]

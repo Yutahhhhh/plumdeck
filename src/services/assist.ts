@@ -19,7 +19,12 @@ export interface DeckObservation {
   track_bpm: number | null;
   tempo_bpm: number | null;
   display_key: string | null;
+  /** Elapsed-time readout in seconds. Advancing means the deck is playing; it never identifies a track. */
+  elapsed_seconds: number | null;
 }
+
+/** What the backend accepts: it rejects the client-only playback readout. */
+export type ResolvableDeck = Omit<DeckObservation, "elapsed_seconds">;
 
 export interface AssistSnapshot {
   supported: boolean;
@@ -46,7 +51,7 @@ export interface AmbiguousCandidate {
 export interface ResolvedDeck {
   slot: number;
   status: DeckStatus;
-  observed: Omit<DeckObservation, "slot" | "loaded">;
+  observed: Omit<DeckObservation, "slot" | "loaded" | "elapsed_seconds">;
   track: Track | null;
   rekordbox_id: string | null;
   filepath: string | null;
@@ -284,7 +289,7 @@ export const assistService = {
       "/assist/library-status",
     ),
 
-  resolveDecks: (decks: DeckObservation[], openAudioPaths: string[]) =>
+  resolveDecks: (decks: ResolvableDeck[], openAudioPaths: string[]) =>
     apiClient.post<DeckResolution>("/assist/decks/resolve", {
       decks,
       open_audio_paths: openAudioPaths,

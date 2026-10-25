@@ -45,3 +45,14 @@ test('slot order and pitch do not change identity, but unloading or changing art
   assert.notEqual(observedDeckIdentity([deck]), observedDeckIdentity([{ ...deck, loaded: false }]));
   assert.notEqual(observedDeckIdentity([deck]), observedDeckIdentity([{ ...deck, artist: 'Other' }]));
 });
+
+test('the advancing elapsed readout never changes identity, so decks are not re-resolved every second', () => {
+  assert.equal(
+    observedDeckIdentity([{ ...deck, elapsed_seconds: 12.3 }]),
+    observedDeckIdentity([{ ...deck, elapsed_seconds: 13.4 }]),
+  );
+  const cache = new DeckResolutionCache();
+  cache.observe([{ ...deck, elapsed_seconds: 1 }]); cache.publish(initial);
+  cache.observe([{ ...deck, elapsed_seconds: 2 }]);
+  assert.strictEqual(cache.value, initial);
+});

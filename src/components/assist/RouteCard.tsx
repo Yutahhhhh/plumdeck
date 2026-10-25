@@ -1,6 +1,7 @@
 import type { MutableRefObject } from "react";
 import type { AssistCandidate, AssistRoute } from "@/services/assist";
 import { CandidateCard } from "./CandidateCard";
+import type { AuditionControl } from "./audition";
 
 interface RouteCardProps {
   route: AssistRoute;
@@ -8,6 +9,7 @@ interface RouteCardProps {
   dragging: boolean;
   freeze: MutableRefObject<boolean>;
   onDrag: (filepath: string, label: string) => void;
+  audition?: AuditionControl;
 }
 
 function cardTrack(track: AssistRoute["tracks"][number], summary: string, step?: AssistRoute["steps"][number]): AssistCandidate {
@@ -23,7 +25,7 @@ function cardTrack(track: AssistRoute["tracks"][number], summary: string, step?:
 }
 
 /** One exact path from the current deck track to the selected destination. */
-export function RouteCard({ route, index, dragging, freeze, onDrag }: RouteCardProps) {
+export function RouteCard({ route, index, dragging, freeze, onDrag, audition }: RouteCardProps) {
   const destinationIndex = route.tracks.length - 1;
   return (
     <article className="space-y-1.5 rounded-xl border border-sky-300/20 bg-sky-300/[0.035] p-2">
@@ -47,6 +49,7 @@ export function RouteCard({ route, index, dragging, freeze, onDrag }: RouteCardP
                 dragging={dragging}
                 freeze={freeze}
                 onDrag={(filepath, label) => onDrag(filepath, label)}
+                audition={audition}
               />
             </div>
           );

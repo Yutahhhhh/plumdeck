@@ -338,6 +338,7 @@ fn read_deck(nodes: &[Node], column: &DeckColumn) -> DeckObservation {
         track_bpm,
         tempo_bpm: tempo_readout(nodes, column),
         display_key,
+        elapsed_seconds: elapsed_readout(nodes, column, title_node),
     }
 }
 
@@ -391,7 +392,73 @@ fn tempo_readout(nodes: &[Node], column: &DeckColumn) -> Option<f64> {
     parse_bpm(first.text())
 }
 
+/// `mm:ss` (or `h:mm:ss`) without a sign: `"00:41"` yes, `"-04:21"` (remaining) no.
+fn parse_clock(text: &str) -> Option<f64> {
+    let parts: Vec<&str> = text.trim().split(':').collect();
+    let number = |part: &str, min_digits: usize, max_digits: usize| {
+        let ok = (min_digits..=max_digits).contains(&part.len())
+            && part.bytes().all(|b| b.is_ascii_digit());
+        ok.then(|| part.parse::<f64>().ok()).flatten()
+    };
+    match parts.as_slice() {
+        [minutes, seconds] => {
+            let seconds = number(seconds, 2, 2).filter(|s| *s < 60.0)?;
+            Some(number(minutes, 1, 3)? * 60.0 + seconds)
+        }
+        [hours, minutes, seconds] => {
+            let seconds = number(seconds, 2, 2).filter(|s| *s < 60.0)?;
+            let minutes = number(minutes, 2, 2).filter(|m| *m < 60.0)?;
+            Some(number(hours, 1, 2)? * 3600.0 + minutes * 60.0 + seconds)
+        }
+        _ => None,
+    }
+}
+
+/// The tenths cell rekordbox prints right after a clock (`".3"`).
+fn parse_clock_fraction(text: &str) -> Option<f64> {
+    let digits = text.trim().strip_prefix('.')?;
+    if digits.is_empty() || digits.len() > 2 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    format!("0.{digits}").parse().ok()
+}
+
+/// The elapsed readout in the deck header band, with its tenths cell if present.
+///
+/// The remaining-time readout beside it carries a leading minus and is skipped.
+/// Reported only when exactly one unsigned clock sits in the band, so an
+/// unfamiliar layout yields "unknown" instead of another readout's time.
+fn elapsed_readout(nodes: &[Node], column: &DeckColumn, title: &Node) -> Option<f64> {
+    let mut found = nodes.iter().filter(|node| {
+        node.role == ROLE_STATIC_TEXT
+            && node.x > title.x
+            && node.x < column.right_bound
+            && node.y > title.y + 1.0
+            && node.y <= title.y + 48.0
+            && parse_clock(node.text()).is_some()
+    });
+    let clock = found.next()?;
+    if found.next().is_some() {
+        return None;
+    }
+    let right_edge = clock.x + clock.width;
+    let fraction = nodes
+        .iter()
+        .filter(|node| {
+            node.role == ROLE_STATIC_TEXT
+                && (node.y - clock.y).abs() <= 4.0
+                && node.x >= right_edge - 6.0
+                && node.x <= right_edge + 16.0
+        })
+        .filter_map(|node| parse_clock_fraction(node.text()).map(|value| (node.x, value)))
+        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+        .map_or(0.0, |(_, value)| value);
+    Some(parse_clock(clock.text())? + fraction)
+}
+
 /// Stable identity of what the decks are showing, used to trigger refreshes.
+///
+/// Deliberately excludes `elapsed_seconds`, which changes every second.
 pub fn signature(decks: &[DeckObservation]) -> String {
     decks
         .iter()
@@ -647,6 +714,91 @@ mod tests {
             .collect();
         let (after_decks, _) = parse_decks(&swapped, 1470.0);
         assert_ne!(before, signature(&after_decks));
+    }
+
+    #[test]
+    fn reads_the_elapsed_readout_and_not_the_remaining_one() {
+        let (decks, _) = parse_decks(&rekordbox_two_deck_nodes(), 1470.0);
+        // "00:00" + ".3"; the "-04:21" + ".5" beside it is the remaining time.
+        assert_eq!(decks[0].elapsed_seconds, Some(0.3));
+        // No tenths cell is printed for deck 2 in the capture.
+        assert_eq!(decks[1].elapsed_seconds, Some(0.0));
+
+        let mut nodes = rekordbox_two_deck_nodes();
+        for node in &mut nodes {
+            match (node.value.as_str(), node.x as i64) {
+                ("00:00", 489) => node.value = "01:41".into(),
+                (".3", 532) => node.value = ".7".into(),
+                _ => {}
+            }
+        }
+        let (decks, _) = parse_decks(&nodes, 1470.0);
+        assert_eq!(decks[0].elapsed_seconds, Some(101.7));
+        assert_eq!(decks[1].elapsed_seconds, Some(0.0));
+    }
+
+    #[test]
+    fn elapsed_ignores_other_clocks_and_stays_unknown_when_ambiguous() {
+        // The hot cue time "00:11" sits far below the header band.
+        let (decks, _) = parse_decks(&rekordbox_two_deck_nodes(), 1470.0);
+        assert_ne!(decks[0].elapsed_seconds, Some(11.0));
+
+        let mut nodes = rekordbox_two_deck_nodes();
+        nodes.push(Node::new(ROLE_STATIC_TEXT, "03:12", 380.0, 260.0, 43.0, 16.0));
+        let (decks, _) = parse_decks(&nodes, 1470.0);
+        assert_eq!(decks[0].elapsed_seconds, None);
+        assert_eq!(decks[1].elapsed_seconds, Some(0.0));
+
+        let mut nodes = rekordbox_two_deck_nodes();
+        nodes.retain(|node| node.value != "00:00" || node.x < 1000.0);
+        let (decks, _) = parse_decks(&nodes, 1470.0);
+        assert_eq!(decks[1].elapsed_seconds, None);
+    }
+
+    #[test]
+    fn an_empty_deck_has_no_elapsed_readout() {
+        let mut nodes = rekordbox_two_deck_nodes();
+        nodes.retain(|node| {
+            !matches!(
+                node.value.as_str(),
+                "Think About You" | "Kygo, Valerie Broussard" | "  0.00" | "6B"
+            )
+        });
+        let (decks, _) = parse_decks(&nodes, 1470.0);
+        assert_eq!(decks[1].elapsed_seconds, None);
+    }
+
+    #[test]
+    fn clock_text_parsing_is_strict() {
+        assert_eq!(parse_clock("00:41"), Some(41.0));
+        assert_eq!(parse_clock(" 12:05 "), Some(725.0));
+        assert_eq!(parse_clock("1:02:03"), Some(3723.0));
+        for text in ["-04:21", "04:2", "04:61", "88.00", "4:21:5", "::", "", ".5"] {
+            assert_eq!(parse_clock(text), None, "{text}");
+        }
+        assert_eq!(parse_clock_fraction(".3"), Some(0.3));
+        assert_eq!(parse_clock_fraction(".35"), Some(0.35));
+        for text in ["3", ".", ".123", ".x", "0.5"] {
+            assert_eq!(parse_clock_fraction(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn signature_ignores_the_elapsed_readout() {
+        let nodes = rekordbox_two_deck_nodes();
+        let (before, _) = parse_decks(&nodes, 1470.0);
+        let advanced: Vec<Node> = nodes
+            .into_iter()
+            .map(|mut node| {
+                if node.value == "00:00" && node.x < 1000.0 {
+                    node.value = "02:30".into();
+                }
+                node
+            })
+            .collect();
+        let (after, _) = parse_decks(&advanced, 1470.0);
+        assert_ne!(before[0].elapsed_seconds, after[0].elapsed_seconds);
+        assert_eq!(signature(&before), signature(&after));
     }
 
     #[test]

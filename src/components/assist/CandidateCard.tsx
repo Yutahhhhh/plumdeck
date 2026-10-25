@@ -1,8 +1,9 @@
 import { useRef, type MutableRefObject } from "react";
-import { GripVertical } from "lucide-react";
+import { GripVertical, Play, Square } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { AssistCandidate } from "@/services/assist";
 import { canDragOut } from "./native-drag";
+import type { AuditionControl } from "./audition";
 
 interface CandidateCardProps {
   track: AssistCandidate;
@@ -11,12 +12,15 @@ interface CandidateCardProps {
   dragging: boolean;
   freeze: MutableRefObject<boolean>;
   onDrag: (filepath: string, label: string) => void;
+  /** Omit to hide the audition button. */
+  audition?: AuditionControl;
 }
 
 /** One suggestion the DJ can drag straight onto a rekordbox deck. */
-export function CandidateCard({ track, badge, dragging, freeze, onDrag }: CandidateCardProps) {
+export function CandidateCard({ track, badge, dragging, freeze, onDrag, audition }: CandidateCardProps) {
   const pointer = useRef<{ id: number; x: number; y: number } | null>(null);
   const cautions = track.reasons.filter(reason => reason.tone === "caution");
+  const playing = audition?.playingId === track.id;
 
   return (
     <article
@@ -41,12 +45,14 @@ export function CandidateCard({ track, badge, dragging, freeze, onDrag }: Candid
       onPointerCancel={() => { pointer.current = null; }}
       onLostPointerCapture={() => { pointer.current = null; }}
       onDragStart={event => event.preventDefault()}
-      className={cn("group flex select-none gap-2 rounded-lg border border-white/10 bg-white/[0.025] px-2.5 py-2", canDragOut() && "cursor-grab hover:border-amber-300/30 active:cursor-grabbing")}
+      aria-current={playing || undefined}
+      className={cn("group flex select-none gap-2 rounded-lg border px-2.5 py-2", playing ? "border-emerald-300/60 bg-emerald-300/[0.08] ring-1 ring-emerald-300/30" : "border-white/10 bg-white/[0.025]", canDragOut() && "cursor-grab active:cursor-grabbing", canDragOut() && !playing && "hover:border-amber-300/30")}
     >
       <span className="shrink-0 pt-0.5 text-[10px] tabular-nums text-slate-600">{badge}</span>
       <div className="min-w-0 flex-1">
-        <div className="flex items-baseline justify-between gap-2"><p className="truncate text-xs font-medium" title={track.title}>{track.title}</p><span className="shrink-0 text-[10px] tabular-nums text-amber-200/80">{track.bpm || "—"} · {track.key || "—"}</span></div>
+        <div className="flex items-baseline justify-between gap-2"><p className="truncate text-xs font-medium" title={track.title}>{track.title}</p><span className="flex shrink-0 items-baseline gap-1.5">{playing && <span className="animate-pulse text-[9px] font-medium text-emerald-300">試聴中</span>}<span className="text-[10px] tabular-nums text-amber-200/80">{track.bpm || "—"} · {track.key || "—"}</span></span></div>
         <p className="truncate text-[10px] text-slate-400">{track.artist}{track.year ? ` · ${track.year}` : ""}{track.genre ? ` · ${track.genre}` : ""}</p>
+        {audition?.failedId === track.id && <p role="alert" className="mt-1 text-[10px] text-rose-300">試聴できませんでした</p>}
         {track.agent_reason && <p className="mt-1 text-[10px] leading-snug text-sky-200">{track.agent_reason}</p>}
         <p className="mt-1 line-clamp-2 text-[10px] leading-snug text-slate-300" title={track.summary}>{track.summary}</p>
         {cautions.length > 0 && <p className="mt-0.5 truncate text-[10px] text-amber-300/80" title={cautions.map(reason => reason.text).join("\n")}>{cautions[0].text}{cautions.length > 1 ? ` ほか${cautions.length - 1}件` : ""}</p>}
@@ -58,7 +64,22 @@ export function CandidateCard({ track, badge, dragging, freeze, onDrag }: Candid
           </div>
         </details>
       </div>
-      <GripVertical className="mt-1 size-3.5 shrink-0 text-slate-600" />
+      <div className="flex shrink-0 flex-col items-center gap-2">
+        {audition && (
+          <button
+            type="button"
+            disabled={dragging}
+            aria-pressed={playing}
+            aria-label={playing ? "試聴を停止" : "試聴"}
+            title={playing ? "試聴を停止" : "曲の中盤から30秒試聴します。音はOSの既定の出力から鳴るため、それがDJのマスター出力だと会場に流れます"}
+            onClick={() => audition.toggle(track)}
+            className={cn("flex size-6 items-center justify-center rounded-full border transition-colors disabled:opacity-40", playing ? "border-emerald-300 bg-emerald-300 text-slate-950 hover:bg-emerald-200" : "border-white/15 text-slate-300 hover:border-emerald-300/50 hover:text-emerald-200")}
+          >
+            {playing ? <Square className="size-2.5 fill-current" /> : <Play className="size-3 translate-x-px fill-current" />}
+          </button>
+        )}
+        <GripVertical className="size-3.5 text-slate-600" />
+      </div>
     </article>
   );
 }
