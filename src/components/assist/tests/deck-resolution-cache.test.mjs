@@ -30,6 +30,17 @@ test('a real track switch hides the old match before its delayed resolution retu
   assert.equal(cache.value.decks[0].track.id, 2146);
 });
 
+test('changing another deck retains the unchanged source resolution while it is rechecked', () => {
+  const cache = new DeckResolutionCache();
+  const second = { ...deck, slot: 2, title: 'Second', artist: 'Artist' };
+  cache.observe([deck, second]);
+  cache.publish({ decks: [{ slot: 1, track: { id: 1844 } }, { slot: 2, track: { id: 2002 } }] });
+
+  cache.observe([deck, { ...second, title: 'Changed' }]);
+
+  assert.deepEqual(cache.value?.decks, [{ slot: 1, track: { id: 1844 } }]);
+});
+
 test('disconnect/error invalidation cannot revive cached matches on reconnect before verification', () => {
   const cache = new DeckResolutionCache();
   cache.observe([deck]); cache.publish(initial);
