@@ -96,6 +96,72 @@ def test_normal_presets_never_offer_a_track_with_unknown_tempo(session, crate):
         assert crate["unknown_bpm"].id not in ids(AssistAppService(session).recommend(crate["source"].id, preset))
 
 
+@pytest.mark.parametrize("intent,tolerance,expected", [
+    ("keep", None, (-6.0, 6.0, 0.0, 3.0)),
+    ("keep", 2, (-2.0, 2.0, 0.0, 1.0)),
+    # Narrowing never turns a directional preset around: hype still never steps down.
+    ("hype", 1, (-1.0, 1.0, 1.0, 0.5)),
+    ("calm", 2, (-2.0, 2.0, -2.0, 1.0)),
+    ("keep", 10, (-6.0, 6.0, 0.0, 3.0)),
+    ("wordplay", 2, (-100.0, 100.0, 0.0, 3.0)),
+])
+def test_tempo_tolerance_only_narrows_the_preset_window(intent, tolerance, expected):
+    rule = scoring.tempo_rule(intent, tolerance)
+    assert (rule.low, rule.high, rule.center, rule.sigma) == expected
+
+
+def test_tempo_tolerance_sharpens_the_tempo_preference():
+    source, near = {"bpm": 100.0}, {"bpm": 102.0}
+    loose = scoring.evaluate(source, near, "keep").components["bpm"]
+    tight = scoring.evaluate(source, near, "keep", tempo_tolerance=2).components["bpm"]
+    assert tight < loose
+    assert scoring.passes_intent_filter("keep", source, near)
+    assert not scoring.passes_intent_filter("keep", source, near, tempo_tolerance=1)
+
+
+def test_tempo_tolerance_drops_picks_outside_the_dj_s_range(session, crate):
+    service = AssistAppService(session)
+    loose = ids(service.recommend(crate["source"].id, "keep"))
+    tight = service.recommend(crate["source"].id, "keep", tempo_tolerance=0.5)
+    assert crate["steady"].id in loose and crate["old"].id in loose
+    assert crate["steady"].id not in ids(tight) and crate["old"].id not in ids(tight)
+    assert crate["major"].id in ids(tight)
+    assert tight["tempo_tolerance"] == 0.5
+    # Alternatives obey the same range.
+    assert all(item["track"]["id"] not in (crate["steady"].id, crate["old"].id) for item in tight["alternatives"])
+
+
+def test_tempo_tolerance_is_reported_only_where_it_applies(session, crate):
+    service = AssistAppService(session)
+    assert service.recommend(crate["source"].id, "keep", transition=True, tempo_tolerance=2)["tempo_tolerance"] is None
+    assert service.recommend(crate["source"].id, "wordplay", tempo_tolerance=2)["tempo_tolerance"] is None
+
+
+def test_a_narrow_tempo_window_also_cuts_the_candidate_pool(session, crate):
+    service = AssistAppService(session)
+    pool = service._candidate_pool(crate["source"], "keep", [crate["source"].id], None, {},
+                                   [track.id for track in crate.values()], tempo_tolerance=0.5)
+    pool_ids = {item["id"] for item in pool}
+    assert crate["steady"].id not in pool_ids and crate["old"].id not in pool_ids
+    assert crate["major"].id in pool_ids
+
+
+def test_tempo_reason_tone_follows_the_narrowed_window():
+    source, candidate = {"bpm": 100.0}, {"bpm": 101.5}
+    loose = scoring.evaluate(source, candidate, "keep")
+    tight = scoring.evaluate(source, candidate, "keep", tempo_tolerance=2)
+    tone = lambda result: next(reason.tone for reason in result.reasons if reason.kind == "tempo")
+    assert tone(loose) == "good" and tone(tight) == "neutral"
+
+
+def test_artists_fold_spellings_and_list_most_tracks_first(session, crate, tmp_path):
+    add(session, tmp_path, "Fast Two", artist="dj  fast")
+    add(session, tmp_path, "Fast Three", artist="DJ Fast")
+    artists = AssistAppService(session).artists()
+    assert artists[0] == {"name": "DJ Fast", "tracks": 3}
+    assert all(item["name"] != "dj  fast" for item in artists)
+
+
 # --------------------------------------------------------------- transition
 
 @pytest.mark.parametrize("title,expected", [
@@ -257,6 +323,15 @@ def test_recommend_and_search_routes(client, crate):
     }).status_code == 422
     search = client.post("/api/assist/search", json={"filters": {"genres": ["Techno"]}})
     assert search.status_code == 200 and search.json()["candidates"]
+    tight = client.post("/api/assist/recommendations", json={
+        "source_track_id": crate["source"].id, "tempo_tolerance": 2,
+    })
+    assert tight.status_code == 200 and tight.json()["tempo_tolerance"] == 2
+    assert client.post("/api/assist/recommendations", json={
+        "source_track_id": crate["source"].id, "tempo_tolerance": 0,
+    }).status_code == 422
+    artists = client.get("/api/assist/artists")
+    assert artists.status_code == 200 and {"name": "DJ Fast", "tracks": 1} in artists.json()
 
 
 def test_route_api_keeps_the_requested_destination(client, crate):

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import json
+import math
 import ntpath
 import os
 import sys
@@ -62,6 +63,10 @@ MAX_SUGGESTIONS = 50
 MAX_ARTIST_ANCHORS = 40
 MAX_ROUTE_INTERMEDIATE = 4
 MAX_ROUTE_BEAM = 18
+# Route search reuses a bounded neighborhood around both endpoints. Querying
+# the whole library for every beam state makes a route request time out on a
+# large collection without improving the useful bridge choices.
+MAX_ROUTE_POOL = 120
 # Picks shown under "another preset" must genuinely suit that preset.
 ALTERNATIVE_MIN_SCORE = 0.6
 # Tracks played next to the source in earlier sets join the pool even when the
@@ -268,6 +273,7 @@ class AssistAppService:
         filters: Optional[dict[str, Any]] = None,
         transition: bool = False,
         reference: Optional[dict[str, Any]] = None,
+        tempo_tolerance: Optional[float] = None,
     ) -> dict[str, Any]:
         intent = scoring.resolve_intent(intent)
         # Approved wordplay edges are the whole search space; no tempo rule applies.
@@ -288,6 +294,8 @@ class AssistAppService:
                 "intent": intent,
                 "intent_label": preset.label,
                 "transition": transition,
+                # Transition and wordplay keep their own tempo rule.
+                "tempo_tolerance": None if transition or intent == "wordplay" else tempo_tolerance,
                 "source_track_id": source_track_id,
                 "basis": scoring.describe_weights(intent),
                 "reference": self._anchor_summary(target) if target else None,
@@ -359,10 +367,12 @@ class AssistAppService:
             return response(notes=[f"{error}。登録済みの原本を確認できないため、提案を停止しました"])
 
         history = self._history() if intent != "wordplay" else None
-        context = self._scoring_context(source, source_payload, pairs, transition, target, history)
+        context = self._scoring_context(source, source_payload, pairs, transition, target, history,
+                                        tempo_tolerance)
         eligible_ids = [row.id for row in eligible]
         pool = self._candidate_pool(source, intent, excluded, genres, pairs, eligible_ids,
-                                    conditions, transition, source_bpm=source_bpm)
+                                    conditions, transition, source_bpm=source_bpm,
+                                    tempo_tolerance=tempo_tolerance)
         pool = self._with_related(pool, context, eligible_ids)
         entries, unavailable, filtered = self._score_pool(pool, intent, registered, context)
 
@@ -372,10 +382,14 @@ class AssistAppService:
                 f"rekordbox 未登録、またはファイルが見つからない {unavailable} 曲を除外しました"
             )
         if not entries and filtered and not transition and intent != "wordplay":
-            low, high = preset.tempo_window
-            notes.append(
-                f"「{preset.label}」のテンポ範囲（{low:+g}〜{high:+g}%）に合う曲がありません。"
+            tempo = scoring.tempo_rule(intent, tempo_tolerance)
+            hint = (
+                "テンポ幅を広げるか、テンポを大きく変えたいときは「トランジション」をオンにしてください"
+                if tempo_tolerance else
                 "テンポを大きく変えたいときは「トランジション」をオンにしてください"
+            )
+            notes.append(
+                f"「{preset.label}」のテンポ範囲（{tempo.low:+g}〜{tempo.high:+g}%）に合う曲がありません。{hint}"
             )
 
         # Other presets rank a general pool: throwback's own pool is only older
@@ -386,7 +400,7 @@ class AssistAppService:
                                            eligible_ids=None, conditions=conditions, transition=False,
                                            metadata_ids=self._eligible_ids(scope_field, scope_value,
                                                                            conditions, excluded_ids),
-                                           source_bpm=source_bpm)
+                                           source_bpm=source_bpm, tempo_tolerance=tempo_tolerance)
             general = self._with_related(general, context, eligible_ids)
         return response(
             candidates=[self._entry_payload(entry, pairs) for entry in ranked],
@@ -406,6 +420,7 @@ class AssistAppService:
         genre_scope: str = "any",
         filters: Optional[dict[str, Any]] = None,
         transition: bool = False,
+        tempo_tolerance: Optional[float] = None,
     ) -> dict[str, Any]:
         """Find short, playable paths from one exact track to another.
 
@@ -518,6 +533,20 @@ class AssistAppService:
             return {**response_base, "routes": [], "notes": ["目的曲の解析情報を読み込めませんでした"]}
         target_info = target_info[0]
         target_anchor = self._track_anchor(target, "track", f"『{target.title}』（{target.artist}）")
+        route_excluded = sorted(excluded_ids | {target.id})
+        source_route_pool = self._candidate_pool(
+            source, intent, route_excluded, None, {}, eligible_ids,
+            conditions, transition, source_bpm=source_payload.get("bpm"),
+            pool_limit=MAX_ROUTE_POOL, tempo_tolerance=tempo_tolerance,
+        )
+        target_route_payload = self._route_source_payload(target)
+        target_route_pool = self._candidate_pool(
+            target, intent, route_excluded, None, {}, eligible_ids,
+            conditions, transition, source_bpm=target_route_payload.get("bpm"),
+            pool_limit=MAX_ROUTE_POOL, tempo_tolerance=tempo_tolerance,
+        )
+        route_pool_by_id = {item["id"]: item for item in (*source_route_pool, *target_route_pool)}
+        route_pool = list(route_pool_by_id.values())
 
         states = [{
             "track": source,
@@ -537,7 +566,7 @@ class AssistAppService:
             for state in states:
                 direct = self._route_edge(
                     state["track"], state["payload"], target_info,
-                    intent, transition,
+                    intent, transition, tempo_tolerance,
                 )
                 if direct is not None:
                     routes.append(self._route_payload(
@@ -546,21 +575,16 @@ class AssistAppService:
                 if depth >= max_intermediate:
                     continue
                 blocked = excluded_ids | state["ids"] | {target.id}
-                pool = self._candidate_pool(
-                    state["track"], intent, sorted(blocked), None, {}, eligible_ids,
-                    conditions, transition,
-                    source_bpm=state["payload"].get("bpm"),
-                )
                 context = self._scoring_context(
                     state["track"], state["payload"], {}, transition, None,
+                    tempo_tolerance=tempo_tolerance,
                 )
-                entries, _, _ = self._score_pool(pool, intent, registered, context)
-                by_id = {item["id"]: item for item in pool}
+                entries, _, _ = self._score_pool(route_pool, intent, registered, context)
                 for entry in entries:
                     track_id = int(entry["payload"]["id"])
                     if track_id in blocked:
                         continue
-                    candidate_info = by_id.get(track_id)
+                    candidate_info = route_pool_by_id.get(track_id)
                     if candidate_info is None:
                         continue
                     like = self._likeness(target_anchor, entry["payload"], candidate_info)
@@ -612,18 +636,18 @@ class AssistAppService:
             payload["bpm"] = declared[1]
         return payload
 
-    def _route_edge(self, source_track, source_payload, candidate, intent, transition):
+    def _route_edge(self, source_track, source_payload, candidate, intent, transition, tempo_tolerance=None):
         payload = self._track_payload(candidate["track"], bool(candidate.get("has_lyrics")))
         fit = scoring.transition_fit(source_payload.get("bpm"), payload) if transition else None
         if transition:
             if fit is None or not scoring.passes_transition_filter(intent, source_payload, payload):
                 return None
-        elif not scoring.passes_intent_filter(intent, source_payload, payload):
+        elif not scoring.passes_intent_filter(intent, source_payload, payload, tempo_tolerance):
             return None
         embedding = self.session.get(TrackEmbedding, source_track.id)
         result = self._evaluate(
             source_payload, embedding, self._vector(embedding), payload,
-            candidate, intent, {}, fit,
+            candidate, intent, {}, fit, tempo_tolerance,
         )
         return {
             "from_track_id": source_track.id,
@@ -661,7 +685,8 @@ class AssistAppService:
                 and conditions.matches(row)]
 
     def _scoring_context(self, source, source_payload, pairs, transition, target,
-                         history: Optional[play_history.PlayHistory] = None) -> dict[str, Any]:
+                         history: Optional[play_history.PlayHistory] = None,
+                         tempo_tolerance: Optional[float] = None) -> dict[str, Any]:
         embedding = self.session.get(TrackEmbedding, source.id)
         return {
             "source": source_payload,
@@ -672,6 +697,7 @@ class AssistAppService:
             "target": target,
             "history": history,
             "history_source": self._recording_identity(source.title, source.artist),
+            "tempo_tolerance": tempo_tolerance,
         }
 
     def _score_pool(self, pool, intent, registered, context):
@@ -693,11 +719,13 @@ class AssistAppService:
                 if fit is None or not scoring.passes_transition_filter(intent, source_payload, payload):
                     filtered += 1
                     continue
-            elif not scoring.passes_intent_filter(intent, source_payload, payload):
+            elif not scoring.passes_intent_filter(intent, source_payload, payload,
+                                                  context.get("tempo_tolerance")):
                 filtered += 1
                 continue
             result = self._evaluate(source_payload, context["embedding"], context["vector"],
-                                    payload, candidate, intent, context["pairs"], fit)
+                                    payload, candidate, intent, context["pairs"], fit,
+                                    context.get("tempo_tolerance"))
             target = context["target"]
             like = self._likeness(target, payload, candidate) if target else None
             history = context.get("history")
@@ -802,7 +830,7 @@ class AssistAppService:
 
     def _evaluate(
         self, source_payload, source_embedding, source_vector, payload, candidate,
-        intent, pairs, transition=None,
+        intent, pairs, transition=None, tempo_tolerance=None,
     ) -> scoring.Scored:
         similarity = (
             cosine_similarity(
@@ -822,6 +850,7 @@ class AssistAppService:
             pair=pairs.get(payload["id"]),
             has_analysis=candidate.get("vector") is not None,
             transition=transition,
+            tempo_tolerance=tempo_tolerance,
         )
 
     # ---------------------------------------------------------------- anchors
@@ -1137,6 +1166,8 @@ class AssistAppService:
         transition: bool = False,
         metadata_ids: Optional[list[int]] = None,
         source_bpm: Optional[float] = None,
+        pool_limit: int = MAX_CANDIDATE_POOL,
+        tempo_tolerance: Optional[float] = None,
     ) -> list[dict[str, Any]]:
         """Pull candidates with preset-appropriate pre-filtering.
 
@@ -1158,8 +1189,8 @@ class AssistAppService:
             )
         if transition:
             return self.recommendations.fetch_candidates_pool(
-                {}, limit=MAX_CANDIDATE_POOL, exclude_ids=excluded,
-                candidate_ids=eligible_ids[:MAX_CANDIDATE_POOL],
+                {}, limit=pool_limit, exclude_ids=excluded,
+                candidate_ids=eligible_ids[:pool_limit],
             )
         if intent == "throwback" and source.year:
             older = set(
@@ -1174,7 +1205,16 @@ class AssistAppService:
         targets: dict[str, Any] = {}
         tempo = source_bpm if source_bpm is not None else source.bpm
         if tempo:
-            targets["bpm"] = tempo * (1 + preset.tempo_center / 100)
+            rule = scoring.tempo_rule(intent, tempo_tolerance)
+            targets["bpm"] = tempo * (1 + rule.center / 100)
+            if tempo_tolerance:
+                # The pool is ordered by timbre and feel as much as by tempo, so a
+                # narrow window must also cut the pool, or it fills with tracks the
+                # window then rejects.
+                center = 1 + rule.center / 100
+                targets["max_tempo_distance"] = max(
+                    abs(math.log2((1 + edge / 100) / center)) for edge in (rule.low, rule.high)
+                ) + 1e-9
         for feature, direction in preset.directions.items():
             value = getattr(source, feature, None)
             if value is None:
@@ -1196,7 +1236,7 @@ class AssistAppService:
         pool = self.recommendations.fetch_candidates_pool(
             targets,
             genres=genres,
-            limit=MAX_CANDIDATE_POOL,
+            limit=pool_limit,
             exclude_ids=excluded,
             candidate_ids=eligible_ids,
         )
@@ -1368,6 +1408,28 @@ class AssistAppService:
             has_lyrics if has_lyrics is not None else bool(self.session.get(Lyrics, track.id))
         )
         return payload
+
+    def artists(self) -> list[dict[str, Any]]:
+        """Distinct library artists for the filter picker, most tracks first.
+
+        Spellings that differ only in case, width or spacing are one artist, shown
+        under their most common spelling, because the filter matches folded text.
+        """
+        rows = self.session.exec(
+            select(Track.artist, func.count(Track.id)).group_by(Track.artist)
+        ).all()
+        merged: dict[str, dict[str, Any]] = {}
+        for artist, count in rows:
+            name = " ".join((artist or "").split())
+            key = rekordbox_library.normalize_text(name)
+            if not key:
+                continue
+            entry = merged.setdefault(key, {"name": name, "tracks": 0, "best": 0})
+            entry["tracks"] += count
+            if count > entry["best"] or (count == entry["best"] and name < entry["name"]):
+                entry["name"], entry["best"] = name, count
+        ordered = sorted(merged.values(), key=lambda item: (-item["tracks"], item["name"].casefold()))
+        return [{"name": item["name"], "tracks": item["tracks"]} for item in ordered]
 
     def library_status(self) -> dict[str, Any]:
         """Whether the rekordbox collection can be read right now."""

@@ -48,6 +48,7 @@ def recommendations(payload: AssistRecommendRequest, session: Session = Depends(
             exclude_track_ids=payload.exclude_track_ids,
             genres=payload.genres,
             filters=payload.filters.model_dump(),
+            tempo_tolerance=payload.tempo_tolerance,
         )
     except AssistInputError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
@@ -69,11 +70,18 @@ def routes(payload: AssistRouteRequest, session: Session = Depends(get_session))
             exclude_track_ids=payload.exclude_track_ids,
             genre_scope=payload.genre_scope,
             filters=payload.filters.model_dump(),
+            tempo_tolerance=payload.tempo_tolerance,
         )
     except AssistInputError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@router.get("/artists")
+def artists(session: Session = Depends(get_session)):
+    """Library artists for the artist filter, most tracks first."""
+    return AssistAppService(session).artists()
 
 
 @router.post("/search")

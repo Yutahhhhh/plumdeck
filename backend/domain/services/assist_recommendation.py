@@ -231,12 +231,41 @@ def matched_tempo(source_bpm: Any, candidate_bpm: Any) -> Optional[tuple[float, 
     return effective, (effective / source - 1) * 100, shift
 
 
-def tempo_score(source_bpm: Any, candidate_bpm: Any, center: float = 0.0) -> Optional[float]:
+@dataclass(frozen=True)
+class TempoRule:
+    low: float
+    high: float
+    center: float
+    sigma: float
+
+
+def tempo_rule(intent: str, tolerance: Any = None) -> TempoRule:
+    """The preset's tempo window and preference, narrowed to the DJ's tolerance.
+
+    A tolerance ("±2%") only ever narrows the window, so hype still never steps
+    the tempo down, and the preference sharpens with it: at ±2% a 2% gap scores
+    as low as a 6% gap does under the default ±6%. Wordplay edges were approved
+    by hand and keep their own rule.
+    """
+    intent = resolve_intent(intent)
+    preset = PRESETS[intent]
+    low, high = preset.tempo_window
+    limit = _positive(tolerance)
+    if limit is None or intent == "wordplay":
+        return TempoRule(low, high, preset.tempo_center, TEMPO_SIGMA_PERCENT)
+    low, high = max(low, -limit), min(high, limit)
+    center = min(high, max(low, preset.tempo_center))
+    return TempoRule(low, high, center, min(TEMPO_SIGMA_PERCENT, limit / 2))
+
+
+def tempo_score(
+    source_bpm: Any, candidate_bpm: Any, center: float = 0.0, sigma: float = TEMPO_SIGMA_PERCENT,
+) -> Optional[float]:
     """Gaussian around the preset's preferred tempo change."""
     matched = matched_tempo(source_bpm, candidate_bpm)
     if matched is None:
         return None
-    score = math.exp(-0.5 * ((matched[1] - center) / TEMPO_SIGMA_PERCENT) ** 2)
+    score = math.exp(-0.5 * ((matched[1] - center) / sigma) ** 2)
     return score * HALF_DOUBLE_TEMPO_FACTOR if matched[2] else score
 
 
@@ -436,7 +465,7 @@ def genre_continuity_score(source: dict, candidate: dict) -> Optional[float]:
 
 # ---------------------------------------------------------------- filters
 
-def passes_intent_filter(intent: str, source: dict, candidate: dict) -> bool:
+def passes_intent_filter(intent: str, source: dict, candidate: dict, tempo_tolerance: Any = None) -> bool:
     """Hard constraints that ranking must not be able to talk its way past.
 
     Transition mode applies its own tempo rule instead (see transition_fit).
@@ -448,8 +477,8 @@ def passes_intent_filter(intent: str, source: dict, candidate: dict) -> bool:
     if matched is None:
         # Without a tempo on both sides there is no evidence the mix works.
         return False
-    low, high = PRESETS[intent].tempo_window
-    if not low <= matched[1] <= high:
+    rule = tempo_rule(intent, tempo_tolerance)
+    if not rule.low <= matched[1] <= rule.high:
         return False
     if intent == "throwback":
         score = era_score(source, candidate)
@@ -476,13 +505,15 @@ def evaluate(
     pair: Optional[dict] = None,
     has_analysis: bool = True,
     transition: Optional[TransitionFit] = None,
+    tempo_tolerance: Any = None,
 ) -> Scored:
     """Scores one candidate for a preset and explains the result."""
     intent = resolve_intent(intent)
     preset = PRESETS[intent]
+    tempo = tempo_rule(intent, tempo_tolerance)
     values: dict[str, Optional[float]] = {
         "bpm": transition.score if transition else
-        tempo_score(source.get("bpm"), candidate.get("bpm"), preset.tempo_center),
+        tempo_score(source.get("bpm"), candidate.get("bpm"), tempo.center, tempo.sigma),
         "key": key_score(source.get("key"), candidate.get("key"), intent),
         "vector": timbre_score(vector_similarity),
         "continuity": genre_continuity_score(source, candidate),
@@ -504,7 +535,7 @@ def evaluate(
         if available > 0
         else 0.0
     )
-    reasons = build_reasons(source, candidate, intent, values, pair, has_analysis, transition)
+    reasons = build_reasons(source, candidate, intent, values, pair, has_analysis, transition, tempo)
     strengths, summary = summarize(intent, source, candidate, components, transition)
     return Scored(score=score, components=components, reasons=reasons,
                   summary=summary, strengths=strengths)
@@ -658,6 +689,7 @@ def build_reasons(
     pair: Optional[dict],
     has_analysis: bool,
     transition: Optional[TransitionFit] = None,
+    tempo: Optional[TempoRule] = None,
 ) -> list[Reason]:
     reasons: list[Reason] = []
 
@@ -668,7 +700,7 @@ def build_reasons(
     if transition is not None:
         reasons.append(_transition_reason(source, transition))
     else:
-        reasons.append(_tempo_reason(source, candidate, intent))
+        reasons.append(_tempo_reason(source, candidate, intent, tempo))
         declared = parse_transition(candidate.get("title"))
         if declared is not None:
             reasons.append(Reason(
@@ -695,7 +727,7 @@ def build_reasons(
     return reasons
 
 
-def _tempo_reason(source: dict, candidate: dict, intent: str) -> Reason:
+def _tempo_reason(source: dict, candidate: dict, intent: str, tempo: Optional[TempoRule] = None) -> Reason:
     matched = matched_tempo(source.get("bpm"), candidate.get("bpm"))
     if matched is None:
         return Reason("tempo", "caution", "BPM が未取得のためテンポの相性は判定できません")
@@ -703,9 +735,11 @@ def _tempo_reason(source: dict, candidate: dict, intent: str) -> Reason:
     source_bpm, candidate_bpm = float(source["bpm"]), float(candidate["bpm"])
     conversion = "1/2" if shift == -1 else "2倍"
     note = f"、原曲{candidate_bpm:g} BPMの{conversion}換算" if shift else ""
-    center = PRESETS[intent].tempo_center
-    off = abs(percent - center)
-    tone = "good" if off <= 3 else "neutral" if off <= 6 else "caution"
+    # Judged against the window actually in force, so a narrowed tolerance
+    # also tightens what counts as a good tempo match.
+    tempo = tempo or tempo_rule(intent)
+    off = abs(percent - tempo.center)
+    tone = "good" if off <= tempo.sigma else "neutral" if off <= tempo.sigma * 2 else "caution"
     return Reason("tempo", tone, f"BPM {source_bpm:g} → {effective:g}（{percent:+.1f}%{note}）")
 
 

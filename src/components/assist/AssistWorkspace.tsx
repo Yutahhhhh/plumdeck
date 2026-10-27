@@ -18,6 +18,7 @@ import { useAudition } from "./useAudition";
 
 import { useLoadedHistory } from "./useLoadedHistory";
 import { MAX_EXCLUDED_TRACKS } from "./loaded-history";
+import { parseTempoTolerance, TEMPO_TOLERANCES, TEMPO_TOLERANCE_STORAGE_KEY, type TempoTolerance } from "./tempo-tolerance";
 
 const presets: { value: AssistIntent; label: string; detail: string }[] = [
   { value: "keep", label: "キープ", detail: "流れを保つ" },
@@ -30,6 +31,17 @@ const presets: { value: AssistIntent; label: string; detail: string }[] = [
   { value: "wordplay", label: "ワードプレイ", detail: "言葉でつなぐ" },
 ];
 const limits = [5, 8, 12, 20, 30, 50];
+
+const loadTempoTolerance = (): TempoTolerance => {
+  try { return parseTempoTolerance(localStorage.getItem(TEMPO_TOLERANCE_STORAGE_KEY)); }
+  catch { return null; }
+};
+const saveTempoTolerance = (value: TempoTolerance) => {
+  try {
+    if (value === null) localStorage.removeItem(TEMPO_TOLERANCE_STORAGE_KEY);
+    else localStorage.setItem(TEMPO_TOLERANCE_STORAGE_KEY, String(value));
+  } catch { /* the setting still applies for this window */ }
+};
 
 type Result =
   | { kind: "recommend"; key: string; value: AssistRecommendations }
@@ -48,6 +60,8 @@ export function AssistWorkspace() {
   const [genreScope, setGenreScope] = useState<GenreScope>("any");
   const [limit, setLimit] = useState(8);
   const [filters, setFilters] = useState<AssistFilters>(EMPTY_FILTERS);
+  // A DJ's tempo habit, not a per-track choice: remembered across sessions.
+  const [tempoTolerance, setTempoTolerance] = useState<TempoTolerance>(loadTempoTolerance);
   const [destination, setDestination] = useState<Track | null>(null);
   const [destinationQuery, setDestinationQuery] = useState("");
   const [destinationSearch, setDestinationSearch] = useState<AssistSearchResult | null>(null);
@@ -56,6 +70,9 @@ export function AssistWorkspace() {
   const [routeError, setRouteError] = useState<string | null>(null);
   const [routeBusy, setRouteBusy] = useState(false);
   const [routeRevision, setRouteRevision] = useState(0);
+  const [routeIndex, setRouteIndex] = useState(0);
+  const [routeNotice, setRouteNotice] = useState<string | null>(null);
+  const [routeRefresh, setRouteRefresh] = useState<{ contextKey: string; avoidIds: number[] }>({ contextKey: "", avoidIds: [] });
   const history = useLoadedHistory(decks.decks, dragging, freeze);
   const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -70,11 +87,13 @@ export function AssistWorkspace() {
   const historyFull = history.excludedIds.length > MAX_EXCLUDED_TRACKS;
   const filtered = hasFilters(filters);
   const filterKey = JSON.stringify(filters);
+  const routeContextKey = JSON.stringify([sourceId, destination?.id, intent, transition, genreScope, filterKey, tempoTolerance]);
+  const routeAvoidIds = routeRefresh.contextKey === routeContextKey ? routeRefresh.avoidIds : [];
   // Loading a suggestion onto the other rekordbox deck should not invalidate
   // the current Assist result. A new request is for search conditions, the
   // selected source deck track, or an explicit refresh only.
-  const requestKey = JSON.stringify([sourceId, intent, transition, genreScope, limit, filterKey, revision]);
-  const routeKey = JSON.stringify([sourceId, destination?.id, intent, transition, genreScope, filterKey, routeRevision]);
+  const requestKey = JSON.stringify([sourceId, intent, transition, genreScope, limit, filterKey, tempoTolerance, revision]);
+  const routeKey = JSON.stringify([routeContextKey, routeRevision, routeAvoidIds]);
 
   useEffect(() => {
     const current = ++generation.current;
@@ -89,7 +108,7 @@ export function AssistWorkspace() {
     setBusy(true);
     const excludeTrackIds = excluded.split(",").filter(Boolean).map(Number);
     const request: Promise<Result> = sourceId
-      ? assistService.recommendations({ sourceTrackId: sourceId, intent, transition, genreScope, excludeTrackIds, limit, filters })
+      ? assistService.recommendations({ sourceTrackId: sourceId, intent, transition, genreScope, excludeTrackIds, limit, filters, tempoTolerance })
         .then(value => ({ kind: "recommend" as const, key: requestKey, value }))
       : assistService.search({ filters, limit, excludeTrackIds })
         .then(value => ({ kind: "search" as const, key: requestKey, value }));
@@ -99,7 +118,7 @@ export function AssistWorkspace() {
       .finally(() => { if (generation.current === current && !freeze.current) setBusy(false); });
     return () => { generation.current += 1; };
     // `filters` itself is tracked through filterKey (and requestKey).
-  }, [sourceId, intent, transition, genreScope, limit, filterKey, revision, requestKey, filtered]);
+  }, [sourceId, intent, transition, genreScope, limit, filterKey, tempoTolerance, revision, requestKey, filtered]);
 
   useEffect(() => {
     const current = ++routeGeneration.current;
@@ -110,18 +129,26 @@ export function AssistWorkspace() {
     }
     setRouteBusy(true);
     setRouteError(null);
+    setRouteNotice(null);
     void assistService.routes({
       sourceTrackId: sourceId,
       targetTrackId: destination.id,
       intent,
       transition,
       maxIntermediate: 2,
-      limit: 3,
+      limit: 5,
       genreScope,
-      excludeTrackIds: history.excludedIds,
+      excludeTrackIds: [...new Set([...history.excludedIds, ...routeAvoidIds])],
       filters,
+      tempoTolerance,
     }).then(value => {
-      if (routeGeneration.current === current && !freeze.current) setRoute(value);
+      if (routeGeneration.current !== current || freeze.current) return;
+      if (routeAvoidIds.length > 0 && !value.routes.length && route?.routes.length) {
+        setRouteNotice("別のルートが見つからなかったため、現在の案を表示しています。");
+      } else {
+        setRoute(value);
+        setRouteIndex(0);
+      }
     }).catch(failure => {
       if (routeGeneration.current === current && !freeze.current) {
         setRouteError(getErrorDetail(failure));
@@ -130,7 +157,7 @@ export function AssistWorkspace() {
       if (routeGeneration.current === current && !freeze.current) setRouteBusy(false);
     });
     return () => { routeGeneration.current += 1; };
-  }, [sourceId, destination?.id, intent, transition, genreScope, filterKey, routeRevision, routeKey]);
+  }, [sourceId, destination?.id, intent, transition, genreScope, filterKey, tempoTolerance, routeRevision, routeKey]);
 
   const refresh = () => {
     if (freeze.current) return;
@@ -139,6 +166,9 @@ export function AssistWorkspace() {
     decks.refresh();
     setRevision(value => value + 1);
     setRouteRevision(value => value + 1);
+    setRouteIndex(0);
+    setRouteNotice(null);
+    setRouteRefresh({ contextKey: "", avoidIds: [] });
   };
   const drag = async (filepath: string, label: string) => {
     if (freeze.current) return;
@@ -165,6 +195,8 @@ export function AssistWorkspace() {
   const recommended = visible?.kind === "recommend" ? visible.value : null;
   const candidates = visible?.value.candidates ?? [];
   const presetLabel = presets.find(item => item.value === intent)?.label ?? "";
+  const activeRouteIndex = route?.routes.length ? Math.min(routeIndex, route.routes.length - 1) : 0;
+  const activeRoute = route?.routes[activeRouteIndex] ?? null;
 
   const otherDeckTargets = decks.decks
     .filter(deck => deck.slot !== slot && deck.status === "resolved" && deck.track)
@@ -189,6 +221,9 @@ export function AssistWorkspace() {
   const chooseDestination = (track: Track) => {
     setDestination(track);
     setDestinationSearch(null);
+    setRouteIndex(0);
+    setRouteNotice(null);
+    setRouteRefresh({ contextKey: "", avoidIds: [] });
     setRouteRevision(value => value + 1);
   };
 
@@ -197,6 +232,22 @@ export function AssistWorkspace() {
     setDestinationSearch(null);
     setRoute(null);
     setRouteError(null);
+    setRouteIndex(0);
+    setRouteNotice(null);
+    setRouteRefresh({ contextKey: "", avoidIds: [] });
+    setRouteRevision(value => value + 1);
+  };
+
+  const rerollRoute = () => {
+    if (freeze.current || routeBusy || !sourceId || !destination || !route?.routes.length) return;
+    const previousAvoid = routeRefresh.contextKey === routeContextKey ? routeRefresh.avoidIds : [];
+    const currentIntermediateIds = route.routes.flatMap(item => item.tracks.slice(1, -1).map(track => track.id));
+    setRouteRefresh({
+      contextKey: routeContextKey,
+      avoidIds: [...new Set([...previousAvoid, ...currentIntermediateIds])],
+    });
+    setRouteIndex(0);
+    setRouteNotice(null);
     setRouteRevision(value => value + 1);
   };
 
@@ -219,11 +270,12 @@ export function AssistWorkspace() {
     genre_scope: genreScope,
     limit,
     filters,
+    tempo_tolerance: tempoTolerance,
     exclude_track_ids: history.excludedIds,
     shown_track_ids: candidates.map(track => track.id),
   }, applyAgentSettings);
   // A preview with no card to stop it from must not keep playing.
-  const shownIds = [...(agent.list?.tracks ?? []), ...candidates, ...(recommended?.alternatives.map(item => item.track) ?? []), ...(route?.routes.flatMap(item => item.tracks.slice(1)) ?? [])].map(track => track.id).join(",");
+  const shownIds = [...(agent.list?.tracks ?? []), ...candidates, ...(recommended?.alternatives.map(item => item.track) ?? []), ...(activeRoute?.tracks.slice(1) ?? [])].map(track => track.id).join(",");
   const { playingId: auditionId, stop: stopAudition } = audition;
   useEffect(() => {
     if (auditionId !== null && !shownIds.split(",").includes(String(auditionId))) stopAudition();
@@ -327,18 +379,29 @@ export function AssistWorkspace() {
         <fieldset disabled={dragging} className="space-y-2">
           <legend className="mb-1 text-[10px] text-slate-400">フロアをどうしたい？</legend>
           <div className="grid grid-cols-4 gap-1.5">{presets.map(item => <button type="button" key={item.value} aria-pressed={intent === item.value} onClick={() => setIntent(item.value)} className={cn("rounded-lg border px-1 py-1.5 text-center", intent === item.value ? "border-amber-300/50 bg-amber-300/10 text-amber-200" : "border-white/10 text-slate-400 hover:bg-white/5")}><span className="block text-[11px] font-medium leading-tight">{item.label}</span><span className="mt-0.5 block text-[9px] opacity-70">{item.detail}</span></button>)}</div>
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <label className={cn("flex items-center gap-1.5 text-[10px]", intent === "wordplay" ? "text-slate-600" : "text-slate-300")} title="倍テン・ハーフテンの曲と、タイトルに「100-128 Transition」などとあるテンポ変化曲から探します">
               <input type="checkbox" checked={transition && intent !== "wordplay"} disabled={intent === "wordplay"} onChange={event => setTransition(event.target.checked)} className="accent-amber-300" />
               トランジション（テンポを移る）
             </label>
-            <div className="flex items-center gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <select
+                aria-label="テンポの許容幅"
+                title="基準曲の BPM からどこまで離れた曲を候補にするか。トランジションとワードプレイには適用されません"
+                value={tempoTolerance ?? ""}
+                disabled={transition || intent === "wordplay"}
+                onChange={event => { const value = parseTempoTolerance(event.target.value || null); setTempoTolerance(value); saveTempoTolerance(value); }}
+                className="rounded border border-slate-700 bg-slate-900 px-1.5 py-1 text-[10px] text-slate-300 disabled:opacity-40"
+              >
+                <option value="">テンポ幅：標準</option>
+                {TEMPO_TOLERANCES.map(value => <option key={value} value={value}>テンポ ±{value}%</option>)}
+              </select>
               <select aria-label="ジャンルの範囲" value={genreScope} onChange={event => setGenreScope(event.target.value as GenreScope)} className="rounded border border-slate-700 bg-slate-900 px-1.5 py-1 text-[10px] text-slate-300"><option value="any">同系統を優先</option><option value="same_genre">同一ジャンル</option><option value="same_subgenre">同一サブジャンル</option></select>
               <select aria-label="おすすめの件数" value={limit} onChange={event => setLimit(Number(event.target.value))} className="rounded border border-slate-700 bg-slate-900 px-1.5 py-1 text-[10px] text-slate-300">{limits.map(value => <option key={value} value={value}>{value}件</option>)}</select>
             </div>
           </div>
         </fieldset>
-        <FilterPanel value={filters} onChange={setFilters} disabled={dragging} />
+        <FilterPanel value={filters} onChange={setFilters} disabled={dragging} sourceArtist={sourceArtist} />
         {destination && (
           <section aria-label="目的地までのルート" aria-busy={routeBusy} className="space-y-2 rounded-xl border border-sky-300/25 bg-sky-300/[0.04] p-2.5">
             <div className="flex items-center justify-between gap-2">
@@ -346,13 +409,19 @@ export function AssistWorkspace() {
                 <p className="text-[11px] font-semibold text-sky-100">目的地までのルート</p>
                 <p className="text-[9px] text-sky-200/60">{sourceTitle || "出発曲"} → {destination.title} · {presetLabel}方針</p>
               </div>
-              {routeBusy && <RefreshCw className="size-3 animate-spin text-sky-200/70" />}
+              <div className="flex items-center gap-1.5">
+                {route && route.routes.length > 1 && <span className="text-[9px] tabular-nums text-sky-200/60">{activeRouteIndex + 1}/{route.routes.length}案</span>}
+                {route && route.routes.length > 1 && <button type="button" disabled={dragging || routeBusy} onClick={() => setRouteIndex(index => (index + 1) % route.routes.length)} className="rounded border border-sky-300/25 px-1.5 py-1 text-[9px] text-sky-100 hover:bg-sky-300/10 disabled:opacity-40" title="取得済みの別ルート案へ切り替えます">別案</button>}
+                {route && route.routes.length > 0 && <button type="button" disabled={dragging || routeBusy} onClick={rerollRoute} className="rounded border border-sky-300/25 px-1.5 py-1 text-[9px] text-sky-100 hover:bg-sky-300/10 disabled:opacity-40" title="現在の中継曲を避けてルートを洗い替えます">洗い替え</button>}
+                {routeBusy && <RefreshCw className="size-3 animate-spin text-sky-200/70" />}
+              </div>
             </div>
             {routeError && <p role="alert" className="rounded bg-rose-950/40 p-2 text-[10px] text-rose-200">ルートを取得できませんでした。{routeError}</p>}
+            {routeNotice && <p role="status" className="rounded bg-amber-300/5 p-2 text-[10px] text-amber-100/80">{routeNotice}</p>}
             {route?.caveats.map((caveat, index) => <p key={index} className="text-[10px] text-amber-200/80">・{caveat}</p>)}
             {route?.notes.map((note, index) => <p key={index} className="text-[10px] leading-relaxed text-slate-400">{note}</p>)}
             {routeBusy && !route && <p className="py-3 text-center text-[10px] text-slate-500">目的地までのつなぎ方を探しています…</p>}
-            {route?.routes.map((item, index) => <RouteCard key={`${item.tracks.map(track => track.id).join("-")}-${index}`} route={item} index={index} dragging={dragging} freeze={freeze} onDrag={(filepath, label) => void drag(filepath, label)} audition={audition.control} />)}
+            {activeRoute && <RouteCard key={`${activeRoute.tracks.map(track => track.id).join("-")}-${activeRouteIndex}`} route={activeRoute} index={activeRouteIndex} dragging={dragging} freeze={freeze} onDrag={(filepath, label) => void drag(filepath, label)} audition={audition.control} />}
             {route && !route.routes.length && !routeBusy && <p className="py-3 text-center text-[10px] text-slate-400">この条件では目的地までのルートが見つかりません。</p>}
           </section>
         )}
@@ -360,7 +429,7 @@ export function AssistWorkspace() {
         {history.message && <p role="status" className="text-[10px] text-slate-400">{history.message}</p>}
         {historyFull && <p role="alert" className="text-[11px] text-amber-200">除外履歴が10,000曲を超えました。おすすめを再開するには履歴をリセットしてください。</p>}
         <section aria-label="おすすめの曲" aria-busy={busy} className="space-y-2">
-          <div className="flex justify-between text-[10px] text-slate-500"><span>{visible?.kind === "search" ? "条件に合う曲" : `おすすめ（${presetLabel}${recommended?.transition ? "・トランジション" : ""}）`} {visible ? `· ${candidates.length}` : ""}</span><span>{dragging ? "ドラッグ中 · 候補を固定" : "曲をデッキの曲名へドラッグ"}</span></div>
+          <div className="flex justify-between text-[10px] text-slate-500"><span>{visible?.kind === "search" ? "条件に合う曲" : `おすすめ（${presetLabel}${recommended?.transition ? "・トランジション" : recommended?.tempo_tolerance ? `・テンポ±${recommended.tempo_tolerance}%` : ""}）`} {visible ? `· ${candidates.length}` : ""}</span><span>{dragging ? "ドラッグ中 · 候補を固定" : "曲をデッキの曲名へドラッグ"}</span></div>
           {recommended && <p className="text-[9px] text-slate-600" title="この観点の採点の内訳">採点：{recommended.basis}</p>}
           {visible && visible.value.filters.length > 0 && <p className="text-[10px] text-slate-500">絞り込み：{visible.value.filters.join(" / ")}</p>}
           {recommended && recommended.caveats.length > 0 && <div role="note" className="space-y-0.5 rounded-lg border border-amber-300/20 bg-amber-300/5 px-2.5 py-1.5 text-[10px] leading-relaxed text-amber-100/80">{recommended.caveats.map((caveat, i) => <p key={i}>・{caveat}</p>)}</div>}

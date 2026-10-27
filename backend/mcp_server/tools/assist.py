@@ -96,9 +96,9 @@ def assist_recommend(
     """Rank next-track candidates with the assist window's engine. Read-only.
 
     Every omitted argument comes from the window's current state (source deck,
-    loaded-track exclusions, preset, filters…). intent (which way to move the
-    floor): keep | hype | dance | calm | emotional | bright | throwback |
-    wordplay. transition=true looks for half/double-time partners and titled
+    loaded-track exclusions, preset, filters, tempo tolerance…). intent (which
+    way to move the floor): keep | hype | dance | calm | emotional | bright |
+    throwback | wordplay. transition=true looks for half/double-time partners and titled
     tempo-changing edits ("100-128 Transition"); read the returned `caveats`.
     genre_scope: any | same_genre | same_subgenre. filters: {bpm_min, bpm_max,
     genres[], subgenres[], artists[], keys[] (Camelot or "A minor"), year_min,
@@ -131,6 +131,7 @@ def assist_recommend(
             genre_scope=genre_scope or state.get("genre_scope") or "any",
             filters=chosen_filters,
             reference=reference,
+            tempo_tolerance=state.get("tempo_tolerance"),
         )
     result["candidates"] = [_brief(c) for c in result["candidates"]]
     result["alternatives"] = [
@@ -203,6 +204,7 @@ def assist_route(
             exclude_track_ids=list(state.get("exclude_track_ids") or []),
             genre_scope=chosen_scope,
             filters=chosen_filters,
+            tempo_tolerance=state.get("tempo_tolerance"),
         )
     result["routes"] = [
         {

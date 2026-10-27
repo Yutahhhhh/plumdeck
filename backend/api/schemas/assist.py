@@ -64,6 +64,8 @@ class AssistRecommendRequest(BaseModel):
     genre_scope: Literal["any", "same_genre", "same_subgenre"] = "any"
     genres: Optional[List[str]] = Field(default=None, max_length=32)
     filters: AssistFiltersIn = Field(default_factory=AssistFiltersIn)
+    # Narrow the preset's tempo window to ±this percent (half/double-aware).
+    tempo_tolerance: Optional[float] = Field(default=None, gt=0, le=12)
 
 
 class AssistRouteRequest(BaseModel):
@@ -78,6 +80,8 @@ class AssistRouteRequest(BaseModel):
     exclude_track_ids: List[int] = Field(default_factory=list, max_length=10000)
     genre_scope: Literal["any", "same_genre", "same_subgenre"] = "any"
     filters: AssistFiltersIn = Field(default_factory=AssistFiltersIn)
+    # Narrow the preset's tempo window to ±this percent (half/double-aware).
+    tempo_tolerance: Optional[float] = Field(default=None, gt=0, le=12)
 
 
 class AssistSearchRequest(BaseModel):
@@ -101,6 +105,7 @@ class AssistWindowStateIn(BaseModel):
     genre_scope: Literal["any", "same_genre", "same_subgenre"] = "any"
     limit: int = Field(default=12, ge=1, le=50)
     filters: AssistFiltersIn = Field(default_factory=AssistFiltersIn)
+    tempo_tolerance: Optional[float] = Field(default=None, gt=0, le=12)
     exclude_track_ids: List[int] = Field(default_factory=list, max_length=10000)
     shown_track_ids: List[int] = Field(default_factory=list, max_length=100)
 

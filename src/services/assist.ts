@@ -105,6 +105,12 @@ export const hasFilters = (filters: AssistFilters) =>
   || filters.subgenres.length > 0 || filters.artists.length > 0 || filters.keys.length > 0
   || filters.year_min != null || filters.year_max != null || filters.query.trim() !== "";
 
+export interface AssistArtist {
+  name: string;
+  /** Library tracks credited to this artist (all spellings that fold together). */
+  tracks: number;
+}
+
 export interface AssistHistoryEvidence {
   /** Sets where this track came right after the source deck's track. */
   followed: number;
@@ -141,6 +147,8 @@ export interface AssistRecommendations {
   intent: AssistIntent;
   intent_label: string;
   transition: boolean;
+  /** The ±percent the preset's tempo window was narrowed to, or null for the preset's own. */
+  tempo_tolerance: number | null;
   source_track_id: number;
   basis: string;
   filters: string[];
@@ -195,6 +203,7 @@ export interface AssistWindowState {
   genre_scope: GenreScope;
   limit: number;
   filters: AssistFilters;
+  tempo_tolerance: number | null;
   exclude_track_ids: number[];
   shown_track_ids: number[];
 }
@@ -303,6 +312,7 @@ export const assistService = {
     limit?: number;
     excludeTrackIds?: number[];
     filters?: AssistFilters;
+    tempoTolerance?: number | null;
   }) =>
     apiClient.post<AssistRecommendations>("/assist/recommendations", {
       source_track_id: params.sourceTrackId,
@@ -312,6 +322,7 @@ export const assistService = {
       limit: params.limit ?? 12,
       exclude_track_ids: params.excludeTrackIds ?? [],
       filters: params.filters ?? EMPTY_FILTERS,
+      tempo_tolerance: params.tempoTolerance ?? null,
     }, 60_000),
 
   routes: (params: {
@@ -324,6 +335,7 @@ export const assistService = {
     genreScope?: GenreScope;
     excludeTrackIds?: number[];
     filters?: AssistFilters;
+    tempoTolerance?: number | null;
   }) =>
     apiClient.post<AssistRoutes>("/assist/routes", {
       source_track_id: params.sourceTrackId,
@@ -335,7 +347,11 @@ export const assistService = {
       genre_scope: params.genreScope ?? "any",
       exclude_track_ids: params.excludeTrackIds ?? [],
       filters: params.filters ?? EMPTY_FILTERS,
-    }, 60_000),
+      tempo_tolerance: params.tempoTolerance ?? null,
+    }, 120_000),
+
+  /** Library artists for the artist filter, most tracks first. */
+  artists: () => apiClient.get<AssistArtist[]>("/assist/artists"),
 
   search: (params: { filters: AssistFilters; limit?: number; excludeTrackIds?: number[] }) =>
     apiClient.post<AssistSearchResult>("/assist/search", {

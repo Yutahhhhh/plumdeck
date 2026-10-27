@@ -168,7 +168,9 @@ class RecommendationRepository:
                 ABS(LOG2(t.bpm / :target_bpm) + 1)
             ) ELSE 1000 END"""
             params["target_bpm"] = target_bpm
-            params["max_tempo_distance"] = math.log2(1.4)
+            # A caller with a narrow tempo window cuts the pool to it.
+            max_distance = self._to_float(target_params.get("max_tempo_distance"))
+            params["max_tempo_distance"] = max_distance if max_distance and max_distance > 0 else math.log2(1.4)
             query_str += f" AND (({tempo_distance}) <= :max_tempo_distance OR t.bpm = 0 OR t.bpm IS NULL)"
             order_clauses.append(tempo_distance)
 
