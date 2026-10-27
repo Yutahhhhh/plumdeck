@@ -91,6 +91,21 @@ def test_bright_prefers_the_move_to_major(session, crate):
     assert ids(result)[0] == crate["major"].id
 
 
+def test_double_time_is_offered_only_in_transition_mode(session, crate):
+    service = AssistAppService(session)
+    for preset in scoring.MOOD_PRESETS:
+        if preset == "throwback":
+            continue
+        assert crate["double"].id not in ids(service.recommend(crate["source"].id, preset))
+    assert crate["double"].id in ids(service.recommend(crate["source"].id, "keep", transition=True))
+
+
+def test_mixing_presets_do_not_weigh_the_key():
+    for preset in ("keep", "hype", "dance", "calm", "throwback"):
+        assert "key" not in scoring.PRESETS[preset].weights
+        assert scoring.PRESETS[preset].tempo_center == 0.0
+
+
 def test_normal_presets_never_offer_a_track_with_unknown_tempo(session, crate):
     for preset in scoring.MOOD_PRESETS:
         assert crate["unknown_bpm"].id not in ids(AssistAppService(session).recommend(crate["source"].id, preset))
@@ -100,8 +115,8 @@ def test_normal_presets_never_offer_a_track_with_unknown_tempo(session, crate):
     ("keep", None, (-6.0, 6.0, 0.0, 3.0)),
     ("keep", 2, (-2.0, 2.0, 0.0, 1.0)),
     # Narrowing never turns a directional preset around: hype still never steps down.
-    ("hype", 1, (-1.0, 1.0, 1.0, 0.5)),
-    ("calm", 2, (-2.0, 2.0, -2.0, 1.0)),
+    ("hype", 1, (-1.0, 1.0, 0.0, 0.5)),
+    ("calm", 2, (-2.0, 2.0, 0.0, 1.0)),
     ("keep", 10, (-6.0, 6.0, 0.0, 3.0)),
     ("wordplay", 2, (-100.0, 100.0, 0.0, 3.0)),
 ])

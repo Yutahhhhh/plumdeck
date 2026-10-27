@@ -26,9 +26,13 @@ def test_counts_what_followed_and_what_was_nearby():
     assert history.related("a") == ["b", "x", "y"]
 
 
-def test_following_the_source_outranks_merely_being_played():
-    history = PlayHistory([session(30, "a", "b"), session(30, "c")], NOW)
+def test_only_evidence_about_the_source_lifts_a_pick():
+    history = PlayHistory([session(30, "a", "b", "x", "c"), session(2, "d"), session(2, "d")], NOW)
+    # Mixed straight out of the source beats merely being a few tracks away.
     assert history.evidence("a", "b").affinity > history.evidence("a", "c").affinity > 0
+    # Being in the DJ's current rotation says nothing about mixing out of "a".
+    rotation = history.evidence("a", "d")
+    assert rotation.plays == 2 and rotation.affinity == 0
 
 
 def test_previews_and_the_set_being_played_now_are_ignored():

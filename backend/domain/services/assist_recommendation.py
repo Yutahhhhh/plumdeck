@@ -5,11 +5,11 @@ the same measurements (tempo, Camelot key movement, analysed features, release
 year) in its own direction rather than reordering one fixed score:
 
 * ``keep``      — stay in the current pocket.
-* ``hype``      — raise the heat: energy up, while preserving a playable
-  stylistic bridge.
+* ``hype``      — raise the heat: energy up at the deck's tempo, while
+  preserving a playable stylistic bridge.
 * ``dance``     — more groove: danceability up, while preserving a playable
   stylistic bridge.
-* ``calm``      — cool down: energy and noise down, key -1 / to minor.
+* ``calm``      — cool down: energy and noise down at the deck's tempo.
 * ``emotional`` — deeper and more wistful: minor keys, darker tone, energy held.
 * ``bright``    — open and euphoric: major keys, brighter tone, energy held.
 * ``throwback`` — reach back in time: at least five years older, still mixable.
@@ -48,28 +48,34 @@ class Preset:
 
 
 PRESETS: dict[str, Preset] = {
+    # Mixing presets carry no key weight: replaying the DJ's own sets, their key
+    # moves were no more compatible than a random track at the same tempo, and
+    # a key preference only pushed off-tempo picks up. The emotional and
+    # bright presets still read the key, as a minor/major mood, not for mixing.
     "keep": Preset(
         "キープ", "今の流れを保つ", (-6.0, 6.0), 0.0,
         {"energy": "hold", "danceability": "hold", "noisiness": "hold"},
-        {"bpm": 0.24, "key": 0.06, "vector": 0.22, "continuity": 0.22, "era_proximity": 0.10,
+        {"bpm": 0.30, "vector": 0.22, "continuity": 0.22, "era_proximity": 0.10,
          "energy": 0.06, "danceability": 0.05, "noisiness": 0.05},
     ),
+    # Hype and calm move the floor through energy, not by drifting the tempo:
+    # their windows still allow a push up or down, but the best tempo is the deck's.
     "hype": Preset(
-        "盛り上げる", "熱量を上げる", (-2.0, 8.0), 3.0,
+        "盛り上げる", "熱量を上げる", (-2.0, 8.0), 0.0,
         {"energy": "up", "noisiness": "not_down"},
-        {"bpm": 0.19, "key": 0.18, "vector": 0.06, "continuity": 0.04, "era_proximity": 0.05,
+        {"bpm": 0.37, "vector": 0.06, "continuity": 0.04, "era_proximity": 0.05,
          "energy": 0.35, "noisiness": 0.13},
     ),
     "dance": Preset(
         "踊らせる", "体が動くグルーヴへ", (-6.0, 6.0), 0.0,
         {"danceability": "up", "energy": "not_down"},
-        {"bpm": 0.19, "key": 0.06, "vector": 0.12, "continuity": 0.09, "era_proximity": 0.05,
+        {"bpm": 0.25, "vector": 0.12, "continuity": 0.09, "era_proximity": 0.05,
          "danceability": 0.35, "energy": 0.14},
     ),
     "calm": Preset(
-        "落ち着かせる", "クールダウン", (-8.0, 2.0), -3.0,
+        "落ち着かせる", "クールダウン", (-8.0, 2.0), 0.0,
         {"energy": "down", "noisiness": "down"},
-        {"bpm": 0.17, "key": 0.16, "vector": 0.07, "continuity": 0.08, "era_proximity": 0.05,
+        {"bpm": 0.33, "vector": 0.07, "continuity": 0.08, "era_proximity": 0.05,
          "energy": 0.32, "noisiness": 0.15},
     ),
     "emotional": Preset(
@@ -87,7 +93,7 @@ PRESETS: dict[str, Preset] = {
     "throwback": Preset(
         "時代を戻す", "懐かしい曲で沸かせる", (-6.0, 6.0), 0.0,
         {"energy": "hold", "danceability": "hold"},
-        {"bpm": 0.20, "key": 0.07, "vector": 0.12, "continuity": 0.12,
+        {"bpm": 0.27, "vector": 0.12, "continuity": 0.12,
          "era": 0.30, "energy": 0.10, "danceability": 0.09},
     ),
     "wordplay": Preset(
@@ -118,9 +124,9 @@ COMPONENT_LABELS: dict[str, str] = {
 
 THROWBACK_MIN_YEARS = 5
 TEMPO_SIGMA_PERCENT = 3.0
-# A half/double-time reading can be musically useful, but it is not as close as
-# a direct BPM match. Keep it available outside transition mode while preventing
-# it from tying with an ordinary near-tempo candidate.
+# A half/double-time partner is a tempo change, so outside transition mode it is
+# not offered (see passes_intent_filter). Wordplay, which keeps any approved
+# edge, still scores one below an ordinary near-tempo match.
 HALF_DOUBLE_TEMPO_FACTOR = 0.72
 # Transition mode: how closely a half/double partner or an edit's opening tempo
 # must match the deck.
@@ -148,6 +154,11 @@ TIMBRE_CEILING = 0.95
 # are already the DJ's own choice.
 HISTORY_WEIGHTS: dict[str, float] = {"keep": 0.45, "wordplay": 0.0}
 DEFAULT_HISTORY_WEIGHT = 0.25
+# History only lifts a pick that is itself an easy mix. A one-off transition in
+# an old set may be one that did not work, and a lift must never carry a track
+# that is off tempo or a jump in energy past tracks that actually mix.
+HISTORY_TEMPO_GATE_PERCENT = 3.0
+HISTORY_ENERGY_GATE = 0.2
 
 # An aspect counts as a strength or a weakness only past these values.
 STRENGTH_THRESHOLD = 0.7
@@ -165,6 +176,21 @@ FEEL_FEATURES = ("energy", "danceability", "noisiness")
 
 def history_weight(intent: str) -> float:
     return HISTORY_WEIGHTS.get(intent, DEFAULT_HISTORY_WEIGHT)
+
+
+def history_fits(source: dict, candidate: dict, transition: bool = False) -> bool:
+    """Whether the DJ's history may lift this candidate: only an easy mix.
+
+    Near the deck's tempo without a half/double-time reading, and no jump in
+    energy. Transition mode changes tempo on purpose, so only energy applies.
+    Unknown energy is not held against a pick its tempo already vouches for.
+    """
+    if not transition:
+        matched = matched_tempo(source.get("bpm"), candidate.get("bpm"))
+        if matched is None or matched[2] or abs(matched[1]) > HISTORY_TEMPO_GATE_PERCENT:
+            return False
+    left, right = _number(source.get("energy")), _number(candidate.get("energy"))
+    return left is None or right is None or abs(right - left) <= HISTORY_ENERGY_GATE
 
 
 def resolve_intent(intent: str) -> str:
@@ -476,6 +502,9 @@ def passes_intent_filter(intent: str, source: dict, candidate: dict, tempo_toler
     matched = matched_tempo(source.get("bpm"), candidate.get("bpm"))
     if matched is None:
         # Without a tempo on both sides there is no evidence the mix works.
+        return False
+    if matched[2]:
+        # Half or double time is a tempo change: transition mode offers those.
         return False
     rule = tempo_rule(intent, tempo_tolerance)
     if not rule.low <= matched[1] <= rule.high:

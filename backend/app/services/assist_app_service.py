@@ -20,7 +20,8 @@ Transition mode looks for half/double-time partners and titled tempo-changing
 edits instead of nearby tempos. "Like X" references exist for the chat agent's
 tools only; judging resemblance properly needs the agent's reasoning. The DJ's
 own rekordbox HISTORY adds tracks they played next to the source before and
-lifts proven picks in the ranking, without changing what a preset measures.
+lifts those picks in the ranking when they are themselves an easy mix, without
+changing what a preset measures.
 
 *Search* applies the same filters and availability rule without a source deck.
 """
@@ -734,18 +735,23 @@ class AssistAppService:
                 self._recording_identity(payload.get("title"), payload.get("artist")),
             ) if history is not None else None
             entries.append({"payload": payload, "result": result, "like": like, "target": target,
-                            "history": evidence})
+                            "history": evidence,
+                            "history_fits": evidence is not None and scoring.history_fits(
+                                source_payload, payload, bool(context["transition"]))})
         return entries, unavailable, filtered
 
     @staticmethod
     def _order(target, intent):
-        """Preset fit (blended with likeness for "like X"), lifted by the DJ's history."""
+        """Preset fit (blended with likeness for "like X"), lifted by the DJ's
+        history where the pick is itself an easy mix (scoring.history_fits)."""
         weight = scoring.history_weight(intent)
 
         def key(entry):
             score = entry["result"].score if target is None else scoring.blend(entry["result"].score, entry["like"])
             evidence = entry.get("history")
-            return score + weight * evidence.affinity if evidence is not None else score
+            if evidence is None or not entry.get("history_fits"):
+                return score
+            return score + weight * evidence.affinity
         return key
 
     def _rank(self, entries, key) -> list[dict[str, Any]]:
@@ -803,8 +809,11 @@ class AssistAppService:
         if evidence is not None:
             if evidence.related:
                 summary = f"{play_history.headline(evidence)}／{summary}"
+            text = play_history.describe(evidence)
+            if evidence.related and entry.get("history_fits") is False:
+                text += "。テンポかエネルギーが離れているため、順位には反映していません"
             reasons.insert(0, {"kind": "history", "tone": "good" if evidence.related else "neutral",
-                               "text": play_history.describe(evidence)})
+                               "text": text})
         return {
             **payload,
             "score": round(result.score, 4),

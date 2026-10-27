@@ -258,9 +258,9 @@ def test_groove_refuses_candidates_that_leave_the_pocket(session, library):
 def test_presets_move_the_floor_in_their_own_direction(session, library):
     service = AssistAppService(session)
     loud = library["contrast"].id  # +0.35 energy, +2% tempo, key +1
-    hype = [c["id"] for c in service.recommend(library["source"].id, "hype")["candidates"]]
+    hype = {c["id"]: c for c in service.recommend(library["source"].id, "hype")["candidates"]}
     calm = [c["id"] for c in service.recommend(library["source"].id, "calm")["candidates"]]
-    assert hype[0] == loud
+    assert hype[loud]["components"]["energy"] > hype[library["near"].id]["components"]["energy"]
     # +2.3% is outside calm's tempo window (it may slow down, barely speed up).
     assert library["near"].id in calm and loud not in calm
 
@@ -272,7 +272,7 @@ def test_legacy_groove_is_keep(session, library):
 
 def test_a_candidate_explains_the_preset_with_measured_moves(session, library):
     result = AssistAppService(session).recommend(library["source"].id, "hype")
-    top = result["candidates"][0]
+    top = next(c for c in result["candidates"] if c["id"] == library["contrast"].id)
     assert top["summary"].startswith("盛り上げる向き")
     assert "エネルギー +0.35" in top["summary"]
     assert "9A→" not in top["summary"] and "10A→11A（+1）" in top["summary"]
@@ -385,15 +385,16 @@ def test_an_unknown_intent_is_rejected(session, library):
 
 
 def test_missing_key_information_is_dropped_rather_than_scored_as_neutral():
+    # Emotional reads the key as a minor/major mood; the mixing presets do not weigh it.
     known = scoring.evaluate(
         {"bpm": 120, "key": "8A", "energy": 0.5},
         {"bpm": 120, "key": "9A", "energy": 0.5},
-        "groove",
+        "emotional",
     )
     unknown = scoring.evaluate(
         {"bpm": 120, "key": "8A", "energy": 0.5},
         {"bpm": 120, "key": "", "energy": 0.5},
-        "groove",
+        "emotional",
     )
     assert "key" in known.components
     assert "key" not in unknown.components
@@ -413,16 +414,18 @@ def test_feature_direction_follows_the_preset():
     assert scoring.feature_score({}, loud, "energy", "up") is None
 
 
-def test_half_time_transitions_are_recognised_as_compatible():
-    result = scoring.evaluate(
-        {"bpm": 174, "key": "8A", "energy": 0.5},
-        {"bpm": 87, "key": "8A", "energy": 0.5},
-        "groove",
-    )
+def test_half_time_is_recognised_but_left_to_transition_mode():
+    source, half = {"bpm": 174, "key": "8A", "energy": 0.5}, {"bpm": 87, "key": "8A", "energy": 0.5}
+    result = scoring.evaluate(source, half, "groove")
     tempo = next(r for r in result.reasons if r.kind == "tempo")
     assert "2倍換算" in tempo.text
     assert result.components["bpm"] == pytest.approx(scoring.HALF_DOUBLE_TEMPO_FACTOR)
     assert scoring.tempo_score(174, 174) > result.components["bpm"]
+    # A half/double-time partner is a tempo change, offered only by transition mode.
+    for preset in scoring.MOOD_PRESETS:
+        assert not scoring.passes_intent_filter(preset, source, half)
+    assert scoring.passes_intent_filter("wordplay", source, half)
+    assert scoring.transition_fit(174, half) is not None
 
 
 def test_cross_genre_continuity_is_soft_but_visible():
@@ -670,6 +673,43 @@ def test_history_never_overrides_exclusions_or_hard_rules(session, history_libra
     assert lib["played"].id not in ids
     # Played next to the source, but 27% faster is still outside "keep".
     assert lib["far_tempo"].id not in ids
+
+
+def test_history_only_lifts_a_pick_that_is_itself_an_easy_mix(session, history_library, mocker):
+    lib = history_library
+    # Followed the source twice, but +2.3% tempo and +0.35 energy: not an easy mix.
+    mocker.patch.object(rekordbox_library, "play_sessions", return_value=played_sets(
+        [lib["source"].filepath, lib["contrast"].filepath],
+        [lib["source"].filepath, lib["contrast"].filepath],
+    ))
+    result = AssistAppService(session).recommend(lib["source"].id, "keep")
+    ids = [c["id"] for c in result["candidates"]]
+    assert ids.index(lib["near"].id) < ids.index(lib["contrast"].id)
+    contrast = next(c for c in result["candidates"] if c["id"] == lib["contrast"].id)
+    assert contrast["history"]["followed"] == 2
+    assert "順位には反映していません" in contrast["reasons"][0]["text"]
+
+
+def test_recent_rotation_alone_never_lifts_a_pick(session, history_library, mocker):
+    lib = history_library
+    other = [lib["far_tempo"].filepath]
+    mocker.patch.object(rekordbox_library, "play_sessions", return_value=played_sets(
+        [*other, lib["played"].filepath], [*other, lib["played"].filepath],
+    ))
+    ids = [c["id"] for c in AssistAppService(session).recommend(lib["source"].id, "keep")["candidates"]]
+    assert ids.index(lib["near"].id) < ids.index(lib["played"].id)
+
+
+@pytest.mark.parametrize("source,candidate,transition,fits", [
+    ({"bpm": 100, "energy": 0.5}, {"bpm": 102, "energy": 0.6}, False, True),
+    ({"bpm": 100, "energy": 0.5}, {"bpm": 104, "energy": 0.5}, False, False),
+    ({"bpm": 100, "energy": 0.5}, {"bpm": 50, "energy": 0.5}, False, False),
+    ({"bpm": 100, "energy": 0.5}, {"bpm": 101, "energy": 0.8}, False, False),
+    ({"bpm": 100}, {"bpm": 101}, False, True),
+    ({"bpm": 100, "energy": 0.5}, {"bpm": 128, "energy": 0.6}, True, True),
+])
+def test_history_gate(source, candidate, transition, fits):
+    assert scoring.history_fits(source, candidate, transition) is fits
 
 
 def test_an_unreadable_history_only_removes_the_lift(session, history_library, mocker):

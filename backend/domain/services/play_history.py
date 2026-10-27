@@ -1,10 +1,15 @@
 """What the DJ has actually played, as evidence for the next suggestion.
 
 Analysed features say whether two tracks *can* mix; the DJ's own rekordbox
-HISTORY says which ones they *do* reach for. Replaying a DJ's earlier sets
-against later ones, three signals predicted the real next track far better than
-any feature weighting: the candidate followed this exact track before, it was
-played within a few positions of it, and it is in the DJ's current rotation.
+HISTORY says which ones they *do* reach for: the candidate followed this exact
+track before, or was played within a few positions of it.
+
+Only that source-specific evidence lifts a suggestion. Whether a track is in
+the DJ's current rotation says nothing about whether it mixes out of *this*
+track; replaying earlier sets against later ones, a rotation term pushed
+unrelated, harder-to-mix tracks into the top picks and predicted the real next
+track worse than the source-specific signals alone. Plays and recency are
+still reported, so the DJ can see them.
 
 Tracks are keyed by recording identity (normalized title and artist), so a
 second file of the same recording shares its history. Sessions started within
@@ -26,14 +31,11 @@ NEAR_WINDOW = 3
 # Sessions shorter than this are previews or practice, not sets.
 MIN_SESSION_TRACKS = 8
 ACTIVE_SESSION_WINDOW = timedelta(hours=12)
-ROTATION_DECAY_DAYS = 60.0
-# Fitted on time-ordered history (earlier sets predicting later ones) and
-# squashed so the affinity stays in 0..1 beside a preset score.
-FOLLOWED_WEIGHT = 1.4
-NEARBY_WEIGHT = 2.8
-ROTATION_WEIGHT = 2.1
-PLAYED_WEIGHT = 0.9
-PLAYS_WEIGHT = 0.4
+# Squashed so the affinity stays in 0..1 beside a preset score. Mixing straight
+# out of the source is the direct evidence; "nearby" also counts tracks a few
+# positions apart that were never mixed into each other, so it counts for less.
+FOLLOWED_WEIGHT = 2.8
+NEARBY_WEIGHT = 0.7
 AFFINITY_SCALE = 3.0
 
 
@@ -43,7 +45,7 @@ class Evidence:
     nearby: int  # times played within NEAR_WINDOW positions of the source
     plays: int  # sets that played the candidate at all
     days_since: Optional[float]  # since the candidate was last played
-    affinity: float
+    affinity: float  # from followed and nearby only; 0 when unrelated to the source
 
     @property
     def related(self) -> bool:
@@ -109,14 +111,7 @@ class PlayHistory:
             return None
         last = self._last.get(candidate)
         days = max(0.0, (self.now - last).total_seconds() / 86400) if last is not None else None
-        rotation = math.exp(-days / ROTATION_DECAY_DAYS) if days is not None else 0.0
-        strength = (
-            FOLLOWED_WEIGHT * math.log1p(followed)
-            + NEARBY_WEIGHT * math.log1p(nearby)
-            + ROTATION_WEIGHT * rotation
-            + PLAYED_WEIGHT * (plays > 0)
-            + PLAYS_WEIGHT * math.log1p(plays)
-        )
+        strength = FOLLOWED_WEIGHT * math.log1p(followed) + NEARBY_WEIGHT * math.log1p(nearby)
         return Evidence(followed, nearby, plays, days, 1.0 - math.exp(-strength / AFFINITY_SCALE))
 
 
