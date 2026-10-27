@@ -3,8 +3,10 @@ pytest
 pytest-mock
 fastapi
 httpx
-sqlmodel
-duckdb
+# Match the last passing PR runtime; newer versions reject existing naive timestamps.
+sqlmodel==0.0.42
+# Preserve the migration constraints verified by the last passing PR runtime.
+duckdb==1.5.5
 duckdb-engine
 pydantic-settings
 platformdirs
