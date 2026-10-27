@@ -139,15 +139,18 @@ class RecommendationRepository:
         params = {}
         order_clauses = []
 
+        # Id lists travel as one comma-separated string. Bound element by element,
+        # duckdb probes every value for pandas types, which costs about a second
+        # for a library-sized list on every assist request.
         if candidate_ids is not None:
             if not candidate_ids:
                 return []
-            query_str += " AND t.id IN :candidate_ids"
-            params["candidate_ids"] = tuple(candidate_ids)
+            query_str += " AND t.id IN (SELECT CAST(unnest(string_split(:candidate_ids, ',')) AS BIGINT))"
+            params["candidate_ids"] = ",".join(str(int(track_id)) for track_id in candidate_ids)
 
         if exclude_ids:
-            query_str += " AND t.id NOT IN :exclude_ids"
-            params["exclude_ids"] = tuple(exclude_ids)
+            query_str += " AND t.id NOT IN (SELECT CAST(unnest(string_split(:exclude_ids, ',')) AS BIGINT))"
+            params["exclude_ids"] = ",".join(str(int(track_id)) for track_id in exclude_ids)
 
         genre_conditions = []
         if genres:
