@@ -57,3 +57,7 @@ backup/*
 !.env.*.example
 !**/.env.example
 !**/.env.*.example
+
+# Rust port: sandbox copies for parity runs and the helper venv
+target-tmp/
+tools/parity/.venv/

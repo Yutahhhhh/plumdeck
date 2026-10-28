@@ -1,0 +1,2336 @@
+{
+  "duckdb_version": "v1.5.5",
+  "schema_version": 5,
+  "sequences": [
+    {
+      "name": "seq_play_history_id",
+      "start_value": 1,
+      "min_value": 1,
+      "max_value": 9223372036854775807,
+      "increment_by": 1,
+      "cycle": false
+    },
+    {
+      "name": "seq_recording_segments_id",
+      "start_value": 1,
+      "min_value": 1,
+      "max_value": 9223372036854775807,
+      "increment_by": 1,
+      "cycle": false
+    },
+    {
+      "name": "seq_recordings_id",
+      "start_value": 1,
+      "min_value": 1,
+      "max_value": 9223372036854775807,
+      "increment_by": 1,
+      "cycle": false
+    },
+    {
+      "name": "seq_setlist_tracks_id",
+      "start_value": 1,
+      "min_value": 1,
+      "max_value": 9223372036854775807,
+      "increment_by": 1,
+      "cycle": false
+    },
+    {
+      "name": "seq_setlists_id",
+      "start_value": 1,
+      "min_value": 1,
+      "max_value": 9223372036854775807,
+      "increment_by": 1,
+      "cycle": false
+    },
+    {
+      "name": "seq_track_version_groups_id",
+      "start_value": 1,
+      "min_value": 1,
+      "max_value": 9223372036854775807,
+      "increment_by": 1,
+      "cycle": false
+    },
+    {
+      "name": "seq_tracks_id",
+      "start_value": 1,
+      "min_value": 1,
+      "max_value": 9223372036854775807,
+      "increment_by": 1,
+      "cycle": false
+    },
+    {
+      "name": "seq_wordplay_pairs_id",
+      "start_value": 1,
+      "min_value": 1,
+      "max_value": 9223372036854775807,
+      "increment_by": 1,
+      "cycle": false
+    }
+  ],
+  "tables": {
+    "track_grid_candidates": {
+      "columns": [
+        {
+          "name": "track_id",
+          "ordinal": 1,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "source",
+          "ordinal": 2,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "grid_json",
+          "ordinal": 3,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "fingerprint",
+          "ordinal": 4,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "provenance_json",
+          "ordinal": 5,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "updated_at",
+          "ordinal": 6,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      ],
+      "primary_key": [
+        "track_id",
+        "source"
+      ],
+      "unique": []
+    },
+    "tracks": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 1,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "nextval('seq_tracks_id')"
+        },
+        {
+          "name": "filepath",
+          "ordinal": 2,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "title",
+          "ordinal": 3,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "artist",
+          "ordinal": 4,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "album",
+          "ordinal": 5,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "genre",
+          "ordinal": 6,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "subgenre",
+          "ordinal": 7,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": "''"
+        },
+        {
+          "name": "year",
+          "ordinal": 8,
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "bpm",
+          "ordinal": 9,
+          "type": "FLOAT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "key",
+          "ordinal": 10,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "scale",
+          "ordinal": 11,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "duration",
+          "ordinal": 12,
+          "type": "FLOAT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "analysis_level",
+          "ordinal": 13,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "energy",
+          "ordinal": 14,
+          "type": "FLOAT",
+          "nullable": true,
+          "default": "0.0"
+        },
+        {
+          "name": "danceability",
+          "ordinal": 15,
+          "type": "FLOAT",
+          "nullable": true,
+          "default": "0.0"
+        },
+        {
+          "name": "loudness",
+          "ordinal": 16,
+          "type": "FLOAT",
+          "nullable": true,
+          "default": "-60.0"
+        },
+        {
+          "name": "brightness",
+          "ordinal": 17,
+          "type": "FLOAT",
+          "nullable": true,
+          "default": "0.0"
+        },
+        {
+          "name": "noisiness",
+          "ordinal": 18,
+          "type": "FLOAT",
+          "nullable": true,
+          "default": "0.0"
+        },
+        {
+          "name": "contrast",
+          "ordinal": 19,
+          "type": "FLOAT",
+          "nullable": true,
+          "default": "0.0"
+        },
+        {
+          "name": "loudness_range",
+          "ordinal": 20,
+          "type": "FLOAT",
+          "nullable": true,
+          "default": "0.0"
+        },
+        {
+          "name": "spectral_flux",
+          "ordinal": 21,
+          "type": "FLOAT",
+          "nullable": true,
+          "default": "0.0"
+        },
+        {
+          "name": "spectral_rolloff",
+          "ordinal": 22,
+          "type": "FLOAT",
+          "nullable": true,
+          "default": "0.0"
+        },
+        {
+          "name": "is_genre_verified",
+          "ordinal": 23,
+          "type": "BOOLEAN",
+          "nullable": true,
+          "default": "CAST('f' AS BOOLEAN)"
+        },
+        {
+          "name": "created_at",
+          "ordinal": 24,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique": [
+        [
+          "filepath"
+        ]
+      ]
+    },
+    "track_analyses": {
+      "columns": [
+        {
+          "name": "track_id",
+          "ordinal": 1,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "beats_f32",
+          "ordinal": 2,
+          "type": "BLOB",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "waveform_u8",
+          "ordinal": 3,
+          "type": "BLOB",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "features_extra_json",
+          "ordinal": 4,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": "'{}'"
+        }
+      ],
+      "primary_key": [
+        "track_id"
+      ],
+      "unique": []
+    },
+    "track_embeddings": {
+      "columns": [
+        {
+          "name": "track_id",
+          "ordinal": 1,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "model_name",
+          "ordinal": 2,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": "'musicnn'"
+        },
+        {
+          "name": "embedding_json",
+          "ordinal": 3,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": "'[]'"
+        },
+        {
+          "name": "updated_at",
+          "ordinal": 4,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      ],
+      "primary_key": [
+        "track_id"
+      ],
+      "unique": []
+    },
+    "lyrics": {
+      "columns": [
+        {
+          "name": "track_id",
+          "ordinal": 1,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "content",
+          "ordinal": 2,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": "''"
+        },
+        {
+          "name": "source",
+          "ordinal": 3,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": "'user'"
+        },
+        {
+          "name": "language",
+          "ordinal": 4,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "keywords_json",
+          "ordinal": 5,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "keywords_content_hash",
+          "ordinal": 6,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "created_at",
+          "ordinal": 7,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "updated_at",
+          "ordinal": 8,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      ],
+      "primary_key": [
+        "track_id"
+      ],
+      "unique": []
+    },
+    "setlists": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 1,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "nextval('seq_setlists_id')"
+        },
+        {
+          "name": "name",
+          "ordinal": 2,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "description",
+          "ordinal": 3,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "display_order",
+          "ordinal": 4,
+          "type": "INTEGER",
+          "nullable": true,
+          "default": "0"
+        },
+        {
+          "name": "genre",
+          "ordinal": 5,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "target_duration",
+          "ordinal": 6,
+          "type": "FLOAT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "rating",
+          "ordinal": 7,
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "created_at",
+          "ordinal": 8,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "updated_at",
+          "ordinal": 9,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique": []
+    },
+    "setlist_tracks": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 1,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "nextval('seq_setlist_tracks_id')"
+        },
+        {
+          "name": "setlist_id",
+          "ordinal": 2,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "track_id",
+          "ordinal": 3,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "position",
+          "ordinal": 4,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "transition_note",
+          "ordinal": 5,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "wordplay_json",
+          "ordinal": 6,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "in_ms",
+          "ordinal": 7,
+          "type": "DOUBLE",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "out_ms",
+          "ordinal": 8,
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "playback_rate",
+          "ordinal": 9,
+          "type": "DOUBLE",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "extra_duration_ms",
+          "ordinal": 10,
+          "type": "DOUBLE",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "overlap_next_ms",
+          "ordinal": 11,
+          "type": "DOUBLE",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "revision",
+          "ordinal": 12,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "created_at",
+          "ordinal": 13,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique": []
+    },
+    "wordplay_pairs": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 1,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "nextval('seq_wordplay_pairs_id')"
+        },
+        {
+          "name": "from_track_id",
+          "ordinal": 2,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "to_track_id",
+          "ordinal": 3,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "keyword",
+          "ordinal": 4,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "normalized_keyword",
+          "ordinal": 5,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "source_phrase",
+          "ordinal": 6,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "target_phrase",
+          "ordinal": 7,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "source_section_position",
+          "ordinal": 8,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": "'unknown'"
+        },
+        {
+          "name": "target_section_position",
+          "ordinal": 9,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": "'unknown'"
+        },
+        {
+          "name": "source_cue_mode",
+          "ordinal": 10,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": "'section_end'"
+        },
+        {
+          "name": "from_timestamp",
+          "ordinal": 11,
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "source_cue_end_timestamp",
+          "ordinal": 12,
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "to_timestamp",
+          "ordinal": 13,
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "target_intro_timestamp",
+          "ordinal": 14,
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "target_landing_timestamp",
+          "ordinal": 15,
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "transition_notes",
+          "ordinal": 16,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": "''"
+        },
+        {
+          "name": "source_url",
+          "ordinal": 17,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": "''"
+        },
+        {
+          "name": "evidence_type",
+          "ordinal": 18,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": "'hypothesis'"
+        },
+        {
+          "name": "verification_status",
+          "ordinal": 19,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": "'unverified'"
+        },
+        {
+          "name": "status",
+          "ordinal": 20,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": "'pending'"
+        },
+        {
+          "name": "created_at",
+          "ordinal": 21,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "updated_at",
+          "ordinal": 22,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique": [
+        [
+          "from_track_id",
+          "to_track_id",
+          "normalized_keyword"
+        ]
+      ]
+    },
+    "track_performance_metadata": {
+      "columns": [
+        {
+          "name": "track_id",
+          "ordinal": 1,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "cue_points_json",
+          "ordinal": 2,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": "'[]'"
+        },
+        {
+          "name": "loops_json",
+          "ordinal": 3,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": "'[]'"
+        },
+        {
+          "name": "beat_grid_json",
+          "ordinal": 4,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "revision",
+          "ordinal": 5,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "created_at",
+          "ordinal": 6,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "updated_at",
+          "ordinal": 7,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      ],
+      "primary_key": [
+        "track_id"
+      ],
+      "unique": []
+    },
+    "rekordbox_sources": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 1,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "name",
+          "ordinal": 2,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "imported_at",
+          "ordinal": 3,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique": []
+    },
+    "rekordbox_playlists": {
+      "columns": [
+        {
+          "name": "source_id",
+          "ordinal": 1,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "external_id",
+          "ordinal": 2,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "parent_external_id",
+          "ordinal": 3,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "name",
+          "ordinal": 4,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "sort_order",
+          "ordinal": 5,
+          "type": "INTEGER",
+          "nullable": true,
+          "default": "0"
+        },
+        {
+          "name": "kind",
+          "ordinal": 6,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": "'playlist'"
+        }
+      ],
+      "primary_key": [
+        "source_id",
+        "external_id"
+      ],
+      "unique": []
+    },
+    "rekordbox_playlist_tracks": {
+      "columns": [
+        {
+          "name": "source_id",
+          "ordinal": 1,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "playlist_external_id",
+          "ordinal": 2,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "position",
+          "ordinal": 3,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "external_track_id",
+          "ordinal": 4,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "local_track_id",
+          "ordinal": 5,
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "filepath",
+          "ordinal": 6,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "title",
+          "ordinal": 7,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "artist",
+          "ordinal": 8,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "bpm",
+          "ordinal": 9,
+          "type": "FLOAT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "musical_key",
+          "ordinal": 10,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "duration",
+          "ordinal": 11,
+          "type": "FLOAT",
+          "nullable": true,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "source_id",
+        "playlist_external_id",
+        "position"
+      ],
+      "unique": []
+    },
+    "play_sessions": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 1,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "started_at",
+          "ordinal": 2,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "ended_at",
+          "ordinal": 3,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "deck_count",
+          "ordinal": 4,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "2"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique": []
+    },
+    "play_history": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 1,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "nextval('seq_play_history_id')"
+        },
+        {
+          "name": "event_key",
+          "ordinal": 2,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "session_id",
+          "ordinal": 3,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "deck",
+          "ordinal": 4,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "track_id",
+          "ordinal": 5,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "loaded_at",
+          "ordinal": 6,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "first_played_at",
+          "ordinal": 7,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "ended_at",
+          "ordinal": 8,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "played_ms",
+          "ordinal": 9,
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "completed",
+          "ordinal": 10,
+          "type": "BOOLEAN",
+          "nullable": false,
+          "default": "CAST('f' AS BOOLEAN)"
+        },
+        {
+          "name": "reason",
+          "ordinal": 11,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique": [
+        [
+          "event_key"
+        ]
+      ]
+    },
+    "recordings": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 1,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "nextval('seq_recordings_id')"
+        },
+        {
+          "name": "recording_key",
+          "ordinal": 2,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "session_id",
+          "ordinal": 3,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "filepath",
+          "ordinal": 4,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "started_at",
+          "ordinal": 5,
+          "type": "TIMESTAMP",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "ended_at",
+          "ordinal": 6,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "duration_ms",
+          "ordinal": 7,
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "status",
+          "ordinal": 8,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": "'recording'"
+        },
+        {
+          "name": "error",
+          "ordinal": 9,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "artist",
+          "ordinal": 10,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "title",
+          "ordinal": 11,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "source",
+          "ordinal": 12,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": "'internal'"
+        },
+        {
+          "name": "sample_rate_hz",
+          "ordinal": 13,
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "frame_count",
+          "ordinal": 14,
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "timeline_quality",
+          "ordinal": 15,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": "'unavailable'"
+        },
+        {
+          "name": "timeline_dropped_events",
+          "ordinal": 16,
+          "type": "BIGINT",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "revision",
+          "ordinal": 17,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "1"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique": [
+        [
+          "recording_key"
+        ]
+      ]
+    },
+    "track_media": {
+      "columns": [
+        {
+          "name": "track_id",
+          "ordinal": 1,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "sha256",
+          "ordinal": 2,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "size_bytes",
+          "ordinal": 3,
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "mtime_ns",
+          "ordinal": 4,
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "volume_id",
+          "ordinal": 5,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "relative_path",
+          "ordinal": 6,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "status",
+          "ordinal": 7,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": "'unknown'"
+        },
+        {
+          "name": "last_verified_at",
+          "ordinal": 8,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "revision",
+          "ordinal": 9,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "1"
+        }
+      ],
+      "primary_key": [
+        "track_id"
+      ],
+      "unique": []
+    },
+    "media_repair_operations": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 1,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "state",
+          "ordinal": 2,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "plan_json",
+          "ordinal": 3,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": "'{}'"
+        },
+        {
+          "name": "result_json",
+          "ordinal": 4,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": "'{}'"
+        },
+        {
+          "name": "created_at",
+          "ordinal": 5,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "updated_at",
+          "ordinal": 6,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique": []
+    },
+    "operation_journal": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 1,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "kind",
+          "ordinal": 2,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "target",
+          "ordinal": 3,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": "''"
+        },
+        {
+          "name": "state",
+          "ordinal": 4,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "progress",
+          "ordinal": 5,
+          "type": "DOUBLE",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "detail_json",
+          "ordinal": 6,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": "'{}'"
+        },
+        {
+          "name": "cancel_requested",
+          "ordinal": 7,
+          "type": "BOOLEAN",
+          "nullable": false,
+          "default": "CAST('f' AS BOOLEAN)"
+        },
+        {
+          "name": "created_at",
+          "ordinal": 8,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "updated_at",
+          "ordinal": 9,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique": []
+    },
+    "track_version_groups": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 1,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "nextval('seq_track_version_groups_id')"
+        },
+        {
+          "name": "name",
+          "ordinal": 2,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "preferred_track_id",
+          "ordinal": 3,
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "revision",
+          "ordinal": 4,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "created_at",
+          "ordinal": 5,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "updated_at",
+          "ordinal": 6,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique": []
+    },
+    "track_version_members": {
+      "columns": [
+        {
+          "name": "group_id",
+          "ordinal": 1,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "track_id",
+          "ordinal": 2,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "version_label",
+          "ordinal": 3,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": "'Original'"
+        },
+        {
+          "name": "content_label",
+          "ordinal": 4,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": "'Unknown'"
+        },
+        {
+          "name": "note",
+          "ordinal": 5,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "track_id"
+      ],
+      "unique": []
+    },
+    "audio_presets": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 1,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "name",
+          "ordinal": 2,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "schema_version",
+          "ordinal": 3,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "revision",
+          "ordinal": 4,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "config_json",
+          "ordinal": 5,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "last_applied_at",
+          "ordinal": 6,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "created_at",
+          "ordinal": 7,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "updated_at",
+          "ordinal": 8,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique": []
+    },
+    "controller_profiles": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 1,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "name",
+          "ordinal": 2,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "adapter_id",
+          "ordinal": 3,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "schema_version",
+          "ordinal": 4,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "revision",
+          "ordinal": 5,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "built_in",
+          "ordinal": 6,
+          "type": "BOOLEAN",
+          "nullable": false,
+          "default": "CAST('f' AS BOOLEAN)"
+        },
+        {
+          "name": "definition_json",
+          "ordinal": 7,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "created_at",
+          "ordinal": 8,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "updated_at",
+          "ordinal": 9,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique": []
+    },
+    "controller_device_bindings": {
+      "columns": [
+        {
+          "name": "profile_id",
+          "ordinal": 1,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "input_selector_json",
+          "ordinal": 2,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "output_selector_json",
+          "ordinal": 3,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "resolved",
+          "ordinal": 4,
+          "type": "BOOLEAN",
+          "nullable": false,
+          "default": "CAST('f' AS BOOLEAN)"
+        },
+        {
+          "name": "updated_at",
+          "ordinal": 5,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      ],
+      "primary_key": [
+        "profile_id"
+      ],
+      "unique": []
+    },
+    "usb_devices": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 1,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "device_identifier",
+          "ordinal": 2,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "volume_uuid",
+          "ordinal": 3,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "label",
+          "ordinal": 4,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "mount_path",
+          "ordinal": 5,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "filesystem",
+          "ordinal": 6,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "capacity_bytes",
+          "ordinal": 7,
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "free_bytes",
+          "ordinal": 8,
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "read_only",
+          "ordinal": 9,
+          "type": "BOOLEAN",
+          "nullable": false,
+          "default": "CAST('f' AS BOOLEAN)"
+        },
+        {
+          "name": "connected",
+          "ordinal": 10,
+          "type": "BOOLEAN",
+          "nullable": false,
+          "default": "CAST('f' AS BOOLEAN)"
+        },
+        {
+          "name": "last_seen_at",
+          "ordinal": 11,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique": []
+    },
+    "usb_exports": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 1,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "usb_device_id",
+          "ordinal": 2,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "setlist_id",
+          "ordinal": 3,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "state",
+          "ordinal": 4,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "snapshot_hash",
+          "ordinal": 5,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "snapshot_json",
+          "ordinal": 6,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "handoff_path",
+          "ordinal": 7,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "verification_json",
+          "ordinal": 8,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": "'{}'"
+        },
+        {
+          "name": "created_at",
+          "ordinal": 9,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "updated_at",
+          "ordinal": 10,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique": []
+    },
+    "recording_segments": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 1,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "nextval('seq_recording_segments_id')"
+        },
+        {
+          "name": "recording_id",
+          "ordinal": 2,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "event_key",
+          "ordinal": 3,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "track_id",
+          "ordinal": 4,
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "deck",
+          "ordinal": 5,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "load_generation",
+          "ordinal": 6,
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "start_frame",
+          "ordinal": 7,
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "end_frame",
+          "ordinal": 8,
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "start_ms",
+          "ordinal": 9,
+          "type": "BIGINT",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "end_ms",
+          "ordinal": 10,
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "title_snapshot",
+          "ordinal": 11,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "artist_snapshot",
+          "ordinal": 12,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "version_snapshot",
+          "ordinal": 13,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "source",
+          "ordinal": 14,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "confidence",
+          "ordinal": 15,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": "'confirmed'"
+        },
+        {
+          "name": "position",
+          "ordinal": 16,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "revision",
+          "ordinal": 17,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "1"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique": [
+        [
+          "event_key"
+        ]
+      ]
+    },
+    "import_batches": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 1,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "request_id",
+          "ordinal": 2,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "target_kind",
+          "ordinal": 3,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "target_id",
+          "ordinal": 4,
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "target_name_snapshot",
+          "ordinal": 5,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "origin",
+          "ordinal": 6,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": "'native_file_drop'"
+        },
+        {
+          "name": "analysis_profile",
+          "ordinal": 7,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": "'auto'"
+        },
+        {
+          "name": "effective_analysis_profile",
+          "ordinal": 8,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "state",
+          "ordinal": 9,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "paused",
+          "ordinal": 10,
+          "type": "BOOLEAN",
+          "nullable": false,
+          "default": "CAST('f' AS BOOLEAN)"
+        },
+        {
+          "name": "cancel_requested",
+          "ordinal": 11,
+          "type": "BOOLEAN",
+          "nullable": false,
+          "default": "CAST('f' AS BOOLEAN)"
+        },
+        {
+          "name": "created_at",
+          "ordinal": 12,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "updated_at",
+          "ordinal": 13,
+          "type": "TIMESTAMP",
+          "nullable": true,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique": [
+        [
+          "request_id"
+        ]
+      ]
+    },
+    "import_items": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 1,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "batch_id",
+          "ordinal": 2,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "input_order",
+          "ordinal": 3,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "source_path",
+          "ordinal": 4,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "canonical_path",
+          "ordinal": 5,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "sha256",
+          "ordinal": 6,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "size_bytes",
+          "ordinal": 7,
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "mtime_ns",
+          "ordinal": 8,
+          "type": "BIGINT",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "track_id",
+          "ordinal": 9,
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "state",
+          "ordinal": 10,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "load_ready",
+          "ordinal": 11,
+          "type": "BOOLEAN",
+          "nullable": false,
+          "default": "CAST('f' AS BOOLEAN)"
+        },
+        {
+          "name": "analysis_level",
+          "ordinal": 12,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "error_code",
+          "ordinal": 13,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "error_message",
+          "ordinal": 14,
+          "type": "VARCHAR",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "attempts",
+          "ordinal": 15,
+          "type": "INTEGER",
+          "nullable": false,
+          "default": "0"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique": [
+        [
+          "batch_id",
+          "input_order"
+        ]
+      ]
+    },
+    "import_target_intents": {
+      "columns": [
+        {
+          "name": "item_id",
+          "ordinal": 1,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "batch_id",
+          "ordinal": 2,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "target_kind",
+          "ordinal": 3,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "target_id",
+          "ordinal": 4,
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "reserved_position",
+          "ordinal": 5,
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null
+        },
+        {
+          "name": "state",
+          "ordinal": 6,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "setlist_track_id",
+          "ordinal": 7,
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "item_id"
+      ],
+      "unique": []
+    },
+    "settings": {
+      "columns": [
+        {
+          "name": "key",
+          "ordinal": 1,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "value",
+          "ordinal": 2,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "key"
+      ],
+      "unique": []
+    },
+    "schema_info": {
+      "columns": [
+        {
+          "name": "key",
+          "ordinal": 1,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        },
+        {
+          "name": "value",
+          "ordinal": 2,
+          "type": "VARCHAR",
+          "nullable": false,
+          "default": null
+        }
+      ],
+      "primary_key": [
+        "key"
+      ],
+      "unique": []
+    }
+  }
+}

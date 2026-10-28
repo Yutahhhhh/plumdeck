@@ -1,0 +1,28 @@
+[
+  {
+    "name": "setlist_from_rekordbox_playlists",
+    "title": "プレイリストからセットを組む",
+    "description": "rekordbox のフォルダ/プレイリストを展開ごとに読み込んで理想的なセットリストを作る",
+    "arguments": [
+      {
+        "name": "playlists",
+        "required": false
+      },
+      {
+        "name": "minutes",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "setlist_questionnaire",
+    "title": "設問形式でセットを組む",
+    "description": "流れ・好きなアーティストや曲を質問で聞き取り、類似曲やワードプレイを交えてセットを組む",
+    "arguments": [
+      {
+        "name": "theme",
+        "required": false
+      }
+    ]
+  }
+]

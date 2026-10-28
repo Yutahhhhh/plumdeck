@@ -1,0 +1,5144 @@
+[
+  {
+    "name": "search_tracks",
+    "description": "ライブラリの楽曲を条件で検索する。q はタイトル/アーティスト横断のフリーテキスト検索。\n    genres/subgenres は完全一致リスト。status='verified'|'unverified'|'all' でジャンル検証状態を絞れる。\n    自然言語の雰囲気は、このツールを呼ぶMCPクライアント自身がBPMや特徴量の\n    範囲へ解釈して指定すること。plumdeck内ではLLM推論を行わない。",
+    "inputSchema": {
+      "properties": {
+        "q": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Q"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "artist": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Artist"
+        },
+        "album": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Album"
+        },
+        "genres": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Genres"
+        },
+        "subgenres": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subgenres"
+        },
+        "key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Key"
+        },
+        "bpm": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bpm"
+        },
+        "bpm_range": {
+          "default": 5.0,
+          "title": "Bpm Range",
+          "type": "number"
+        },
+        "min_duration": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Duration"
+        },
+        "max_duration": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Duration"
+        },
+        "min_energy": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Energy"
+        },
+        "max_energy": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Energy"
+        },
+        "min_danceability": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Danceability"
+        },
+        "max_danceability": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Danceability"
+        },
+        "min_brightness": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Brightness"
+        },
+        "max_brightness": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Brightness"
+        },
+        "min_year": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Year"
+        },
+        "max_year": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Year"
+        },
+        "year_status": {
+          "default": "all",
+          "title": "Year Status",
+          "type": "string"
+        },
+        "lyrics_status": {
+          "default": "all",
+          "title": "Lyrics Status",
+          "type": "string"
+        },
+        "lyrics": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lyrics"
+        },
+        "status": {
+          "default": "all",
+          "title": "Status",
+          "type": "string"
+        },
+        "limit": {
+          "default": 50,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "offset": {
+          "default": 0,
+          "title": "Offset",
+          "type": "integer"
+        }
+      },
+      "title": "search_tracksArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "search_tracksOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_track_similar",
+    "description": "指定した楽曲に音響的に似ている楽曲をベクトル類似検索で取得する（ミックスの繋ぎ候補選びに便利）。",
+    "inputSchema": {
+      "properties": {
+        "track_id": {
+          "title": "Track Id",
+          "type": "integer"
+        },
+        "limit": {
+          "default": 20,
+          "title": "Limit",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "track_id"
+      ],
+      "title": "get_track_similarArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "get_track_similarOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "suggest_track_genre",
+    "description": "類似曲の実績ジャンルから、指定楽曲に合いそうなジャンルを推測する（LLMは使わずベクトル類似ベース）。",
+    "inputSchema": {
+      "properties": {
+        "track_id": {
+          "title": "Track Id",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "track_id"
+      ],
+      "title": "suggest_track_genreArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "suggest_track_genreOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "update_track_genre",
+    "description": "楽曲のジャンルを手動で更新する。",
+    "inputSchema": {
+      "properties": {
+        "track_id": {
+          "title": "Track Id",
+          "type": "integer"
+        },
+        "genre": {
+          "title": "Genre",
+          "type": "string"
+        }
+      },
+      "required": [
+        "track_id",
+        "genre"
+      ],
+      "title": "update_track_genreArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "update_track_genreOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "update_track_info",
+    "description": "楽曲のタイトル/アーティスト/アルバム/年を更新する。指定したフィールドのみ変更される。",
+    "inputSchema": {
+      "properties": {
+        "track_id": {
+          "title": "Track Id",
+          "type": "integer"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "artist": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Artist"
+        },
+        "album": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Album"
+        },
+        "year": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Year"
+        }
+      },
+      "required": [
+        "track_id"
+      ],
+      "title": "update_track_infoArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "update_track_infoOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_setlists",
+    "description": "全セットリストの一覧を返す。",
+    "inputSchema": {
+      "properties": {},
+      "title": "list_setlistsArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "list_setlistsOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "create_setlist",
+    "description": "新しい空のセットリストを作成する。",
+    "inputSchema": {
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "create_setlistArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "create_setlistOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "rename_setlist",
+    "description": "セットリストの名前を変更する。",
+    "inputSchema": {
+      "properties": {
+        "setlist_id": {
+          "title": "Setlist Id",
+          "type": "integer"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "setlist_id",
+        "name"
+      ],
+      "title": "rename_setlistArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "rename_setlistOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "delete_setlist",
+    "description": "セットリストを削除する（曲データも含めて完全に削除）。",
+    "inputSchema": {
+      "properties": {
+        "setlist_id": {
+          "title": "Setlist Id",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "setlist_id"
+      ],
+      "title": "delete_setlistArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "delete_setlistOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_setlist_tracks",
+    "description": "セットリストに含まれる楽曲を、並び順どおりに返す。",
+    "inputSchema": {
+      "properties": {
+        "setlist_id": {
+          "title": "Setlist Id",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "setlist_id"
+      ],
+      "title": "get_setlist_tracksArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "get_setlist_tracksOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "set_setlist_tracks",
+    "description": "曲構成を一括で置き換える。track_ids または track_data の一方を指定する。\n    生成結果の承認済みワードプレイを保存する場合は、返された tracks を\n    track_data に渡すと id と wordplay_json を保持する。既存の曲構成は置換される。\n    ",
+    "inputSchema": {
+      "properties": {
+        "setlist_id": {
+          "title": "Setlist Id",
+          "type": "integer"
+        },
+        "track_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Track Ids"
+        },
+        "track_data": {
+          "anyOf": [
+            {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Track Data"
+        }
+      },
+      "required": [
+        "setlist_id"
+      ],
+      "title": "set_setlist_tracksArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "set_setlist_tracksOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "add_track_to_setlist",
+    "description": "セットリストに1曲追加する。position を指定しない場合は末尾に追加。",
+    "inputSchema": {
+      "properties": {
+        "setlist_id": {
+          "title": "Setlist Id",
+          "type": "integer"
+        },
+        "track_id": {
+          "title": "Track Id",
+          "type": "integer"
+        },
+        "position": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Position"
+        }
+      },
+      "required": [
+        "setlist_id",
+        "track_id"
+      ],
+      "title": "add_track_to_setlistArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "add_track_to_setlistOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "remove_track_from_setlist",
+    "description": "セットリストから指定した楽曲を1件削除する（同じ曲が複数あれば最初の1件のみ）。",
+    "inputSchema": {
+      "properties": {
+        "setlist_id": {
+          "title": "Setlist Id",
+          "type": "integer"
+        },
+        "track_id": {
+          "title": "Track Id",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "setlist_id",
+        "track_id"
+      ],
+      "title": "remove_track_from_setlistArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "remove_track_from_setlistOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "recommend_next_track",
+    "description": "指定した曲の次に繋ぐのに適した楽曲を、BPM/キー/音響類似度からスコアリングして提案する。\n    ユーザーの自然言語の方向性はMCPクライアント側で target_* 値へ解釈する。\n    target未指定なら純粋にベクトル/BPM/キーのみで評価する。\n    year_min/year_max は候補曲のリリース年の範囲（両端を含む）。指定時は年不明の曲を除く。\n    ",
+    "inputSchema": {
+      "properties": {
+        "track_id": {
+          "title": "Track Id",
+          "type": "integer"
+        },
+        "limit": {
+          "default": 10,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "genres": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Genres"
+        },
+        "subgenres": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subgenres"
+        },
+        "target_bpm": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Bpm"
+        },
+        "target_energy": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Energy"
+        },
+        "target_danceability": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Danceability"
+        },
+        "target_brightness": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Brightness"
+        },
+        "target_noisiness": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Noisiness"
+        },
+        "year_min": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Year Min"
+        },
+        "year_max": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Year Max"
+        }
+      },
+      "required": [
+        "track_id"
+      ],
+      "title": "recommend_next_trackArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "recommend_next_trackOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "recommend_next_track_page",
+    "description": "全候補をスコア順に並べてからページングし、正確な総件数を返す。",
+    "inputSchema": {
+      "properties": {
+        "track_id": {
+          "title": "Track Id",
+          "type": "integer"
+        },
+        "limit": {
+          "default": 100,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "offset": {
+          "default": 0,
+          "title": "Offset",
+          "type": "integer"
+        },
+        "genres": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Genres"
+        },
+        "subgenres": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subgenres"
+        },
+        "target_bpm": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Bpm"
+        },
+        "target_energy": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Energy"
+        },
+        "target_danceability": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Danceability"
+        },
+        "target_brightness": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Brightness"
+        },
+        "target_noisiness": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Noisiness"
+        },
+        "year_min": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Year Min"
+        },
+        "year_max": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Year Max"
+        }
+      },
+      "required": [
+        "track_id"
+      ],
+      "title": "recommend_next_track_pageArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "recommend_next_track_pageOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "generate_auto_setlist",
+    "description": "構造化された音響特徴量ターゲットに基づき、セットリスト候補を自動生成する\n    （DBには保存しない、結果一覧を返すのみ。保存するには set_setlist_tracks を別途呼ぶこと）。\n    ユーザーの自然言語のvibeは、このツールを呼ぶMCPクライアント自身が target_* と\n    genres/subgenres に解釈する。\n    曲数は length で指定、min_length/max_length を渡すとその範囲でランダムに決定する。\n    length 未指定時は UI 設定のデフォルト曲数（setlist_default_length）を使用する。\n    seed_track_ids を渡すとその曲群の流れを引き継いで生成する。\n    year_min/year_max は追加候補曲のリリース年の範囲（両端を含む）。指定時は年不明の曲を除く。\n    明示したシード曲は指定順で優先し、年代・ジャンルの候補条件からは除外する。\n    ",
+    "inputSchema": {
+      "properties": {
+        "length": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Length"
+        },
+        "min_length": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Length"
+        },
+        "max_length": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Length"
+        },
+        "seed_track_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seed Track Ids"
+        },
+        "genres": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Genres"
+        },
+        "subgenres": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subgenres"
+        },
+        "target_bpm": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Bpm"
+        },
+        "target_energy": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Energy"
+        },
+        "target_danceability": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Danceability"
+        },
+        "target_brightness": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Brightness"
+        },
+        "target_noisiness": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Noisiness"
+        },
+        "year_min": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Year Min"
+        },
+        "year_max": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Year Max"
+        }
+      },
+      "title": "generate_auto_setlistArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "generate_auto_setlistOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "generate_bridge_setlist",
+    "description": "開始曲と終了曲を指定し、その間を自然に繋ぐ中間曲を自動生成する（結果は保存されない）。length は開始・終了を含む合計曲数。",
+    "inputSchema": {
+      "properties": {
+        "start_track_id": {
+          "title": "Start Track Id",
+          "type": "integer"
+        },
+        "end_track_id": {
+          "title": "End Track Id",
+          "type": "integer"
+        },
+        "length": {
+          "default": 5,
+          "title": "Length",
+          "type": "integer"
+        },
+        "genres": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Genres"
+        },
+        "subgenres": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subgenres"
+        }
+      },
+      "required": [
+        "start_track_id",
+        "end_track_id"
+      ],
+      "title": "generate_bridge_setlistArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "generate_bridge_setlistOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "export_setlist_m3u8",
+    "description": "セットリストを M3U8 プレイリスト形式のテキストとしてエクスポートする（Rekordbox等に読み込み可能）。\n    移動/削除済みのファイルは '# MISSING:' 行として出力される。呼び出し前に validate_setlist_export での確認を推奨。\n    ",
+    "inputSchema": {
+      "properties": {
+        "setlist_id": {
+          "title": "Setlist Id",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "setlist_id"
+      ],
+      "title": "export_setlist_m3u8Arguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "export_setlist_m3u8Output",
+      "type": "object"
+    }
+  },
+  {
+    "name": "validate_setlist_export",
+    "description": "エクスポート前にセットリスト内の楽曲ファイルが実際にディスク上に存在するか検証する。",
+    "inputSchema": {
+      "properties": {
+        "setlist_id": {
+          "title": "Setlist Id",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "setlist_id"
+      ],
+      "title": "validate_setlist_exportArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "validate_setlist_exportOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "add_track_to_setlist_with_wordplay",
+    "description": "セットリストに1曲をCue打ち・イントロ・着地位置付きで追加する。",
+    "inputSchema": {
+      "properties": {
+        "setlist_id": {
+          "title": "Setlist Id",
+          "type": "integer"
+        },
+        "track_id": {
+          "title": "Track Id",
+          "type": "integer"
+        },
+        "position": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Position"
+        },
+        "keyword": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Keyword"
+        },
+        "source_phrase": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Phrase"
+        },
+        "target_phrase": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Phrase"
+        },
+        "source_cue_mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Cue Mode"
+        },
+        "from_timestamp": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "From Timestamp"
+        },
+        "source_cue_end_timestamp": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Cue End Timestamp"
+        },
+        "to_timestamp": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "To Timestamp"
+        },
+        "target_intro_timestamp": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Intro Timestamp"
+        },
+        "target_landing_timestamp": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Landing Timestamp"
+        }
+      },
+      "required": [
+        "setlist_id",
+        "track_id"
+      ],
+      "title": "add_track_to_setlist_with_wordplayArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "add_track_to_setlist_with_wordplayOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "update_setlist_track_wordplay",
+    "description": "セットリスト内の曲にCue打ち・イントロ・着地を含むワードプレイ情報を設定する。",
+    "inputSchema": {
+      "properties": {
+        "setlist_track_id": {
+          "title": "Setlist Track Id",
+          "type": "integer"
+        },
+        "wordplay": {
+          "additionalProperties": true,
+          "title": "Wordplay",
+          "type": "object"
+        }
+      },
+      "required": [
+        "setlist_track_id",
+        "wordplay"
+      ],
+      "title": "update_setlist_track_wordplayArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "update_setlist_track_wordplayOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "clear_setlist_track_wordplay",
+    "description": "セットリスト内の曲のワードプレイ情報をクリアする。",
+    "inputSchema": {
+      "properties": {
+        "setlist_track_id": {
+          "title": "Setlist Track Id",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "setlist_track_id"
+      ],
+      "title": "clear_setlist_track_wordplayArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "clear_setlist_track_wordplayOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_genres",
+    "description": "ライブラリ内に存在する全ジャンルのユニークな一覧を返す。",
+    "inputSchema": {
+      "properties": {},
+      "title": "list_genresArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "list_genresOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_subgenres",
+    "description": "ライブラリ内に存在する全サブジャンルのユニークな一覧を返す。",
+    "inputSchema": {
+      "properties": {},
+      "title": "list_subgenresArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "list_subgenresOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_unknown_genre_tracks",
+    "description": "ジャンル未検証・未解析の楽曲一覧を返す。mode: genre/subgenre/both。",
+    "inputSchema": {
+      "properties": {
+        "offset": {
+          "default": 0,
+          "title": "Offset",
+          "type": "integer"
+        },
+        "limit": {
+          "default": 50,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "mode": {
+          "default": "genre",
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "title": "get_unknown_genre_tracksArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "get_unknown_genre_tracksOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_genre_analysis_context",
+    "description": "ジャンル判定に必要な曲メタデータ、Essentia特徴量、既存語彙、分類ルールを返す。\n    このツールを呼んだMCPクライアント自身のLLMで判定し、結果を\n    apply_genre_analysis または apply_genre_analyses に渡すこと。\n    ",
+    "inputSchema": {
+      "properties": {
+        "track_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Track Ids"
+        },
+        "mode": {
+          "default": "both",
+          "title": "Mode",
+          "type": "string"
+        },
+        "offset": {
+          "default": 0,
+          "title": "Offset",
+          "type": "integer"
+        },
+        "limit": {
+          "default": 50,
+          "title": "Limit",
+          "type": "integer"
+        }
+      },
+      "title": "get_genre_analysis_contextArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "get_genre_analysis_contextOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "apply_genre_analysis",
+    "description": "接続中のMCPクライアントが判定した1曲のジャンル結果を検証して適用する。",
+    "inputSchema": {
+      "properties": {
+        "track_id": {
+          "title": "Track Id",
+          "type": "integer"
+        },
+        "genre": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Genre"
+        },
+        "subgenre": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subgenre"
+        },
+        "confidence": {
+          "default": "Medium",
+          "title": "Confidence",
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        },
+        "mode": {
+          "default": "both",
+          "title": "Mode",
+          "type": "string"
+        },
+        "overwrite": {
+          "default": false,
+          "title": "Overwrite",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "track_id"
+      ],
+      "title": "apply_genre_analysisArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "apply_genre_analysisOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "apply_genre_analyses",
+    "description": "接続中のMCPクライアントが判定した複数曲の結果を一括適用する。\n    各要素は track_id, genre, subgenre, confidence, reason を持つ。\n    ",
+    "inputSchema": {
+      "properties": {
+        "analyses": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Analyses",
+          "type": "array"
+        },
+        "mode": {
+          "default": "both",
+          "title": "Mode",
+          "type": "string"
+        },
+        "overwrite": {
+          "default": false,
+          "title": "Overwrite",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "analyses"
+      ],
+      "title": "apply_genre_analysesArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "apply_genre_analysesOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_genre_cleanup_suggestions",
+    "description": "表記揺れ（例: 'Hip-Hop' vs 'Hip Hop'）があるジャンル/サブジャンルのグループを検出して返す。",
+    "inputSchema": {
+      "properties": {
+        "mode": {
+          "default": "genre",
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "title": "get_genre_cleanup_suggestionsArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "get_genre_cleanup_suggestionsOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "cleanup_genre_labels",
+    "description": "表記揺れのある楽曲群を、指定した正規のジャンル名 (target_genre) に一括統一する。",
+    "inputSchema": {
+      "properties": {
+        "target_genre": {
+          "title": "Target Genre",
+          "type": "string"
+        },
+        "track_ids": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Track Ids",
+          "type": "array"
+        },
+        "mode": {
+          "default": "genre",
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_genre",
+        "track_ids"
+      ],
+      "title": "cleanup_genre_labelsArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "cleanup_genre_labelsOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_similar_genre_suggestions",
+    "description": "指定した楽曲に音響特徴が近く、ジャンル統一の候補となる楽曲を類似度付きで返す。",
+    "inputSchema": {
+      "properties": {
+        "track_id": {
+          "title": "Track Id",
+          "type": "integer"
+        },
+        "threshold": {
+          "default": 0.85,
+          "title": "Threshold",
+          "type": "number"
+        }
+      },
+      "required": [
+        "track_id"
+      ],
+      "title": "get_similar_genre_suggestionsArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "get_similar_genre_suggestionsOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "apply_genres_to_files",
+    "description": "DB上のジャンル情報を、実ファイル（ID3タグ等）に書き込む。",
+    "inputSchema": {
+      "properties": {
+        "track_ids": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Track Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "track_ids"
+      ],
+      "title": "apply_genres_to_filesArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "apply_genres_to_filesOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_track_lyrics",
+    "description": "指定した楽曲の歌詞（LRC形式含む）を取得する。",
+    "inputSchema": {
+      "properties": {
+        "track_id": {
+          "title": "Track Id",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "track_id"
+      ],
+      "title": "get_track_lyricsArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "get_track_lyricsOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "search_lyrics",
+    "description": "歌詞本文をキーワードで横断検索し、一致箇所のスニペットと楽曲を返す（3文字以上のクエリが必要）。",
+    "inputSchema": {
+      "properties": {
+        "q": {
+          "title": "Q",
+          "type": "string"
+        },
+        "exclude_track_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exclude Track Id"
+        }
+      },
+      "required": [
+        "q"
+      ],
+      "title": "search_lyricsArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "search_lyricsOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "find_wordplay_links",
+    "description": "MCPクライアント側LLMが歌詞から選んだキーワードを使い、他曲の一致箇所を検索する。\n    先に get_track_lyrics を呼び、1〜3語の特徴的なフレーズを keywords に渡すこと。\n    ",
+    "inputSchema": {
+      "properties": {
+        "track_id": {
+          "title": "Track Id",
+          "type": "integer"
+        },
+        "keywords": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Keywords",
+          "type": "array"
+        },
+        "limit": {
+          "default": 20,
+          "title": "Limit",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "track_id",
+        "keywords"
+      ],
+      "title": "find_wordplay_linksArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "find_wordplay_linksOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "register_track_lyrics",
+    "description": "1曲の歌詞本文（LRC可）・出典・言語をDBに登録する。音源ファイルは変更しない。\n    既存歌詞は標準でスキップ。意図して置換する場合のみ overwrite=true。\n    空の本文は不可。search_tracks で対象IDを確認してから使用する。\n    ",
+    "inputSchema": {
+      "properties": {
+        "track_id": {
+          "title": "Track Id",
+          "type": "integer"
+        },
+        "content": {
+          "title": "Content",
+          "type": "string"
+        },
+        "source": {
+          "default": "user",
+          "title": "Source",
+          "type": "string"
+        },
+        "language": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Language"
+        },
+        "overwrite": {
+          "default": false,
+          "title": "Overwrite",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "track_id",
+        "content"
+      ],
+      "title": "register_track_lyricsArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "register_track_lyricsOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "register_track_lyrics_batch",
+    "description": "歌詞を1〜100曲まとめてDBに登録する。各項目は track_id, content, source, language。\n    既存歌詞は標準でスキップし、音源は変更しない。曲ごとの処理結果を返す。\n    不正な入力・重複ID・存在しない曲があればバッチ全体を登録しない。\n    ",
+    "inputSchema": {
+      "$defs": {
+        "LyricsRegistration": {
+          "properties": {
+            "track_id": {
+              "exclusiveMinimum": 0,
+              "title": "Track Id",
+              "type": "integer"
+            },
+            "content": {
+              "maxLength": 200000,
+              "minLength": 1,
+              "title": "Content",
+              "type": "string"
+            },
+            "source": {
+              "default": "user",
+              "maxLength": 2048,
+              "minLength": 1,
+              "title": "Source",
+              "type": "string"
+            },
+            "language": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Language"
+            }
+          },
+          "required": [
+            "track_id",
+            "content"
+          ],
+          "title": "LyricsRegistration",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/LyricsRegistration"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "overwrite": {
+          "default": false,
+          "title": "Overwrite",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "title": "register_track_lyrics_batchArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "register_track_lyrics_batchOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "plan_track_analysis",
+    "description": "解析対象と件数を確認する（楽曲は変更しない）。features: embedding（音響類似度、既定）, rhythm（BPM/ビート）, key, timbre（Energy等）, waveform。\n    track_ids未指定ならライブラリ全体。genresで絞り込み可能。only_outdatedで現行解析済みを除外。\n    既存セットリストの曲を優先する。まず少数曲をlimitで処理し、速度を確認できる。\n    ",
+    "inputSchema": {
+      "properties": {
+        "track_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Track Ids"
+        },
+        "genres": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Genres"
+        },
+        "features": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Features"
+        },
+        "only_outdated": {
+          "default": true,
+          "title": "Only Outdated",
+          "type": "boolean"
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limit"
+        }
+      },
+      "title": "plan_track_analysisArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "start_track_analysis",
+    "description": "選択した音響項目だけをDBへ再解析する永続ジョブを開始し、すぐにjob idを返す。\n    features: embedding（既定）, rhythm, key, timbre, waveform。メタデータ・ジャンル・歌詞・音源ファイルは変更しない。\n    only_outdated=Trueで処理済みをスキップ。workersは1〜4（既定2）。MCP切断後もアプリ内で継続する。\n    アプリ終了後はresume_track_analysisで再開する。進捗はget_track_analysis_statusで確認。\n    ",
+    "inputSchema": {
+      "properties": {
+        "track_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Track Ids"
+        },
+        "genres": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Genres"
+        },
+        "features": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Features"
+        },
+        "only_outdated": {
+          "default": true,
+          "title": "Only Outdated",
+          "type": "boolean"
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limit"
+        },
+        "workers": {
+          "default": 2,
+          "title": "Workers",
+          "type": "integer"
+        }
+      },
+      "title": "start_track_analysisArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_track_analysis_status",
+    "description": "解析ジョブの進捗、残り時間、処理中の曲、失敗理由を返す。job_id省略時は最新ジョブ。",
+    "inputSchema": {
+      "properties": {
+        "job_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Job Id"
+        }
+      },
+      "title": "get_track_analysis_statusArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "pause_track_analysis",
+    "description": "処理中の曲を保存してから解析を一時停止する。結果と未処理キューは保持し、後で再開可能。",
+    "inputSchema": {
+      "properties": {
+        "job_id": {
+          "title": "Job Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id"
+      ],
+      "title": "pause_track_analysisArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "resume_track_analysis",
+    "description": "解析ジョブの未処理分を再開する。workersで負荷を変更可能。retry_failed=Trueなら失敗曲も再試行する。",
+    "inputSchema": {
+      "properties": {
+        "job_id": {
+          "title": "Job Id",
+          "type": "string"
+        },
+        "workers": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workers"
+        },
+        "retry_failed": {
+          "default": false,
+          "title": "Retry Failed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "job_id"
+      ],
+      "title": "resume_track_analysisArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_wordplay_pairs",
+    "description": "List persistent directional wordplay pairs and their source/target track metadata.",
+    "inputSchema": {
+      "properties": {
+        "status": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Status"
+        },
+        "from_track_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "From Track Id"
+        },
+        "query": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Query"
+        },
+        "limit": {
+          "default": 100,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "offset": {
+          "default": 0,
+          "title": "Offset",
+          "type": "integer"
+        }
+      },
+      "title": "list_wordplay_pairsArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "list_wordplay_pairsOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "propose_wordplay_pairs",
+    "description": "Persist 1-50 wordplay proposals atomically; new proposals start pending.\n\n    For cue-drumming intros, use source_cue_mode=\"cue_drumming_intro\", bracket the\n    isolated source vocal with from_timestamp/source_cue_end_timestamp, and supply\n    target_intro_timestamp plus target_landing_timestamp. ``to_timestamp`` remains\n    an alias for the landing cue. The source must be a short, recognizable hit that\n    works when tapped repeatedly, not a generic word inside a sentence. Require the\n    same genre and prioritize the same subgenre, drum feel, era, and intro texture;\n    reject genre-only phrase matches whose analyzed features clash. Keep actual BPM\n    delta at or below 2%.\n    ",
+    "inputSchema": {
+      "properties": {
+        "pairs": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Pairs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "pairs"
+      ],
+      "title": "propose_wordplay_pairsArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "propose_wordplay_pairsOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "approve_wordplay_pair",
+    "description": "Approve a boundary-fit pending pair without changing its verification status.\n\n    Approval requires a usable source cue, an in-range target intro before its\n    landing cue, compatible musical style, and no more than a 2% actual BPM delta.\n    Cue-drumming may land at either the start or middle of the target track.\n    ",
+    "inputSchema": {
+      "properties": {
+        "pair_id": {
+          "title": "Pair Id",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "pair_id"
+      ],
+      "title": "approve_wordplay_pairArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "approve_wordplay_pairOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "reject_wordplay_pair",
+    "description": "Reject a proposal by physically deleting only the pair row.",
+    "inputSchema": {
+      "properties": {
+        "pair_id": {
+          "title": "Pair Id",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "pair_id"
+      ],
+      "title": "reject_wordplay_pairArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "reject_wordplay_pairOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_get_state",
+    "description": "Junctionの参加者、順番、接続、引き継ぎ、Program、Live受信の最新状態を取得する。",
+    "inputSchema": {
+      "properties": {},
+      "title": "junction_get_stateArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_get_stateOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_prepare_engine",
+    "description": "アプリの新規起動後は最初に呼ぶ。デスクトップが所有する音声エンジンを安全に起動し、既に動作中ならそのインスタンスを再利用する。",
+    "inputSchema": {
+      "properties": {},
+      "title": "junction_prepare_engineArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_prepare_engineOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_inspect_exchange",
+    "description": "招待・返答・通知テキストを取り込まずに検証し、秘密を除いた概要だけを返す。",
+    "inputSchema": {
+      "properties": {
+        "exchange_text": {
+          "maxLength": 131072,
+          "minLength": 1,
+          "title": "Exchange Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exchange_text"
+      ],
+      "title": "junction_inspect_exchangeArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_inspect_exchangeOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_get_exchange_text",
+    "description": "非同期生成が完了した手動交換テキストを取得する。host側のinvite/noticeは通常peer_idが必要で、guest側のresponseは省略できる。既存の招待・参加処理は再実行しない。",
+    "inputSchema": {
+      "properties": {
+        "kind": {
+          "enum": [
+            "invite",
+            "response",
+            "notice"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "peer_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Peer Id"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "junction_get_exchange_textArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_get_exchange_textOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_list_audio_devices",
+    "description": "Junction Program出力に選択できるローカル音声デバイスを取得する。",
+    "inputSchema": {
+      "properties": {},
+      "title": "junction_list_audio_devicesArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_list_audio_devicesOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_get_network",
+    "description": "保存済みSTUN/TURN構成を、シークレットを伏せた状態で取得する。",
+    "inputSchema": {
+      "properties": {},
+      "title": "junction_get_networkArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_get_networkOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_test_network",
+    "description": "TURNを含む実ネットワーク疎通テストを開始・確認・中止する。開始は既定値、確認はpoll=true、中止はcancel=true。",
+    "inputSchema": {
+      "properties": {
+        "poll": {
+          "default": false,
+          "title": "Poll",
+          "type": "boolean"
+        },
+        "cancel": {
+          "default": false,
+          "title": "Cancel",
+          "type": "boolean"
+        }
+      },
+      "title": "junction_test_networkArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_test_networkOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_configure_network",
+    "description": "JunctionのSTUNと任意のTURNを設定する。TURNなしはturn_modeを省略する。turn_expires_atはUnix epochミリ秒で、現在より後かつ24時間以内を指定する。秘密は応答に含まれない。",
+    "inputSchema": {
+      "properties": {
+        "stun_urls": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Stun Urls",
+          "type": "array"
+        },
+        "save": {
+          "default": true,
+          "title": "Save",
+          "type": "boolean"
+        },
+        "turn_mode": {
+          "anyOf": [
+            {
+              "enum": [
+                "rest",
+                "temporary"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Turn Mode"
+        },
+        "turn_urls": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Turn Urls"
+        },
+        "turn_secret": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Turn Secret"
+        },
+        "turn_username": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Turn Username"
+        },
+        "turn_credential": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Turn Credential"
+        },
+        "turn_expires_at": {
+          "anyOf": [
+            {
+              "description": "TURN temporary credential expiry as Unix epoch milliseconds; it must be in the future and no more than 24 hours away",
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Turn Expires At"
+        }
+      },
+      "required": [
+        "stun_urls"
+      ],
+      "title": "junction_configure_networkArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_configure_networkOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_clear_network",
+    "description": "保存済みのJunctionネットワーク構成を消去して既定値へ戻す。",
+    "inputSchema": {
+      "properties": {},
+      "title": "junction_clear_networkArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_clear_networkOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_create_session",
+    "description": "手動交換方式のJunctionセッションをホストとして作成する。通常はロビー開始を使う。",
+    "inputSchema": {
+      "properties": {
+        "dj_name": {
+          "title": "Dj Name",
+          "type": "string"
+        },
+        "session_name": {
+          "title": "Session Name",
+          "type": "string"
+        },
+        "program_device": {
+          "title": "Program Device",
+          "type": "string"
+        },
+        "adopt_current": {
+          "default": false,
+          "title": "Adopt Current",
+          "type": "boolean"
+        },
+        "start_in_lobby": {
+          "default": true,
+          "title": "Start In Lobby",
+          "type": "boolean"
+        },
+        "avatar_data_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Avatar Data Url"
+        },
+        "theme_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Theme Color"
+        }
+      },
+      "required": [
+        "dj_name",
+        "session_name",
+        "program_device"
+      ],
+      "title": "junction_create_sessionArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_create_sessionOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_join_session",
+    "description": "ホストから受け取った手動招待テキストでJunctionセッションへ参加し、返答を生成する。",
+    "inputSchema": {
+      "properties": {
+        "exchange_text": {
+          "maxLength": 131072,
+          "minLength": 1,
+          "title": "Exchange Text",
+          "type": "string"
+        },
+        "dj_name": {
+          "title": "Dj Name",
+          "type": "string"
+        },
+        "avatar_data_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Avatar Data Url"
+        },
+        "theme_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Theme Color"
+        }
+      },
+      "required": [
+        "exchange_text",
+        "dj_name"
+      ],
+      "title": "junction_join_sessionArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_join_sessionOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_create_invite",
+    "description": "ホストのロビーに参加枠を作り招待テキストを生成する。peer_id指定時はその参加者の招待を作り直す。",
+    "inputSchema": {
+      "properties": {
+        "peer_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Peer Id"
+        },
+        "dj_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dj Name"
+        },
+        "avatar_data_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Avatar Data Url"
+        },
+        "theme_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Theme Color"
+        }
+      },
+      "title": "junction_create_inviteArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_create_inviteOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_import_exchange",
+    "description": "相手から届いた返答・更新招待・通知テキストを、任意の参加者枠へ取り込む。",
+    "inputSchema": {
+      "properties": {
+        "exchange_text": {
+          "maxLength": 131072,
+          "minLength": 1,
+          "title": "Exchange Text",
+          "type": "string"
+        },
+        "peer_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Peer Id"
+        }
+      },
+      "required": [
+        "exchange_text"
+      ],
+      "title": "junction_import_exchangeArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_import_exchangeOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_approve_participant",
+    "description": "返答を確認済みの参加者をホストとして明示的に承認する。",
+    "inputSchema": {
+      "properties": {
+        "peer_id": {
+          "title": "Peer Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "peer_id"
+      ],
+      "title": "junction_approve_participantArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_approve_participantOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_reject_participant",
+    "description": "返答待ちの参加者をホストとして拒否し、相手向け通知を生成する。",
+    "inputSchema": {
+      "properties": {
+        "peer_id": {
+          "title": "Peer Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "peer_id"
+      ],
+      "title": "junction_reject_participantArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_reject_participantOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_cancel_invite",
+    "description": "指定参加者の未完了招待・交換を取り消す。",
+    "inputSchema": {
+      "properties": {
+        "peer_id": {
+          "title": "Peer Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "peer_id"
+      ],
+      "title": "junction_cancel_inviteArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_cancel_inviteOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_retry_participant",
+    "description": "指定参加者の一時切断を再試行し、必要なら再交換状態へ移す。",
+    "inputSchema": {
+      "properties": {
+        "peer_id": {
+          "title": "Peer Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "peer_id"
+      ],
+      "title": "junction_retry_participantArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_retry_participantOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_update_profile",
+    "description": "Junction内の自分のDJ名、任意のアイコンとテーマ色を更新する。",
+    "inputSchema": {
+      "properties": {
+        "dj_name": {
+          "title": "Dj Name",
+          "type": "string"
+        },
+        "avatar_data_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Avatar Data Url"
+        },
+        "theme_color": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Theme Color"
+        }
+      },
+      "required": [
+        "dj_name"
+      ],
+      "title": "junction_update_profileArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_update_profileOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_reorder_roster",
+    "description": "ホストとして全参加者のpeer_idを希望順に並べ替える。重複や欠落は許可されない。",
+    "inputSchema": {
+      "properties": {
+        "peer_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Peer Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "peer_ids"
+      ],
+      "title": "junction_reorder_rosterArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_reorder_rosterOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_start_session",
+    "description": "ホストとしてロビーからセッションを開始する。指定したDJが最初の順番（STANDBY）になり、そのDJがフェーダーを上げた瞬間にON AIRになる。",
+    "inputSchema": {
+      "properties": {
+        "performer_peer_id": {
+          "title": "Performer Peer Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "performer_peer_id"
+      ],
+      "title": "junction_start_sessionArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_start_sessionOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_request_handoff",
+    "description": "廃止：指名による引き継ぎ要求。フェーダースタート方式では常にエラーで理由を返す。",
+    "inputSchema": {
+      "properties": {
+        "target_peer_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Peer Id"
+        }
+      },
+      "title": "junction_request_handoffArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_request_handoffOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_cancel_handoff",
+    "description": "廃止：引き継ぎの取り消し。フェーダースタート方式では常にエラーで理由を返す（順番から外すには junction_leave_turn）。",
+    "inputSchema": {
+      "properties": {},
+      "title": "junction_cancel_handoffArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_cancel_handoffOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_accept_handoff",
+    "description": "廃止：準備OK・交代確定。フェーダースタート方式では常にエラーで理由を返す（READYのDJは junction_go_on_air）。",
+    "inputSchema": {
+      "properties": {},
+      "title": "junction_accept_handoffArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_accept_handoffOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_join_turn",
+    "description": "順番（タイムテーブル）の最後に入る。ホストはpeer_idで他のDJを入れられる。ゲストは省略して自分だけ。",
+    "inputSchema": {
+      "properties": {
+        "peer_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Peer Id"
+        }
+      },
+      "title": "junction_join_turnArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_join_turnOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_leave_turn",
+    "description": "順番から外れる。ON AIRのDJは外せない。ホストはpeer_idで他のDJを外せる。",
+    "inputSchema": {
+      "properties": {
+        "peer_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Peer Id"
+        }
+      },
+      "title": "junction_leave_turnArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_leave_turnOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_set_b2b_repeat",
+    "description": "ホスト：B2Bの繰り返し。有効にすると、交代を終えたDJを順番の最後に戻す（A,B,A,B…）。",
+    "inputSchema": {
+      "properties": {
+        "enabled": {
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "title": "junction_set_b2b_repeatArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_set_b2b_repeatOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_set_failover",
+    "description": "ホスト：ON AIRのDJが切断したとき、READYの次のDJへ自動で交代するか（False は確認してから）。",
+    "inputSchema": {
+      "properties": {
+        "automatic": {
+          "title": "Automatic",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "automatic"
+      ],
+      "title": "junction_set_failoverArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_set_failoverOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_go_on_air",
+    "description": "自分がREADYのとき、フェーダーを上げずに今すぐON AIRにする。READYでなければ理由を返す。",
+    "inputSchema": {
+      "properties": {},
+      "title": "junction_go_on_airArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_go_on_airOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_force_turn",
+    "description": "ホスト：次のDJを強制的にON AIRにする（フェーダーを待たない）。前のDJの曲が残っている間は使えない。",
+    "inputSchema": {
+      "properties": {},
+      "title": "junction_force_turnArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_force_turnOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_skip_turn",
+    "description": "ホスト：次のDJを順番の最後へ回し、その次のDJをSTANDBYにする。",
+    "inputSchema": {
+      "properties": {},
+      "title": "junction_skip_turnArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_skip_turnOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_release_tail",
+    "description": "前のDJの残りの曲を止めて交代を完了する。ON AIRのDJかホストが使える。",
+    "inputSchema": {
+      "properties": {},
+      "title": "junction_release_tailArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_release_tailOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_send_cue",
+    "description": "ブースの合図を送る：one_more（あと1曲）、go_ahead（次どうぞ）、hold（少し待って）、ok（OK）。",
+    "inputSchema": {
+      "properties": {
+        "kind": {
+          "enum": [
+            "one_more",
+            "go_ahead",
+            "hold",
+            "ok"
+          ],
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "junction_send_cueArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_send_cueOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_resume_recovery",
+    "description": "ホストの復旧状態から、ホスト手元の演奏を新しいepochで安全に再開する。",
+    "inputSchema": {
+      "properties": {},
+      "title": "junction_resume_recoveryArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_resume_recoveryOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_leave_session",
+    "description": "自分が演奏者でないことを確認したうえでJunctionセッションから退出する。",
+    "inputSchema": {
+      "properties": {},
+      "title": "junction_leave_sessionArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_leave_sessionOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_end_session",
+    "description": "ホストとしてJunctionセッション全体を終了する。",
+    "inputSchema": {
+      "properties": {},
+      "title": "junction_end_sessionArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_end_sessionOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_configure_program",
+    "description": "ホストのJunction Program（統合音源）の会場出力先と任意のゲインを設定する。",
+    "inputSchema": {
+      "properties": {
+        "program_device": {
+          "title": "Program Device",
+          "type": "string"
+        },
+        "gain": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gain"
+        }
+      },
+      "required": [
+        "program_device"
+      ],
+      "title": "junction_configure_programArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_configure_programOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_start_program_recording",
+    "description": "ホストの統合済みJunction Program音声を指定したローカルパスへ録音開始する。",
+    "inputSchema": {
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "junction_start_program_recordingArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_start_program_recordingOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_stop_program_recording",
+    "description": "実行中のJunction Program録音を停止して確定する。",
+    "inputSchema": {
+      "properties": {},
+      "title": "junction_stop_program_recordingArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_stop_program_recordingOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_load_private_preview",
+    "description": "手元だけに聞こえるJunctionプライベートプレビューへローカル音源をロードする。",
+    "inputSchema": {
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "junction_load_private_previewArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_load_private_previewOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_play_private_preview",
+    "description": "ロード済みのプライベートプレビューを再生する（Programには送らない）。",
+    "inputSchema": {
+      "properties": {},
+      "title": "junction_play_private_previewArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_play_private_previewOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_pause_private_preview",
+    "description": "プライベートプレビューを一時停止する。",
+    "inputSchema": {
+      "properties": {},
+      "title": "junction_pause_private_previewArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_pause_private_previewOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_seek_private_preview",
+    "description": "プライベートプレビューをミリ秒位置へ移動する。",
+    "inputSchema": {
+      "properties": {
+        "position_ms": {
+          "title": "Position Ms",
+          "type": "number"
+        }
+      },
+      "required": [
+        "position_ms"
+      ],
+      "title": "junction_seek_private_previewArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_seek_private_previewOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_set_private_preview_gain",
+    "description": "手元だけに聞こえるプライベートプレビュー音量を0..1で設定する。",
+    "inputSchema": {
+      "properties": {
+        "gain": {
+          "title": "Gain",
+          "type": "number"
+        }
+      },
+      "required": [
+        "gain"
+      ],
+      "title": "junction_set_private_preview_gainArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_set_private_preview_gainOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_unload_private_preview",
+    "description": "プライベートプレビューから音源を取り外す。",
+    "inputSchema": {
+      "properties": {},
+      "title": "junction_unload_private_previewArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_unload_private_previewOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_get_private_preview_state",
+    "description": "プライベートプレビューのロード、再生、位置、長さ、エラー状態を取得する。",
+    "inputSchema": {
+      "properties": {},
+      "title": "junction_get_private_preview_stateArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_get_private_preview_stateOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_set_microphone_enabled",
+    "description": "Junctionの権限制御に従ってローカルDJマイクのProgram送出を有効・無効にする。",
+    "inputSchema": {
+      "properties": {
+        "enabled": {
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "title": "junction_set_microphone_enabledArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_set_microphone_enabledOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_attach_live_monitor",
+    "description": "廃止：Junction Liveの表示専用モニター。フェーダースタート方式では音源を転送しないため、常にエラーで理由を返す。",
+    "inputSchema": {
+      "properties": {
+        "deck": {
+          "enum": [
+            "A",
+            "B",
+            "C",
+            "D"
+          ],
+          "title": "Deck",
+          "type": "string"
+        },
+        "asset_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Asset Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "deck",
+        "asset_id"
+      ],
+      "title": "junction_attach_live_monitorArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_attach_live_monitorOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_detach_live_monitor",
+    "description": "廃止：Junction Liveの表示専用モニターの解除。常にエラーで理由を返す。",
+    "inputSchema": {
+      "properties": {
+        "deck": {
+          "enum": [
+            "A",
+            "B",
+            "C",
+            "D"
+          ],
+          "title": "Deck",
+          "type": "string"
+        }
+      },
+      "required": [
+        "deck"
+      ],
+      "title": "junction_detach_live_monitorArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_detach_live_monitorOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_configure_input",
+    "description": "受信中のJUNCTION MASTER（前のDJの現在の音を受ける仮想入力チャンネル）の音量、クロスフェーダー割当、3バンドEQ、ヘッドホンCUEを変更する。少なくとも1項目を指定する。",
+    "inputSchema": {
+      "properties": {
+        "volume": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Volume"
+        },
+        "assign": {
+          "anyOf": [
+            {
+              "enum": [
+                "left",
+                "thru",
+                "right"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Assign"
+        },
+        "eq_low": {
+          "anyOf": [
+            {
+              "maximum": 4.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Eq Low"
+        },
+        "eq_mid": {
+          "anyOf": [
+            {
+              "maximum": 4.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Eq Mid"
+        },
+        "eq_high": {
+          "anyOf": [
+            {
+              "maximum": 4.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Eq High"
+        },
+        "cue": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cue"
+        }
+      },
+      "title": "junction_configure_inputArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_configure_inputOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "junction_release_input",
+    "description": "JUNCTION MASTERから前のDJを解放し、フェード済みの前任DJへ送出停止を通知する。",
+    "inputSchema": {
+      "properties": {},
+      "title": "junction_release_inputArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "junction_release_inputOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "assist_get_state",
+    "description": "What plumdeck's assist window is showing right now.\n\n    Returns whether the window is open, the source deck track (the track the DJ\n    is mixing out of), the selected preset (intent), transition mode, genre\n    scope, compound filters, how many loaded tracks are excluded, the track ids\n    currently listed, and any list you already put on screen. Call this first:\n    assist_recommend / assist_search default to these settings.\n    ",
+    "inputSchema": {
+      "properties": {},
+      "title": "assist_get_stateArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "assist_get_stateOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "assist_recommend",
+    "description": "Rank next-track candidates with the assist window's engine. Read-only.\n\n    Every omitted argument comes from the window's current state (source deck,\n    loaded-track exclusions, preset, filters, tempo tolerance…). intent (which\n    way to move the floor): keep | hype | dance | calm | emotional | bright |\n    throwback | wordplay. transition=true looks for half/double-time partners and titled\n    tempo-changing edits (\"100-128 Transition\"); read the returned `caveats`.\n    genre_scope: any | same_genre | same_subgenre. filters: {bpm_min, bpm_max,\n    genres[], subgenres[], artists[], keys[] (Camelot or \"A minor\"), year_min,\n    year_max, query} — AND across fields, OR within a list.\n    like_track_id / like_artist: rough numeric \"sounds like X\" evidence blended\n    into the order. It measures sound, not culture or context: use it as\n    material for your own judgement. Only tracks rekordbox knows and that exist\n    on disk are returned. Without a source track this becomes assist_search.\n    Nothing changes on screen: use assist_show_tracks or assist_apply_settings.\n    ",
+    "inputSchema": {
+      "properties": {
+        "source_track_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Track Id"
+        },
+        "intent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Intent"
+        },
+        "transition": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Transition"
+        },
+        "genre_scope": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Genre Scope"
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limit"
+        },
+        "filters": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Filters"
+        },
+        "like_track_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Like Track Id"
+        },
+        "like_artist": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Like Artist"
+        }
+      },
+      "title": "assist_recommendArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "assist_recommendOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "assist_search",
+    "description": "Search without a source deck: compound filters (same shape as\n    assist_recommend) and/or \"sounds like X\" (like_track_id / like_artist).\n\n    Only tracks rekordbox knows and that exist on disk are returned, excluding\n    the tracks the DJ has already loaded. Read-only.\n    ",
+    "inputSchema": {
+      "properties": {
+        "filters": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Filters"
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limit"
+        },
+        "like_track_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Like Track Id"
+        },
+        "like_artist": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Like Artist"
+        }
+      },
+      "title": "assist_searchArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "assist_searchOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "assist_route",
+    "description": "Find short playable routes from the current deck track to an exact song.\n\n    The target is fixed; the returned tracks are only intermediate bridges and\n    the requested destination. Read-only. Use assist_get_state first when the\n    source deck is not supplied explicitly.\n    ",
+    "inputSchema": {
+      "properties": {
+        "target_track_id": {
+          "title": "Target Track Id",
+          "type": "integer"
+        },
+        "source_track_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Track Id"
+        },
+        "intent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Intent"
+        },
+        "transition": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Transition"
+        },
+        "max_intermediate": {
+          "default": 2,
+          "title": "Max Intermediate",
+          "type": "integer"
+        },
+        "limit": {
+          "default": 3,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "genre_scope": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Genre Scope"
+        },
+        "filters": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Filters"
+        }
+      },
+      "required": [
+        "target_track_id"
+      ],
+      "title": "assist_routeArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "assist_routeOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "assist_apply_settings",
+    "description": "Change the assist window's settings; plumdeck then re-ranks its own list.\n\n    Omitted arguments are left as they are. `filters` replaces the window's\n    conditions entirely (pass {} to clear them). Use this when the DJ's request\n    maps onto a preset and conditions (\"もっと盛り上げたい、2000年代で\" →\n    intent=\"hype\", filters={\"year_min\": 2000, \"year_max\": 2009}). Pass\n    `agent_name` (e.g. \"Claude Code\", \"Codex\") so the DJ sees who changed it.\n    ",
+    "inputSchema": {
+      "properties": {
+        "intent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Intent"
+        },
+        "transition": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Transition"
+        },
+        "genre_scope": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Genre Scope"
+        },
+        "limit": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limit"
+        },
+        "filters": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Filters"
+        },
+        "agent_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agent Name"
+        }
+      },
+      "title": "assist_apply_settingsArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "assist_apply_settingsOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "assist_show_tracks",
+    "description": "Put your own picks on the assist window, ready to drag onto a deck.\n\n    `tracks`: up to 50, in order, each {\"track_id\": int, \"reason\": str} — a\n    short Japanese reason the DJ reads next to the track. `title`: a short\n    heading (\"90年代R&Bで落ち着かせる\"). `note`: optional one or two lines.\n    Each pick is re-checked: tracks rekordbox does not know, missing files or\n    the deck's own track are dropped and returned under `rejected`. Kept picks\n    also show plumdeck's own tempo/key/energy reasons against the source deck,\n    measured with the window's current preset. Replaces any list you showed\n    before; assist_clear_tracks removes it.\n    ",
+    "inputSchema": {
+      "properties": {
+        "tracks": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Tracks",
+          "type": "array"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        },
+        "agent_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agent Name"
+        }
+      },
+      "required": [
+        "tracks"
+      ],
+      "title": "assist_show_tracksArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "assist_show_tracksOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "assist_clear_tracks",
+    "description": "Remove the list you put on the assist window with assist_show_tracks.",
+    "inputSchema": {
+      "properties": {},
+      "title": "assist_clear_tracksArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "assist_clear_tracksOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_rekordbox_playlists",
+    "description": "rekordbox のプレイリスト/フォルダ階層を読み取り専用で返す。\n    under にフォルダの ID かパス（例: '現場物' や '現場物/イベ2'）を渡すとその配下だけを返す。\n    depth は返す階層の深さ（1〜6）。各項目の path は plan_phased_setlist の\n    rekordbox_playlists にそのまま渡せる。インテリジェントプレイリスト(kind=smart)は読み込めない。",
+    "inputSchema": {
+      "properties": {
+        "under": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Under"
+        },
+        "depth": {
+          "default": 2,
+          "title": "Depth",
+          "type": "integer"
+        }
+      },
+      "title": "list_rekordbox_playlistsArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "list_rekordbox_playlistsOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_rekordbox_playlist_tracks",
+    "description": "rekordbox のプレイリスト（またはフォルダ配下すべて）の曲を、DJ の並び順で\n    plumdeck の track id に照合して返す。playlist は ID かパス（'現場物/HIPHOP&Latin'）。\n    plumdeck 未登録の曲は unmatched に入り、セットリスト候補にはならない。\n    各曲の BPM/キー/ジャンル/エネルギーを見て、フェーズ分けや曲数の判断に使う。",
+    "inputSchema": {
+      "properties": {
+        "playlist": {
+          "title": "Playlist",
+          "type": "string"
+        },
+        "recursive": {
+          "default": true,
+          "title": "Recursive",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "playlist"
+      ],
+      "title": "get_rekordbox_playlist_tracksArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "get_rekordbox_playlist_tracksOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "plan_phased_setlist",
+    "description": "展開（フェーズ）ごとの候補プールから、繋ぎと流れを考慮してセット全体を組む。\n    フェーズは指定順に並び、各フェーズ内は BPM/キー/音響類似度の繋ぎやすさ、\n    エネルギー/BPM の推移目標、承認済みワードプレイで順序を決める。\n    フェーズの切り替わり（最初の1曲）は前フェーズ最後の曲との繋ぎを特に重視する。\n\n    phases の各要素（label と count は必須、候補ソースは1つ以上推奨）:\n      label: 展開名（例: 'ウォームアップ', 'HIPHOP ピーク', 'Latin で切り替え'）\n      count: そのフェーズの曲数 (1..60)\n      rekordbox_playlists: rekordbox のプレイリスト/フォルダの ID かパスのリスト（フォルダは配下全部）\n      track_ids: 候補に入れる曲 id\n      anchor_track_ids: 必ず入れる曲 id（DJ が明示した曲）\n      artists: 好きなアーティスト名（部分一致）。その曲を候補に入れる\n      similar_to_track_ids: この曲たちに音響的に似た曲を候補に足す\n      expand_similar: true ならこのフェーズの候補全曲を種に類似曲を足す（最大12曲分）\n      similar_per_seed: 種1曲あたりの類似曲数 (1..30, 既定8)\n      genres / subgenres / year_min / year_max: 拡張候補（artists/類似/ワードプレイ/条件検索）の絞り込み。\n        プレイリスト・track_ids・anchor は DJ が選んだ曲としてそのまま使う\n      energy_start / energy_end: フェーズ内のエネルギー推移目標 (0..1)\n      bpm_start / bpm_end: フェーズ内の BPM 推移目標\n      keep_order: true ならプレイリスト等の並び順をそのまま使う\n    候補ソースが1つもないフェーズは genres/年代/エネルギー/BPM でライブラリ全体から探す。\n\n    exclude_artists は部分一致で除外する（anchor/track_ids で明示した曲は除外しない）。\n    opening_track_id は直前にかかっている曲（結果には含めず、最初の繋ぎの起点にする）。\n    include_wordplay_targets=true なら候補曲から承認済みワードプレイで繋がる曲も\n    その直後専用の候補として加える（pending のペアは使わない）。\n    wordplay_bonus (0..1, 既定0.25) は承認済みワードプレイで繋がる遷移への加点。\n    DJ がワードプレイを多めに入れたいときは 0.5〜0.8 に上げる（繋ぎやすさより優先される）。\n    保存しない場合は結果の track_data を set_setlist_tracks に渡すとワードプレイ注釈ごと保存できる。\n    save_as_setlist_name を渡すとその名前で新しいセットリストを作成して保存する。",
+    "inputSchema": {
+      "properties": {
+        "phases": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Phases",
+          "type": "array"
+        },
+        "exclude_track_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exclude Track Ids"
+        },
+        "exclude_artists": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exclude Artists"
+        },
+        "opening_track_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Opening Track Id"
+        },
+        "include_wordplay_targets": {
+          "default": true,
+          "title": "Include Wordplay Targets",
+          "type": "boolean"
+        },
+        "wordplay_bonus": {
+          "default": 0.25,
+          "title": "Wordplay Bonus",
+          "type": "number"
+        },
+        "save_as_setlist_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Save As Setlist Name"
+        }
+      },
+      "required": [
+        "phases"
+      ],
+      "title": "plan_phased_setlistArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "plan_phased_setlistOutput",
+      "type": "object"
+    }
+  }
+]
