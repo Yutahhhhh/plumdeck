@@ -319,3 +319,22 @@ def test_startup_backfill_queues_only_analyzed_tracks_missing_a_current_vector(s
     assert [sorted(call["track_ids"]) for call in calls] == [[ids[1], ids[2]]]
     service.enqueue_embedding = lambda **kwargs: (_ for _ in ()).throw(RuntimeError("queue locked"))
     assert service.enqueue_missing_embeddings() == {"status": "idle"}  # startup goes on
+
+
+def test_startup_backfill_queues_invalid_current_vectors_and_unnamed_models(session, tmp_path):
+    from sqlalchemy import text
+    from utils.ingestion import pending_embedding_ids
+    ids = add_tracks(session, 6)
+    vectors = {ids[0]: [.1] * 200, ids[1]: [], ids[2]: [0.0] * 200, ids[3]: [.1] * 199, ids[4]: [.1] * 200}
+    for track_id, vector in vectors.items():
+        session.add(TrackEmbedding(track_id=track_id, embedding_json=json.dumps(vector), model_name=EMBEDDING_MODEL))
+    session.add(TrackEmbedding(track_id=ids[5], embedding_json="not json", model_name=EMBEDDING_MODEL))
+    session.commit()
+    session.exec(text("UPDATE track_embeddings SET model_name=NULL WHERE track_id=:id"), params={"id": ids[4]})
+    session.commit()
+    assert sorted(session.exec(pending_embedding_ids()).all()) == ids[1:]
+    service = AnalysisJobService(session.bind, str(tmp_path / "jobs.sqlite3"), lambda *args: result())
+    calls = []
+    service.enqueue_embedding = lambda **kwargs: calls.append(kwargs) or {"status": "queued"}
+    assert service.enqueue_missing_embeddings() == {"status": "queued"}
+    assert [sorted(call["track_ids"]) for call in calls] == [ids[1:]]

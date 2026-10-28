@@ -143,14 +143,31 @@ def completed_analysis_condition():
     return func.coalesce(and_(*valid), False)
 
 
+def valid_embedding_condition():
+    """SQL (DuckDB) form of has_valid_embedding for a query joining
+    track_embeddings: EMBEDDING_DIM finite numbers, not all zero."""
+    from sqlalchemy import Boolean, literal_column
+    from models import TrackEmbedding
+    vector = f"try_cast({TrackEmbedding.__tablename__}.embedding_json AS DOUBLE[])"
+    return literal_column(
+        f"coalesce(len({vector}) = {EMBEDDING_DIM}"
+        f" AND list_bool_and(list_transform({vector}, x -> coalesce(isfinite(x), false)))"
+        f" AND list_max(list_transform({vector}, x -> abs(x))) > 0, false)", Boolean)
+
+
 def pending_embedding_ids():
-    """Select analyzed track ids without a vector of the current model (the
-    background job's queue; invalid vectors are caught when it runs)."""
+    """Select analyzed track ids without a valid vector of the current model
+    (the background job's queue): no row, another or no model name, or a
+    malformed, empty or all-zero vector."""
+    from sqlalchemy import not_
     from models import TrackEmbedding
     from domain.services.analysis.constants import EMBEDDING_MODEL
     return select(Track.id).outerjoin(TrackEmbedding, Track.id == TrackEmbedding.track_id).where(
         completed_analysis_condition(),
-        (TrackEmbedding.track_id == None) | (TrackEmbedding.model_name != EMBEDDING_MODEL),  # noqa: E711
+        (TrackEmbedding.track_id == None)  # noqa: E711
+        | (TrackEmbedding.model_name == None)  # noqa: E711
+        | (TrackEmbedding.model_name != EMBEDDING_MODEL)
+        | not_(valid_embedding_condition()),
     )
 
 
