@@ -1,10 +1,10 @@
 import { useRef, useState, type PointerEvent } from "react";
 import { cn } from "@/lib/utils";
 import type { BeatFxState, DeckId } from "@/types/dj-engine";
-import { BEAT_FX, BEAT_FX_MENU, beatFxHasBeats, beatFxMaxBeats } from "@/services/midi/beat-fx";
+import { BEAT_FX, BEAT_FX_MENU, beatFxHasBeats, beatFxMaxBeats, beatFxMinBeats } from "@/services/midi/beat-fx";
 import { formatBeats } from "./loop-math";
 
-const BEAT_STEPS = [1 / 8, 1 / 4, 1 / 2, 1, 2, 4, 8, 16];
+const BEAT_STEPS = [1 / 16, 1 / 8, 1 / 4, 1 / 2, 1, 2, 4, 8, 16];
 
 type Props = {
   state?: BeatFxState;
@@ -14,6 +14,8 @@ type Props = {
   decks: readonly DeckId[];
   micAvailable: boolean;
   samplerAvailable: boolean;
+  /** Engine capabilities; the beat range widens when the host declares it. */
+  capabilities: readonly string[];
   send: (params: Record<string, unknown>) => Promise<unknown>;
 };
 
@@ -22,7 +24,7 @@ type Props = {
  * effects live on as PAD FX slot types, so nothing competes for the deck
  * chains. FX2, MULTI and SNAPSHOT come with the engine that provides them.
  */
-export function BeatFxPanel({ state, disabledReason, releaseSupported, decks, micAvailable, samplerAvailable, send }: Props) {
+export function BeatFxPanel({ state, disabledReason, releaseSupported, decks, micAvailable, samplerAvailable, capabilities, send }: Props) {
   const [error, setError] = useState("");
   const [releaseHeld, setReleaseHeld] = useState(false);
   const releaseRef = useRef(false);
@@ -32,7 +34,7 @@ export function BeatFxPanel({ state, disabledReason, releaseSupported, decks, mi
   const effect = state?.effect ?? "echo";
   const beats = state?.beats ?? 1;
   const hasBeats = beatFxHasBeats(effect);
-  const steps = BEAT_STEPS.filter((value) => value <= beatFxMaxBeats(effect));
+  const steps = BEAT_STEPS.filter((value) => value >= beatFxMinBeats(effect, capabilities) && value <= beatFxMaxBeats(effect, capabilities));
   const index = steps.reduce((best, value, at) => Math.abs(value - beats) < Math.abs(steps[best] - beats) ? at : best, 0);
   const targets: { value: string; label: string; title: string }[] = [
     ...decks.map((deck) => ({ value: deck, label: deck, title: `Deck ${deck} にかける` })),

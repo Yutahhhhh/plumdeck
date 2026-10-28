@@ -180,13 +180,17 @@ export const FX_MIX_RANGE = { min: 0, max: 1 } as const;
 export const FX_DEPTH_RANGE = { min: 0, max: 1 } as const;
 
 /** `beats` is sent only to hosts declaring `mixer.fx.beats`. */
-export function buildFxParams(deck: DeckId, effect: PadEffect, enabled: boolean, mix: number, depth?: number, beats?: number): Record<string, unknown> {
+export function buildFxParams(deck: DeckId, effect: PadEffect, enabled: boolean, mix: number, depth?: number, beats?: number, parameters?: Record<string, number>): Record<string, unknown> {
   assertDeckId(deck);
   if (!PAD_EFFECTS.includes(effect) || typeof enabled !== "boolean") throw new DjEngineValidationError("effect", "エフェクトの種類または状態が不正です");
   assertRange("mix", mix, FX_MIX_RANGE);
   const params: Record<string, unknown> = { deck, effect, enabled, mix };
   if (depth !== undefined) { assertRange("depth", depth, FX_DEPTH_RANGE); params.depth = depth; }
-  if (beats !== undefined) { assertRange("beats", beats, { min: 1 / 64, max: 512 }); params.beats = beats; }
+  if (beats !== undefined) { assertRange("beats", beats, { min: 1 / 16, max: 16 }); params.beats = beats; }
+  if (parameters !== undefined) {
+    for (const [key, value] of Object.entries(parameters)) assertFinite(`params.${key}`, value);
+    params.params = parameters;
+  }
   return params;
 }
 
@@ -262,6 +266,14 @@ export function buildEqParams(
 export function buildCrossfaderParams(position: number): Record<string, unknown> {
   assertRange("position", position, DJ_ENGINE_RANGES.crossfader);
   return { position };
+}
+
+export function buildHeadphoneGainParams(gain: number): Record<string, unknown> {
+  assertRange("gain", gain, { min: 0, max: 1 }); return { gain };
+}
+
+export function buildHeadphoneMixParams(mix: number): Record<string, unknown> {
+  assertRange("mix", mix, { min: -1, max: 1 }); return { mix };
 }
 
 export function buildMasterGainParams(gain: number): Record<string, unknown> {

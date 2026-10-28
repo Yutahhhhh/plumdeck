@@ -58,6 +58,8 @@ import {
   buildLoadParams,
   buildLoopParams,
   buildMasterGainParams,
+  buildHeadphoneGainParams,
+  buildHeadphoneMixParams,
   buildMetersParams,
   buildSeekParams,
   buildScratchParams,
@@ -559,8 +561,8 @@ export class DjEngineClient {
    * は待機中の値を上書きするため、押下の `true` が離した `false` に置き換わり、
    * エフェクトが一瞬しか掛からない（＝掛かっていないように聞こえる）。
    */
-  async setFx(deck: DeckId, effect: PadEffect, enabled: boolean, mix: number, depth?: number, beats?: number): Promise<unknown> {
-    const params = routePerformanceCommand(DJ_ENGINE_OPS.mixerFxSet, this.withTrack(deck, buildFxParams(deck, effect, enabled, mix, depth, beats)));
+  async setFx(deck: DeckId, effect: PadEffect, enabled: boolean, mix: number, depth?: number, beats?: number, parameters?: Record<string, number>): Promise<unknown> {
+    const params = routePerformanceCommand(DJ_ENGINE_OPS.mixerFxSet, this.withTrack(deck, buildFxParams(deck, effect, enabled, mix, depth, beats, parameters)));
     try {
       return await this.send(DJ_ENGINE_OPS.mixerFxSet, params);
     } catch (cause) {
@@ -606,6 +608,14 @@ export class DjEngineClient {
 
   setCrossfader(position: number): Promise<unknown> {
     return this.continuous("crossfader", DJ_ENGINE_OPS.mixerCrossfader, buildCrossfaderParams(position));
+  }
+
+  setHeadphoneGain(gain: number): Promise<unknown> {
+    return this.continuous("headphoneGain", DJ_ENGINE_OPS.mixerHeadphoneGain, buildHeadphoneGainParams(gain));
+  }
+
+  setHeadphoneMix(mix: number): Promise<unknown> {
+    return this.continuous("headphoneMix", DJ_ENGINE_OPS.mixerHeadphoneMix, buildHeadphoneMixParams(mix));
   }
 
   setMasterGain(gain: number): Promise<unknown> {

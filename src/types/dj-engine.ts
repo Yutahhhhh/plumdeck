@@ -75,6 +75,8 @@ export const DJ_ENGINE_OPS = {
   mixerChannelPfl: "mixer.channel.pfl",
   mixerCrossfader: "mixer.crossfader",
   mixerMasterGain: "mixer.master.gain",
+  mixerHeadphoneGain: "mixer.headphone.gain",
+  mixerHeadphoneMix: "mixer.headphone.mix",
   audioDevicesList: "audio.devices.list",
   audioConfigGet: "audio.config.get",
   audioConfigSet: "audio.config.set",
@@ -119,12 +121,18 @@ export const DJ_ENGINE_CAPABILITIES = {
   mixerColorFx: "mixer.colorfx",
   mixerBeatFx: "mixer.beatfx",
   mixerBeatFxRelease: "mixer.beatfx.release",
-  /** contract (H-8 ②): `mixer.fx.set` accepts `beats`. */
+  /** contract (H-8): `mixer.fx.set` accepts `beats` and `params`, and pads load the beat processors (ROLL, TRANS, SPIRAL …). */
   mixerFxBeats: "mixer.fx.beats",
+  /** contract (Rust): RELEASE pads (ECHO OUT, BACK SPIN, VINYL BRAKE). */
+  mixerFxRelease: "mixer.fx.release",
+  /** contract (H-10): BEAT FX beats 1/16..16 on the delay/roll processors. */
+  mixerBeatFxRange: "mixer.beatfx.range.v2",
   /** contract (H-12): `mixer.crossfader.curve` is accepted. */
   mixerCrossfaderCurve: "mixer.crossfader.curve",
   mixerCrossfader: "mixer.crossfader",
   mixerPfl: "mixer.pfl",
+  mixerHeadphone: "mixer.headphone",
+  meters: "meters",
   sampler: "sampler",
   recording: "recording",
   /** contract (Rust): pad modes that have no engine op today. */
@@ -258,9 +266,9 @@ export interface DeckState {
  * Mixxx 内蔵エフェクトのうちパッドから叩けるもの。エンジン側 (`host.cpp` の
  * `padEffects`) と同じ集合で、各名前は org.mixxx.effects.<name> として読まれる。
  */
-export const PAD_EFFECTS = ["echo", "reverb", "flanger", "phaser", "filter", "bitcrusher", "distortion", "autopan", "tremolo", "moogladder4filter"] as const;
+export const PAD_EFFECTS = ["echo", "reverb", "flanger", "phaser", "filter", "bitcrusher", "distortion", "autopan", "tremolo", "moogladder4filter", "lowcutecho", "mtdelay", "spiral", "enigmajet", "sliproll", "roll", "pitchshift"] as const;
 export type PadEffect = (typeof PAD_EFFECTS)[number];
-export interface ChannelFx { effect: PadEffect; enabled: boolean; mix: number; depth?: number }
+export interface ChannelFx { effect: PadEffect; enabled: boolean; mix: number; depth?: number; beats?: number; tail?: boolean; nativeEnabled?: boolean }
 export interface ChannelColorFx { effect: string; amount: number }
 
 export interface ChannelState {

@@ -6,9 +6,19 @@ export const BEAT_FX = [
   ["pitchshift", "PITCH"], ["sliproll", "SLIP ROLL"], ["roll", "ROLL"],
   ["mobiussaw", "MOBIUS SAW"], ["mobiustri", "MOBIUS TRI"],
 ] as const;
-export function beatFxMaxBeats(effect: string): number {
-  if (["echo","lowcutecho","mtdelay","spiral","enigmajet","sliproll","roll","mobiussaw","mobiustri"].includes(effect)) return 2;
-  return effect === "tremolo" ? 4 : 16;
+export const BEAT_FX_RANGE_CAPABILITY = "mixer.beatfx.range.v2";
+const EXTENDED_BEAT_FX = ["echo", "lowcutecho", "mtdelay", "spiral", "enigmajet", "sliproll", "roll", "mobiussaw", "mobiustri"];
+/** Preserve older hosts' range until the processor expansion is advertised. */
+export function beatFxMaxBeats(effect: string, capabilities: readonly string[] = []): number {
+  const extended = capabilities.includes(BEAT_FX_RANGE_CAPABILITY);
+  if (EXTENDED_BEAT_FX.includes(effect)) return extended ? 16 : 2;
+  if (effect === "tremolo" || extended && effect === "phaser") return 4;
+  return 16;
+}
+export function beatFxMinBeats(effect: string, capabilities: readonly string[] = []): number {
+  if (!capabilities.includes(BEAT_FX_RANGE_CAPABILITY)) return 1 / 8;
+  if (EXTENDED_BEAT_FX.includes(effect)) return 1 / 16;
+  return effect === "flanger" || effect === "phaser" ? 1 / 4 : 1 / 8;
 }
 /** REVERB and PITCH have no beat parameter, so their beat selector is hidden. */
 export function beatFxHasBeats(effect: string): boolean {
