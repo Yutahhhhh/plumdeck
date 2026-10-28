@@ -1,12 +1,12 @@
 import json
-import asyncio
 import math
-from typing import List, Dict, Any
+from typing import Dict, Any
 from datetime import datetime
 from sqlmodel import Session, select, text
 from domain.models.track import Track, TrackAnalysis, TrackEmbedding
 from domain.models.lyrics import Lyrics
 from utils.array_codec import pack_f32, pack_u8_waveform
+from utils.features_extra import persisted_features_extra
 from utils.ingestion import has_valid_embedding
 import infra.database.connection as db_connection
 
@@ -36,10 +36,15 @@ class IngestionRepository:
         with session.no_autoflush:
             existing_track = session.exec(select(Track).where(Track.filepath == filepath)).first()
             track_id = None
+            bpm_authority = None
 
             if existing_track:
                 track_id = existing_track.id
                 existing_embedding = session.get(TrackEmbedding, track_id)
+                existing_analysis = session.get(TrackAnalysis, track_id)
+                existing_fx = existing_analysis.features_extra if existing_analysis else {}
+                # A rekordbox-synced BPM outranks re-analysis, including forced re-imports.
+                bpm_authority = existing_fx.get("bpm_authority") if isinstance(existing_fx, dict) else None
                 preserve_full_analysis = bool(
                     result.get("analysis_level") == "light"
                     and existing_track.analysis_level != "light"
@@ -58,6 +63,8 @@ class IngestionRepository:
                             "loudness", "loudness_range", "spectral_flux",
                             "spectral_rolloff",
                         }:
+                            continue
+                        if k == "bpm" and bpm_authority:
                             continue
                         if isinstance(v, str) and v and v.lower() != "unknown":
                             setattr(existing_track, k, v)
@@ -98,7 +105,16 @@ class IngestionRepository:
                 analysis = TrackAnalysis(track_id=track_id)
 
             if extras and not (existing_track and preserve_full_analysis):
-                new_fx = json.dumps(extras)
+                # Persist an allow-listed copy; callers still validate the full result.
+                fx = persisted_features_extra(extras)
+                if bpm_authority:
+                    fx["bpm_authority"] = bpm_authority
+                    if "analysis_bpm" in existing_fx:
+                        fx["analysis_bpm"] = existing_fx["analysis_bpm"]
+                    bpm = result.get("bpm")
+                    if isinstance(bpm, (int, float)) and not isinstance(bpm, bool) and math.isfinite(bpm) and bpm > 0:
+                        fx["analysis_bpm"] = bpm
+                new_fx = json.dumps(fx)
                 if new_fx != (analysis.features_extra_json or "{}"):
                     analysis.features_extra_json = new_fx
                     analysis_changed = True
@@ -158,18 +174,3 @@ class IngestionRepository:
         track_id = self._prepare_track_models(session, result, update_metadata)
         session.commit()
         return {"status": "updated" if existing else "created", "track_id": track_id}
-
-    async def batch_save_tracks(self, results: List[Dict[str, Any]]):
-        if not results: return
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._batch_save_tracks_sync, results)
-
-    def _batch_save_tracks_sync(self, results: List[Dict[str, Any]]):
-        try:
-            with Session(db_connection.engine) as session:
-                for result in results:
-                    self._prepare_track_models(session, result, update_metadata=True)
-                session.commit()
-                print(f"INFO: Batch saved {len(results)} tracks.")
-        except Exception as e:
-            print(f"ERROR: Batch save failed: {e}")

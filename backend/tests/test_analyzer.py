@@ -8,16 +8,11 @@ from domain.services.analysis.analyzer import AudioAnalyzer
 class MockConstants:
     RHYTHM_METHOD = 'degara'
     KEY_PROFILE_TYPE = 'edma'
-    WINDOW_TYPE = 'hann'
     SAMPLE_RATE = 44100
-    FRAME_SIZE = 2048
-    HOP_SIZE = 1024
     NORM_ENERGY = (0, 1)
     NORM_DANCEABILITY = (0, 1)
     NORM_BRIGHTNESS = (0, 1)
     NORM_NOISINESS = (0, 1)
-    NORM_FLUX = (0, 1)
-    NORM_LOUDNESS_RANGE = (0, 1)
     COMPONENT_VERSIONS = constants.COMPONENT_VERSIONS
 
 @pytest.fixture
@@ -32,10 +27,6 @@ def mock_analyzer(mocker):
     mocker.patch("domain.services.analysis.analyzer.es.Danceability")
     mocker.patch("domain.services.analysis.analyzer.es.SpectralCentroidTime")
     mocker.patch("domain.services.analysis.analyzer.es.ZeroCrossingRate")
-    mocker.patch("domain.services.analysis.analyzer.es.Spectrum")
-    mocker.patch("domain.services.analysis.analyzer.es.Windowing")
-    mocker.patch("domain.services.analysis.analyzer.es.RollOff")
-    mocker.patch("domain.services.analysis.analyzer.es.Flux")
     mocker.patch("domain.services.analysis.analyzer.es.TensorflowPredictMusiCNN", side_effect=Exception("Model not found")) # Skip model loading
 
     analyzer = AudioAnalyzer()
@@ -60,21 +51,34 @@ def test_format_result_with_lyrics(mock_analyzer, mocker):
         "bpm_confidence": 1.0,
         "key": "C",
         "scale": "major",
-        "key_strength": 1.0,
         "energy": 0.5,
         "danceability": 0.6,
-        "loudness": -10.0,
-        "loudness_range": 5.0,
         "brightness": 0.4,
         "noisiness": 0.1,
-        "rolloff": 1000.0,
-        "flux": 0.2
     }
 
     result = mock_analyzer._format_result("/path/to/song.mp3", mock_tag, features)
 
     assert result["lyrics"] == "La la la"
     assert result["title"] == "Test Title"
+    assert (result["key"], result["scale"]) == ("C major", "major")
+    # Outputs without a reader are neither computed nor stored.
+    for removed in ("loudness", "loudness_range", "spectral_flux", "spectral_rolloff", "contrast"):
+        assert removed not in result
+    assert "key_strength" not in result["features_extra"]
+
+
+def test_selected_timbre_and_key_return_only_read_outputs(mock_analyzer, mocker):
+    mocker.patch.object(mock_analyzer, "_load_audio", return_value=np.ones(44100, dtype=np.float32))
+    mocker.patch.object(mock_analyzer, "_extract_timbre_features", return_value={
+        "energy": 0.5, "danceability": 0.25, "brightness": 0.75, "noisiness": 0.1})
+    mock_analyzer.key_extractor = MagicMock(return_value=("F", "minor", 0.9))
+    result = mock_analyzer.analyze_selected("/song.wav", ["key", "timbre"])
+    assert {k: v for k, v in result.items() if k != "features_extra"} == {
+        "key": "F minor", "scale": "minor",
+        "energy": 0.5, "danceability": 0.25, "brightness": 0.75, "noisiness": 0.1,
+    }
+    assert set(result["features_extra"]) == {"analysis_components"}
 
 def test_format_result_without_lyrics(mock_analyzer, mocker):
     # Mock TinyTag
@@ -89,15 +93,10 @@ def test_format_result_without_lyrics(mock_analyzer, mocker):
         "bpm_confidence": 0.0,
         "key": "C",
         "scale": "major",
-        "key_strength": 0.0,
         "energy": 0.0,
         "danceability": 0.0,
-        "loudness": 0.0,
-        "loudness_range": 0.0,
         "brightness": 0.0,
         "noisiness": 0.0,
-        "rolloff": 0.0,
-        "flux": 0.0
     }
 
     result = mock_analyzer._format_result("/path/to/song.mp3", mock_tag, features)

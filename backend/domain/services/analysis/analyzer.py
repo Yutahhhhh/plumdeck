@@ -48,10 +48,6 @@ class AudioAnalyzer:
         self.danceability_algo = es.Danceability()
         self.centroid_algo = es.SpectralCentroidTime()
         self.zcr_algo = es.ZeroCrossingRate()
-        self.spec_algo = es.Spectrum()
-        self.w_algo = es.Windowing(type=constants.WINDOW_TYPE)
-        self.rolloff_algo = es.RollOff()
-        self.flux_algo = es.Flux()
         self.embedding_algo = None
         
         if getattr(sys, 'frozen', False):
@@ -169,9 +165,8 @@ class AudioAnalyzer:
             extra.update(bpm_confidence=float(confidence), beat_positions=ticks.tolist())
             extra.update(playback_grid=playback_grid(ticks, bpm, float(confidence)), playback_grid_version=GRID_VERSION)
         if "key" in features:
-            key, scale, strength = self.key_extractor(audio)
+            key, scale, _ = self.key_extractor(audio)
             result.update(key=f"{key} {scale}", scale=scale)
-            extra["key_strength"] = float(strength)
         if "waveform" in features:
             extra["waveform_peaks"] = self._compute_waveform_peaks(audio, 500)
         if "timbre" in features:
@@ -183,9 +178,6 @@ class AudioAnalyzer:
                 danceability=norm(raw["danceability"], constants.NORM_DANCEABILITY),
                 brightness=norm(raw["brightness"], constants.NORM_BRIGHTNESS),
                 noisiness=norm(raw["noisiness"], constants.NORM_NOISINESS),
-                contrast=round((norm(raw["flux"], constants.NORM_FLUX) + norm(raw["loudness_range"], constants.NORM_LOUDNESS_RANGE)) / 2, 2),
-                loudness=round(float(raw["loudness"]), 1), loudness_range=float(raw["loudness_range"]),
-                spectral_flux=float(raw["flux"]), spectral_rolloff=float(raw["rolloff"]),
             )
         extra["analysis_components"] = {f: constants.COMPONENT_VERSIONS[f] for f in features}
         return result
@@ -223,33 +215,22 @@ class AudioAnalyzer:
         bpm, ticks, confidence, _, _ = self.rhythm_extractor(audio)
         ticks = align_beats(audio, ticks, constants.SAMPLE_RATE)
         report("key", "キーを解析しています")
-        key, scale, key_strength = self.key_extractor(audio)
+        key, scale, _ = self.key_extractor(audio)
         report("timbre", "音量・音色の詳細を解析しています")
         return {
             "bpm": bpm, "beat_positions": ticks, "bpm_confidence": confidence,
-            "key": key, "scale": scale, "key_strength": key_strength,
+            "key": key, "scale": scale,
             **self._extract_timbre_features(audio),
         }
 
     def _extract_timbre_features(self, audio: np.ndarray) -> Dict[str, Any]:
-        loudness_algo = es.LoudnessEBUR128(sampleRate=constants.SAMPLE_RATE)
-        loudness_out = loudness_algo(np.stack([audio, audio], axis=1))
-        
-        rolloff_values, flux_values = [], []
-        for frame in es.FrameGenerator(audio, frameSize=constants.FRAME_SIZE, hopSize=constants.HOP_SIZE):
-            spec = self.spec_algo(self.w_algo(frame))
-            if np.sum(spec) > 0.001:
-                rolloff_values.append(self.rolloff_algo(spec))
-                flux_values.append(self.flux_algo(spec))
-
+        # Loudness, loudness range, rolloff, flux and contrast had no reader
+        # (no auto-gain); only these four descriptors are stored.
         return {
             "energy": np.mean(self.rms_algo(audio)),
             "danceability": self.danceability_algo(audio)[0],
             "brightness": self.centroid_algo(audio),
             "noisiness": np.mean(self.zcr_algo(audio)),
-            "loudness": loudness_out[2], "loudness_range": loudness_out[3],
-            "rolloff": float(np.percentile(rolloff_values, 85)) if rolloff_values else 0.0,
-            "flux": float(np.median(flux_values)) if flux_values else 0.0
         }
 
     def _format_result(self, filepath: str, tag: TinyTag, features: Dict[str, Any], external_lyrics: Optional[str] = None) -> Dict[str, Any]:
@@ -274,18 +255,12 @@ class AudioAnalyzer:
             "energy": round(norm(features['energy'], *constants.NORM_ENERGY), 2),
             "danceability": round(norm(features['danceability'], *constants.NORM_DANCEABILITY), 2),
             "brightness": round(norm(features['brightness'], *constants.NORM_BRIGHTNESS), 2),
-            "contrast": round((norm(features['flux'], *constants.NORM_FLUX) + norm(features['loudness_range'], *constants.NORM_LOUDNESS_RANGE)) / 2.0, 2),
             "noisiness": round(norm(features['noisiness'], *constants.NORM_NOISINESS), 2),
-            "loudness": round(safe_s(features['loudness']), 1),
-            "loudness_range": safe_s(features['loudness_range']),
-            "spectral_flux": safe_s(features['flux']),
-            "spectral_rolloff": safe_s(features['rolloff']),
             "features_extra": {
                 "analysis_components": {name: constants.COMPONENT_VERSIONS[name] for name in ("rhythm", "key", "timbre")},
                 "bpm_confidence": round(safe_s(features['bpm_confidence']), 2),
                 "playback_grid": playback_grid(features['beat_positions'], features['bpm'], float(features['bpm_confidence'])),
                 "playback_grid_version": GRID_VERSION,
-                "key_strength": round(safe_s(features['key_strength']), 2),
                 "beat_positions": features['beat_positions'].tolist() if hasattr(features['beat_positions'], 'tolist') else []
             }
         }

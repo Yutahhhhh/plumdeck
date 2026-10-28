@@ -261,3 +261,19 @@ def test_get_tracks_includes_analysis_level(client, session: Session):
         "Light Analysis Track": "light",
         "Legacy Analysis Track": None,
     }
+
+
+def test_key_filter_ignores_case_and_enharmonic_spelling(client, session: Session):
+    keys = {"/k/1.mp3": "F minor", "/k/2.mp3": "Eb minor", "/k/3.mp3": "C major", "/k/4.mp3": "2A"}
+    for path, key in keys.items():
+        session.add(Track(filepath=path, title=path, artist="A", genre="House", bpm=120, duration=100, key=key))
+    session.commit()
+
+    def paths(key):
+        return sorted(t["filepath"] for t in client.get("/api/tracks", params={"key": key}).json())
+
+    # The UI sends 'Minor' / 'F Minor' / 'D# Minor'; analysis stores 'F minor' / 'Eb minor'.
+    assert paths("Minor") == ["/k/1.mp3", "/k/2.mp3"]
+    assert paths("Major") == ["/k/3.mp3"]
+    assert paths("F Minor") == ["/k/1.mp3"]
+    assert paths("D# Minor") == ["/k/2.mp3", "/k/4.mp3"]

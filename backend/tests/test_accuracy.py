@@ -85,9 +85,8 @@ def test_bpm_output_preserves_hundredths():
     analyzer = AudioAnalyzer.__new__(AudioAnalyzer)
     tag = MagicMock(year=None, duration=180, title="T", artist="A", album="B", genre="G", extra={})
     features = dict(
-        bpm=127.87, key="C", scale="major", bpm_confidence=1, key_strength=1,
-        beat_positions=[], energy=0.1, danceability=1, brightness=2000,
-        noisiness=0.01, flux=0.1, loudness=-10, loudness_range=5, rolloff=4000,
+        bpm=127.87, key="C", scale="major", bpm_confidence=1,
+        beat_positions=[], energy=0.1, danceability=1, brightness=2000, noisiness=0.01,
     )
     assert analyzer._format_result("/test.wav", tag, features)["bpm"] == 127.87
 
@@ -111,7 +110,8 @@ def test_reanalysis_updates_all_audio_features_and_model_provenance(session):
                     "contrast", "loudness", "loudness_range", "spectral_flux", "spectral_rolloff"):
         assert getattr(track, feature) == pytest.approx(result[feature])
     assert session.get(TrackEmbedding, track.id).model_name == "msd-musicnn-1"
-    assert session.get(TrackAnalysis, track.id).features_extra["embedding_pipeline_version"] == "musicnn-16khz-v1"
+    # Diagnostic keys stay in the worker result but are not persisted.
+    assert session.get(TrackAnalysis, track.id).features_extra == {}
 
     # A later metadata-only edit must keep the newly measured features.
     repo._prepare_track_models(session, {"filepath": track.filepath, "title": "New title"})

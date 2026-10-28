@@ -168,3 +168,22 @@ def test_list_directory_only_marks_completed_analysis_as_analyzed(
     assert "completed.mp3" not in visible_names
     assert "incomplete.mp3" in visible_names
     assert "failed.mp3" in visible_names
+
+
+def test_metadata_omits_beat_positions(client: TestClient, session: Session, tmp_path):
+    from domain.models.track import TrackAnalysis
+    audio = tmp_path / "song.mp3"
+    audio.write_bytes(b"\0" * 64)
+    track = Track(filepath=str(audio), title="T", artist="A", bpm=120, duration=10)
+    session.add(track)
+    session.flush()
+    analysis = TrackAnalysis(track_id=track.id)
+    analysis.beat_positions = [0.5, 1.0]
+    analysis.waveform_peaks = [0.2, 0.8]
+    session.add(analysis)
+    session.commit()
+
+    body = client.get("/api/metadata", params={"track_id": track.id}).json()
+    assert "beat_positions" not in body
+    assert body["analyzed"] is True
+    assert len(body["waveform_peaks"]) == 2

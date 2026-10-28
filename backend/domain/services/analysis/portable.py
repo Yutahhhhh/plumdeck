@@ -126,14 +126,13 @@ class PortableAudioAnalyzer(AudioAnalyzer):
     def _extract_light_features(self, audio, sample_rate=constants.SAMPLE_RATE):
         """Return inexpensive, finite descriptors from a bounded audio window."""
         rms = float(np.sqrt(np.mean(np.square(audio, dtype=np.float64))))
-        loudness = float(20 * np.log10(max(rms, 1e-7)))
         if len(audio) > 1:
             noisiness = float(np.mean(np.signbit(audio[1:]) != np.signbit(audio[:-1])))
         else:
             noisiness = 0.0
 
-        # A short FFT slice is enough for an approximate brightness/rolloff
-        # indicator and avoids constructing a full-track STFT matrix.
+        # A short FFT slice is enough for an approximate brightness indicator
+        # and avoids constructing a full-track STFT matrix.
         fft_samples = min(len(audio), sample_rate * 10)
         sample = audio[(len(audio) - fft_samples) // 2:][:fft_samples]
         frame_size, hop = 2048, 1024
@@ -145,20 +144,6 @@ class PortableAudioAnalyzer(AudioAnalyzer):
         frequencies = np.fft.rfftfreq(frame_size, 1 / sample_rate)
         total = float(np.sum(spectrum))
         brightness = float(np.dot(spectrum, frequencies) / total) if total > 0 else 0.0
-        if total > 0:
-            rolloff_index = int(np.searchsorted(np.cumsum(spectrum), total * .85))
-            rolloff = float(frequencies[min(rolloff_index, len(frequencies) - 1)])
-        else:
-            rolloff = 0.0
-
-        frame_rms = np.sqrt(np.mean(np.square(frames, dtype=np.float64), axis=1))
-        frame_db = 20 * np.log10(np.maximum(frame_rms, 1e-7))
-        active_db = frame_db[frame_db > max(-70, float(np.max(frame_db)) - 20)]
-        loudness_range = float(np.percentile(active_db, 95) - np.percentile(active_db, 10)) if active_db.size else 0.0
-        normalized_spectra = spectra / np.maximum(np.sum(spectra, axis=1, keepdims=True), 1e-8)
-        flux = float(np.median(np.sqrt(np.sum(np.diff(normalized_spectra, axis=0) ** 2, axis=1)))) if len(normalized_spectra) > 1 else 0.0
-        contrast = float(np.clip((flux / constants.NORM_FLUX[1]
-                                  + loudness_range / constants.NORM_LOUDNESS_RANGE[1]) / 2, 0, 1))
         return {
             "energy": float(np.clip(rms / constants.NORM_ENERGY[1], 0, 1)),
             "brightness": float(np.clip(
@@ -166,11 +151,6 @@ class PortableAudioAnalyzer(AudioAnalyzer):
                 / (constants.NORM_BRIGHTNESS[1] - constants.NORM_BRIGHTNESS[0]), 0, 1,
             )),
             "noisiness": float(np.clip(noisiness / constants.NORM_NOISINESS[1], 0, 1)),
-            "loudness": round(loudness, 1),
-            "loudness_range": loudness_range,
-            "spectral_flux": flux,
-            "spectral_rolloff": rolloff,
-            "contrast": contrast,
         }
 
     def analyze_light(self, filepath, external_lyrics=None):
@@ -184,7 +164,7 @@ class PortableAudioAnalyzer(AudioAnalyzer):
         start = start_sample / light_dsp.SAMPLE_RATE
         audio = whole_audio[start_sample:start_sample + light_dsp.SAMPLE_RATE * LIGHT_ANALYSIS_SECONDS]
         report("rhythm_key", "代表区間のBPM・キーを解析しています（最大30秒）")
-        bpm_hint, _, key, scale, key_strength = light_dsp.rhythm_and_key(audio)
+        bpm_hint, _, key, scale, _ = light_dsp.rhythm_and_key(audio)
         report("beat_grid", "全曲のビート位置を解析しています")
         bpm, ticks, confidence = light_grid.analyze(whole_audio, bpm_hint=bpm_hint)
         grid = playback_grid(ticks, bpm, confidence)
@@ -205,7 +185,6 @@ class PortableAudioAnalyzer(AudioAnalyzer):
                 "embedding": constants.EMBEDDING_PIPELINE_VERSION,
             },
             "bpm_confidence": round(float(confidence), 2),
-            "key_strength": round(float(key_strength), 2),
             "beat_positions": ticks.tolist(),
             "playback_grid_version": GRID_VERSION,
             "playback_grid": grid,
@@ -332,22 +311,10 @@ class PortableAudioAnalyzer(AudioAnalyzer):
                 "features_extra": {"embedding_sample_rate":16000, "embedding_pipeline_version":constants.EMBEDDING_PIPELINE_VERSION}}
 
     def _extract_timbre_features(self, audio):
-        import pyloudnorm
         spectrum = np.abs(self.librosa.stft(audio, n_fft=2048, hop_length=1024))
-        rms = self.librosa.feature.rms(S=spectrum)[0]
-        flux = np.sqrt(np.sum(np.diff(spectrum, axis=1)**2, axis=0))
-        rolloff = self.librosa.feature.spectral_rolloff(S=spectrum, sr=constants.SAMPLE_RATE)[0]
-        loudness = pyloudnorm.Meter(constants.SAMPLE_RATE).integrated_loudness(
-            np.pad(audio, (0, max(0, int(constants.SAMPLE_RATE*.4)+1-len(audio)))))
-        loudness = float(loudness) if np.isfinite(loudness) else -70.0
-        levels = 20*np.log10(np.maximum(rms, 1e-7))
-        active = levels[levels > max(-70, float(np.max(levels))-20)]
-        spread = float(np.percentile(active,95)-np.percentile(active,10)) if active.size else 0.0
         envelope = self.librosa.onset.onset_strength(S=self.librosa.amplitude_to_db(spectrum))
         correlation = self.librosa.autocorrelate(envelope, max_size=min(128,len(envelope)))
         periodicity = float(np.max(correlation[4:])/max(correlation[0],1e-8)) if len(correlation)>4 else 0.0
         return {"energy":float(np.sqrt(np.mean(audio**2))), "danceability":2.5*np.clip(periodicity,0,1),
                 "brightness":float(self.librosa.feature.spectral_centroid(S=spectrum, sr=constants.SAMPLE_RATE).mean()),
-                "noisiness":float(self.librosa.feature.zero_crossing_rate(audio).mean()),
-                "loudness":loudness,"loudness_range":spread,
-                "rolloff":float(np.percentile(rolloff,85)),"flux":float(np.median(flux)) if flux.size else 0.0}
+                "noisiness":float(self.librosa.feature.zero_crossing_rate(audio).mean())}

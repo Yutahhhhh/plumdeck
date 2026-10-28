@@ -19,6 +19,7 @@ from domain.services.analysis.constants import COMPONENT_VERSIONS, EMBEDDING_MOD
 from infra.database import connection
 from infra.repositories.analysis_job_repository import AnalysisJobRepository
 from app.services.analysis_coordinator import analysis_coordinator
+from utils.features_extra import persisted_features_extra
 
 
 def analyze_components(filepath, features):
@@ -235,17 +236,21 @@ class AnalysisJobService:
                 raise ValueError("Track removed or path changed during analysis")
             allowed = {
                 "rhythm": ("bpm",), "key": ("key", "scale"),
-                "timbre": ("energy", "danceability", "brightness", "noisiness", "contrast", "loudness", "loudness_range", "spectral_flux", "spectral_rolloff"),
+                "timbre": ("energy", "danceability", "brightness", "noisiness"),
             }
+            analysis = session.get(TrackAnalysis, track.id) or TrackAnalysis(track_id=track.id)
+            extra = dict(analysis.features_extra)
+            update = dict(result.get("features_extra", {}))
             for feature in features:
                 for name in allowed.get(feature, ()):
                     value = result[name]
                     if not isinstance(value, str) and not np.isfinite(value):
                         raise ValueError(f"Invalid {name} result")
+                    if name == "bpm" and extra.get("bpm_authority"):
+                        # A rekordbox-synced BPM wins; keep the estimate beside it.
+                        update["analysis_bpm"] = value
+                        continue
                     setattr(track, name, value)
-            analysis = session.get(TrackAnalysis, track.id) or TrackAnalysis(track_id=track.id)
-            extra = dict(analysis.features_extra)
-            update = dict(result.get("features_extra", {}))
             components = {**extra.get("analysis_components", {}), **update.pop("analysis_components", {})}
             if "rhythm" in features:
                 analysis.beat_positions = update.pop("beat_positions")
@@ -256,7 +261,7 @@ class AnalysisJobService:
                 refresh_saved_analysis_grid(session, track.id, update.get("playback_grid"))
             if "waveform" in features:
                 analysis.waveform_peaks = update.pop("waveform_peaks")
-            extra.update(update)
+            extra.update(persisted_features_extra(update))
             extra["analysis_components"] = components
             analysis.features_extra_json = json.dumps(extra, allow_nan=False)
             if "embedding" in features:

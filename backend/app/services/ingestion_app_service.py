@@ -15,22 +15,6 @@ from app.services.analysis_coordinator import analysis_coordinator
 import sys
 import time
 
-def worker_init():
-    try:
-        sys.stdin.fileno()
-    except (ValueError, AttributeError, OSError):
-        sys.stdin = open(os.devnull, 'r')
-    
-    try:
-        sys.stdout.fileno()
-    except (ValueError, AttributeError, OSError):
-        sys.stdout = open(os.devnull, 'w')
-        
-    try:
-        sys.stderr.fileno()
-    except (ValueError, AttributeError, OSError):
-        sys.stderr = open(os.devnull, 'w')
-
 # Windows decoder/native hangs must become visible failures in a useful amount
 # of time. Keep the established macOS allowance unchanged.
 WORKER_TIMEOUT = 165.0 if sys.platform == "win32" else 570.0

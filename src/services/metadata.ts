@@ -4,7 +4,6 @@ export interface FileMetadata {
   artwork: string | null;
   lyrics: string;
   waveform_peaks?: number[];
-  beat_positions?: number[];
 }
 
 export const metadataService = {

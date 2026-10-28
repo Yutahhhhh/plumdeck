@@ -26,23 +26,15 @@ class FilesystemAppService:
         if not resolved_path:
             return None
         
+        # Beat positions are served by the grid endpoints; no client read them
+        # here, and they cost ~8KB per Play list row.
         analysis = self.session.get(TrackAnalysis, track_id)
-        if analysis:
-            db_metadata = {
-                "bpm": track.bpm,
-                "key": track.key,
-                "beat_positions": analysis.beat_positions,
-                "waveform_peaks": analysis.waveform_peaks,
-                "analyzed": True
-            }
-        else:
-            db_metadata = {
-                "bpm": track.bpm,
-                "key": track.key,
-                "beat_positions": [],
-                "waveform_peaks": [],
-                "analyzed": False
-            }
+        db_metadata = {
+            "bpm": track.bpm,
+            "key": track.key,
+            "waveform_peaks": analysis.waveform_peaks if analysis else [],
+            "analyzed": analysis is not None,
+        }
 
         tag_metadata = extract_full_metadata(resolved_path)
 

@@ -37,6 +37,9 @@ def analyze_track_file(filepath: str, high_precision: bool = True, skip_basic: b
                        analysis_profile: str = "full") -> Optional[dict]:
     """
     Wrapper function for backward compatibility.
+
+    ``high_precision`` is ignored. It stays in the signature because workers
+    receive these arguments positionally (ingestion_domain_service.run_args).
     """
     report("initializing", "解析ワーカーを初期化しています")
     analyzer = get_analyzer()
