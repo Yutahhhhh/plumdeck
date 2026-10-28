@@ -28,7 +28,16 @@ rm -rf -- "$nested"
 # project's Developer ID + notarization workflow.
 identity="${APPLE_SIGNING_IDENTITY:--}"
 codesign --force --deep --sign "$identity" "$nested"
-codesign --force --deep --sign "$identity" "$bundle"
+if [[ "$identity" == "-" ]]; then
+  # Local builds use ad-hoc signing. Pin the app's designated requirement to
+  # its bundle identifier so macOS TCC permissions survive code-hash changes
+  # between local rebuilds. The nested host is already sealed above; avoid
+  # --deep here so its independent signature remains intact.
+  codesign --force --sign "$identity" \
+    -r='designated => identifier "com.plumdeck.app"' "$bundle"
+else
+  codesign --force --deep --sign "$identity" "$bundle"
+fi
 codesign --verify --deep --strict "$nested"
 codesign --verify --deep --strict "$bundle"
 echo "Verified Performance bundle: $bundle"
