@@ -320,25 +320,26 @@ class RecommendationRepository:
             else:
                 model_filter = "te.model_name = :target_model"
                 params["target_model"] = target_embedding.model_name
-            # The target vector was validated above (finite, nonzero norm).
-            candidate_vector = f"TRY_CAST(CASE WHEN {model_filter} THEN te.embedding_json END AS FLOAT[{EMBEDDING_DIM}])"
-            cosine = f"TRY(array_cosine_similarity(candidate_vector, CAST(:target_vec AS FLOAT[{EMBEDDING_DIM}])))"
-            # DuckDB returns -1 for a zero/NaN vector, so validate the norm
-            # before treating its cosine result as measured dissimilarity.
-            measured = f"""CASE WHEN isfinite(candidate_norm) AND candidate_norm > 0 AND isfinite({cosine})
-                THEN {cosine} END"""
+            candidate_vector = f"TRY_CAST(te.embedding_json AS FLOAT[{EMBEDDING_DIM}])"
+            target_array = f"CAST(:target_vec AS FLOAT[{EMBEDDING_DIM}])"
+            candidate_norm = f"TRY(array_inner_product({candidate_vector}, {candidate_vector}))"
+            target_norm = f"TRY(array_inner_product({target_array}, {target_array}))"
+            # DuckDB returns -1 for a zero/NaN vector, so validate norms before
+            # treating its cosine result as measured dissimilarity.
+            similarity = f"""CASE WHEN {model_filter}
+                AND isfinite({candidate_norm}) AND ({candidate_norm}) > 0
+                AND isfinite({target_norm}) AND ({target_norm}) > 0
+                THEN TRY(array_cosine_similarity({candidate_vector}, {target_array})) ELSE NULL END"""
+            vector_score = f"""CASE WHEN isfinite({similarity})
+                THEN GREATEST(0.0, LEAST(1.0, {similarity})) ELSE NULL END"""
         else:
-            candidate_vector = f"CAST(NULL AS FLOAT[{EMBEDDING_DIM}])"
-            measured = "CAST(NULL AS DOUBLE)"
+            vector_score = "NULL"
 
         params["bpm_weight"] = DEFAULT_MIXABILITY_WEIGHTS["bpm"]
         params["vector_weight"] = DEFAULT_MIXABILITY_WEIGHTS["vector"]
-        # GREATEST/LEAST skip NULLs in DuckDB; keep "nothing measured" NULL.
-        vector_score = """CASE WHEN t.vector_similarity IS NOT NULL
-            THEN GREATEST(0.0, LEAST(1.0, t.vector_similarity)) END"""
         score = f"""(
-            (({bpm_score}) * :bpm_weight + COALESCE({vector_score}, 0.0) * :vector_weight)
-            / (:bpm_weight + CASE WHEN t.vector_similarity IS NOT NULL THEN :vector_weight ELSE 0 END) +
+            (({bpm_score}) * :bpm_weight + COALESCE(({vector_score}), 0.0) * :vector_weight)
+            / (:bpm_weight + CASE WHEN ({vector_score}) IS NOT NULL THEN :vector_weight ELSE 0 END) +
             CASE WHEN EXISTS (
                 SELECT 1 FROM wordplay_pairs wp
                 WHERE wp.from_track_id=:track_id AND wp.to_track_id=t.id AND wp.status='approved'
@@ -351,31 +352,14 @@ class RecommendationRepository:
         )
         count_sql = f"SELECT count(*) FROM tracks t WHERE {where_sql}"
         total = int(self.session.connection().execute(text(count_sql), params).scalar_one())
-        # Similarity is computed once per candidate. A pending/incomparable
-        # embedding takes the median similarity of the filtered candidates
-        # (utils.embedding.neutral_similarity), so it ranks like a typical one.
         page_sql = f"""
-            WITH vectors AS (
-                SELECT t.*, l.content AS lyrics,
-                       (l.content IS NOT NULL AND length(trim(l.content)) > 0) AS has_lyrics,
-                       {candidate_vector} AS candidate_vector
-                FROM tracks t
-                LEFT JOIN track_embeddings te ON te.track_id=t.id
-                LEFT JOIN lyrics l ON l.track_id=t.id
-                WHERE {where_sql}
-            ), norms AS (
-                SELECT *, TRY(array_inner_product(candidate_vector, candidate_vector)) AS candidate_norm
-                FROM vectors
-            ), measured AS (
-                SELECT * EXCLUDE (candidate_vector, candidate_norm), {measured} AS measured_similarity
-                FROM norms
-            ), imputed AS (
-                SELECT *, COALESCE(measured_similarity, MEDIAN(measured_similarity) OVER ()) AS vector_similarity
-                FROM measured
-            )
-            SELECT t.* EXCLUDE (measured_similarity, vector_similarity),
+            SELECT t.*, l.content AS lyrics,
+                   (l.content IS NOT NULL AND length(trim(l.content)) > 0) AS has_lyrics,
                    {score} AS recommendation_score
-            FROM imputed t
+            FROM tracks t
+            LEFT JOIN track_embeddings te ON te.track_id=t.id
+            LEFT JOIN lyrics l ON l.track_id=t.id
+            WHERE {where_sql}
             ORDER BY recommendation_score DESC, {candidate_order}
             LIMIT :limit OFFSET :offset
         """

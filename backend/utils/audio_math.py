@@ -99,8 +99,10 @@ def bpm_distance(target_bpm: float, candidate_bpm: float) -> float:
     return min(abs(ratio + shift) for shift in (-1, 0, 1))
 
 # Legacy recommenders, aligned with Assist: key carries no weight (the DJ
-# does not match keys) and a missing embedding is not scored 0 (see
-# calculate_mixability_score).
+# does not match keys) and a missing embedding is left out, not scored 0, with
+# the remaining weights renormalized (owner decision). Known cost: with only
+# tempo left, a pending track tends to outrank measured ones (99.9% of the top
+# 20 with 15% of embeddings removed); median imputation awaits owner sign-off.
 DEFAULT_MIXABILITY_WEIGHTS = {"bpm": 0.35, "key": 0.0, "vector": 0.4}
 # Set builders (Setlist Auto / phased sets) weigh tempo over timbre.
 SET_TRANSITION_WEIGHTS = {"bpm": 0.4, "key": 0.0, "vector": 0.3}
@@ -112,16 +114,10 @@ def calculate_mixability_score(
     candidate_bpm: float, 
     candidate_key: Optional[str],
     vector_similarity: Optional[float] = None,
-    weights: dict = None,
-    neutral_similarity: Optional[float] = None,
+    weights: dict = None
 ) -> float:
     """
     Calculate a mixability score (0.0 - 1.0) between two tracks.
-
-    Without a comparable embedding the candidate takes ``neutral_similarity``
-    (utils.embedding.neutral_similarity of its candidate set). When nothing
-    in the set is measured either, the vector is left out and the remaining
-    weights are renormalized, which then ranks every candidate alike.
     """
     w = DEFAULT_MIXABILITY_WEIGHTS if weights is None else weights
     
@@ -145,9 +141,9 @@ def calculate_mixability_score(
     else:
         key_score = 0.5
         
+    # Missing or incompatible embeddings carry no evidence. Keep a measured
+    # zero similarity, but exclude unavailable components and normalize again.
     components = {"bpm": bpm_score, "key": key_score}
-    if vector_similarity is None or not math.isfinite(vector_similarity):
-        vector_similarity = neutral_similarity
     if vector_similarity is not None and math.isfinite(vector_similarity):
         components["vector"] = max(0.0, min(1.0, vector_similarity))
     available = sum(w.get(name, 0.0) for name in components)
