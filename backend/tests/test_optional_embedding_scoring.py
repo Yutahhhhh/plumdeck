@@ -10,7 +10,7 @@ from domain.services import assist_recommendation
 from domain.services.phased_setlist_builder import transition_score
 from domain.services.setlist_builder import SetlistBuilder
 from utils.audio_math import calculate_mixability_score
-from utils.embedding import cosine_similarity
+from utils.embedding import cosine_similarity, neutral_similarity
 
 
 @pytest.mark.parametrize("left,right,left_model,right_model", [
@@ -64,11 +64,51 @@ def test_chain_and_phased_transitions_share_optional_embedding_semantics(candida
     assert transition_score(source, candidate) == 1.0
 
 
-def test_bridge_can_prefer_pending_embedding_to_measured_dissimilarity():
-    start, end = _node(1, [1, 0]), _node(4, [1, 0])
-    pending, dissimilar = _node(2), _node(3, [0, 1])
-    path = SetlistBuilder().build_path([dissimilar, pending], start, end, 3)
-    assert [track.id for track in path] == [1, 2, 4]
+def test_pending_embedding_takes_the_median_of_measured_candidates():
+    assert neutral_similarity([None, 0.2, float("nan"), 0.9, 0.5]) == 0.5
+    assert neutral_similarity([None, float("nan")]) is None
+    # Renormalizing alone would score a pending candidate 1.0 here, above
+    # every measured one; the median ranks it like a typical candidate.
+    pending = calculate_mixability_score(120, None, 120, None, None, neutral_similarity=0.5)
+    assert calculate_mixability_score(120, None, 120, None, 0.2) < pending
+    assert pending < calculate_mixability_score(120, None, 120, None, 0.9)
+
+
+VECTORS = {"close": [1, 0], "middle": [0.6, 0.8], "far": [0, 1]}
+
+
+def test_set_builders_rank_a_pending_candidate_in_the_middle():
+    start, end = _node(1, [1, 0]), _node(9, [1, 0])
+    nodes = {name: _node(n, VECTORS.get(name)) for n, name in enumerate(("close", "middle", "pending", "far"), 2)}
+    pool = list(nodes.values())
+    scores = {name: SetlistBuilder()._calculate_transition_score(
+        start, node, SetlistBuilder._neutral_similarity(start, pool, set())) for name, node in nodes.items()}
+    assert scores["close"] > scores["middle"] == scores["pending"] > scores["far"]
+    chain = SetlistBuilder().build_chain(pool, [start], 3, {})
+    assert [track.id for track in chain] == [1, nodes["close"]["id"], nodes["middle"]["id"]]
+    path = SetlistBuilder().build_path([nodes["pending"], nodes["far"]], start, end, 3)
+    assert [track.id for track in path] == [1, nodes["pending"]["id"], 9]
+
+
+def test_recommenders_rank_a_pending_candidate_like_a_typical_one(session):
+    target = _node(200)["track"]
+    tracks = {name: _node(n)["track"] for n, name in enumerate(("close", "middle", "pending", "far"), 201)}
+    session.add_all([target, *tracks.values()])
+    session.flush()
+    session.add(TrackEmbedding(track_id=target.id, model_name="musicnn", embedding_json=json.dumps([1.0] + [0.0] * 199)))
+    for name, vector in VECTORS.items():
+        session.add(TrackEmbedding(track_id=tracks[name].id, model_name="musicnn",
+                                   embedding_json=json.dumps(vector + [0.0] * 198)))
+    session.commit()
+    ids = {name: track.id for name, track in tracks.items()}
+    service = SetlistAppService(session)
+    paged = [item["id"] for item in service.recommend_next_track_page(target.id, limit=20)["items"]]
+    legacy = [track["id"] for track in service.recommend_next_track(target.id, limit=20)]
+    # "middle" is the median of the three measured similarities (1, .6, 0),
+    # so the pending track ties with it: neither first nor last.
+    for ranked in (paged, legacy):
+        assert ranked[0] == ids["close"] and ranked[3] == ids["far"]
+        assert set(ranked[1:3]) == {ids["middle"], ids["pending"]}
 
 
 def test_assist_renormalizes_incompatible_embeddings_and_explains_pending():

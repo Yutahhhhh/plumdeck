@@ -2,7 +2,7 @@ from typing import List, Dict, Any
 import numpy as np
 from domain.models.track import Track
 from utils.audio_math import bpm_distance, calculate_mixability_score, SET_TRANSITION_WEIGHTS
-from utils.embedding import cosine_similarity
+from utils.embedding import cosine_similarity, neutral_similarity
 
 # 同一アーティスト連続のペナルティ (単調なセットを防ぐ)
 SAME_ARTIST_PENALTY = 0.2
@@ -60,6 +60,7 @@ class SetlistBuilder:
             current_node = chain[-1]
             best_next = None
             best_score = -999.0
+            neutral = self._neutral_similarity(current_node, pool, used_ids)
 
             for candidate in pool:
                 if candidate["id"] in used_ids:
@@ -68,7 +69,7 @@ class SetlistBuilder:
                 if only_from and current_node["id"] not in only_from:
                     continue
 
-                mix_score = self._calculate_transition_score(current_node, candidate)
+                mix_score = self._calculate_transition_score(current_node, candidate, neutral)
 
                 # Vibe 近接スコア: energy だけでなく danceability / brightness も評価
                 vibe_score = 0.0
@@ -130,6 +131,8 @@ class SetlistBuilder:
             
             best_next = None
             best_score = -999.0
+            neutral = self._neutral_similarity(current_node, pool, used_ids)
+            goal_neutral = self._neutral_similarity(end_node, pool, used_ids)
             
             for candidate in pool:
                 if candidate["id"] in used_ids: continue
@@ -138,11 +141,13 @@ class SetlistBuilder:
                     continue
                 
                 # 1. Mixability from Current
-                mix_score = self._calculate_transition_score(current_node, candidate)
+                mix_score = self._calculate_transition_score(current_node, candidate, neutral)
                 
                 # 2. Vector Similarity to End Node (Guide towards goal)
                 goal_sim = cosine_similarity(candidate["vector"], end_node["vector"],
                                              candidate.get("embedding_model"), end_node.get("embedding_model"))
+                if goal_sim is None:
+                    goal_sim = goal_neutral
 
                 # 3. Param proximity to interpolation target
                 param_score = 0.0
@@ -150,8 +155,8 @@ class SetlistBuilder:
                     param_score -= abs(candidate["track"].bpm - target_bpm) * 0.01
                 param_score -= abs(candidate["track"].energy - target_energy)
                 
-                # Preserve the existing scale while excluding an unavailable
-                # goal embedding, just as the transition scorer does.
+                # Without any measured goal similarity, keep the existing
+                # scale by renormalizing over the other two terms.
                 total_score = (mix_score * 1.5) + (param_score * 0.5)
                 if goal_sim is None:
                     total_score *= 3.0 / 2.0
@@ -174,7 +179,16 @@ class SetlistBuilder:
         chain.append(end_node)
         return [node["track"] for node in chain]
 
-    def _calculate_transition_score(self, current: Dict[str, Any], candidate: Dict[str, Any]) -> float:
+    @staticmethod
+    def _neutral_similarity(node: Dict[str, Any], pool: List[Dict[str, Any]], used_ids) -> Any:
+        """Median similarity from ``node`` to the unused candidates."""
+        return neutral_similarity(
+            cosine_similarity(node["vector"], candidate["vector"],
+                              node.get("embedding_model"), candidate.get("embedding_model"))
+            for candidate in pool if candidate["id"] not in used_ids)
+
+    def _calculate_transition_score(self, current: Dict[str, Any], candidate: Dict[str, Any],
+                                    neutral=None) -> float:
         """ラッパー: utilsの計算ロジックを呼び出す"""
         vec_sim = cosine_similarity(current["vector"], candidate["vector"],
                                     current.get("embedding_model"), candidate.get("embedding_model"))
@@ -186,4 +200,5 @@ class SetlistBuilder:
             candidate_key=candidate["track"].key,
             vector_similarity=vec_sim,
             weights=SET_TRANSITION_WEIGHTS,
+            neutral_similarity=neutral,
         )

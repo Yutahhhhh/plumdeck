@@ -19,7 +19,7 @@ from domain.services.setlist_builder import APPROVED_WORDPLAY_BONUS
 from utils.audio_math import (
     bpm_distance, calculate_mixability_score, normalize_key, CAMELOT_ADJACENCY, SET_TRANSITION_WEIGHTS,
 )
-from utils.embedding import cosine_similarity
+from utils.embedding import cosine_similarity, neutral_similarity
 
 # Weights are relative to calculate_mixability_score, which is 0..1.
 ENERGY_WEIGHT = 0.6
@@ -61,13 +61,19 @@ def key_relation(previous_key: Optional[str], key: Optional[str]) -> str:
     return "compatible" if right in CAMELOT_ADJACENCY.get(left, []) else "clash"
 
 
-def transition_score(previous: dict[str, Any], candidate: dict[str, Any]) -> float:
-    similarity = cosine_similarity(previous.get("vector"), candidate.get("vector"),
-                                   previous.get("embedding_model"), candidate.get("embedding_model"))
+def _similarity(previous: dict[str, Any], candidate: dict[str, Any]) -> Optional[float]:
+    return cosine_similarity(previous.get("vector"), candidate.get("vector"),
+                             previous.get("embedding_model"), candidate.get("embedding_model"))
+
+
+def transition_score(previous: dict[str, Any], candidate: dict[str, Any],
+                     neutral: Optional[float] = None) -> float:
+    """``neutral`` stands in for a pending embedding (see neutral_similarity)."""
     return calculate_mixability_score(
         target_bpm=previous["track"].bpm, target_key=previous["track"].key,
         candidate_bpm=candidate["track"].bpm, candidate_key=candidate["track"].key,
-        vector_similarity=similarity, weights=TRANSITION_WEIGHTS,
+        vector_similarity=_similarity(previous, candidate), weights=TRANSITION_WEIGHTS,
+        neutral_similarity=neutral,
     )
 
 
@@ -151,21 +157,23 @@ class PhasedSetlistBuilder:
                 if not choices:
                     break
 
+                neutral = (neutral_similarity(_similarity(previous, node) for node in choices)
+                           if previous is not None else None)
                 best = max(
                     choices,
                     key=lambda node: (
-                        self._score(node, previous, history, phase, progress, slot, anchors, edges),
+                        self._score(node, previous, history, phase, progress, slot, anchors, edges, neutral),
                         -node["id"],
                     ),
                 )
-                score = self._score(best, previous, history, phase, progress, slot, anchors, edges)
+                score = self._score(best, previous, history, phase, progress, slot, anchors, edges, neutral)
                 placements.append({
                     "node": best,
                     "phase": phase.label,
                     "phase_index": phase_index,
                     "phase_switch": slot == 0 and bool(history),
                     "score": round(score, 4),
-                    "transition": self._describe(previous, best, edges),
+                    "transition": self._describe(previous, best, edges, neutral),
                 })
                 used_ids.add(best["id"])
                 history.append(best)
@@ -180,11 +188,11 @@ class PhasedSetlistBuilder:
                 notes.append(f"「{phase.label}」の必須曲 {len(missing)} 曲を配置できませんでした")
         return placements, notes
 
-    def _score(self, node, previous, history, phase, progress, slot, anchors, edges) -> float:
+    def _score(self, node, previous, history, phase, progress, slot, anchors, edges, neutral=None) -> float:
         track = node["track"]
         score = 0.0
         if previous is not None:
-            mix = transition_score(previous, node)
+            mix = transition_score(previous, node, neutral)
             score += mix * (PHASE_SWITCH_MIX_WEIGHT if slot == 0 else 1.0)
             if (previous["id"], node["id"]) in edges:
                 score += self._wordplay_bonus
@@ -208,7 +216,7 @@ class PhasedSetlistBuilder:
         return score
 
     @staticmethod
-    def _describe(previous, node, edges) -> Optional[dict[str, Any]]:
+    def _describe(previous, node, edges, neutral=None) -> Optional[dict[str, Any]]:
         if previous is None:
             return None
         before, after = previous["track"], node["track"]
@@ -219,6 +227,6 @@ class PhasedSetlistBuilder:
             "from_track_id": previous["id"],
             "bpm_diff": bpm_diff,
             "key_relation": key_relation(before.key, after.key),
-            "mix_score": round(transition_score(previous, node), 3),
+            "mix_score": round(transition_score(previous, node, neutral), 3),
             "approved_wordplay": (previous["id"], node["id"]) in edges,
         }

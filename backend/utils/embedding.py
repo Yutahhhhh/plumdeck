@@ -27,3 +27,15 @@ def cosine_similarity(left, right, left_model=None, right_model=None):
         if not np.isfinite(denominator) or denominator <= 0:
             return None
         return float(np.clip(np.dot(left, right) / denominator, -1, 1))
+
+
+def neutral_similarity(similarities):
+    """Median of the measured similarities in one candidate set, or None.
+
+    A candidate whose embedding is still pending takes this value: it ranks
+    like a typical candidate. Leaving the component out and renormalizing
+    instead lifts pending tracks above every measured one (most measured
+    similarities are below the tempo score), and scoring 0 buries them.
+    """
+    values = [value for value in similarities if value is not None and np.isfinite(value)]
+    return float(np.median(values)) if values else None

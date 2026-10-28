@@ -18,7 +18,7 @@ from infra.database.connection import get_setting_value
 
 from domain.services.target_parameters import sanitize_target_parameters
 from utils.audio_math import calculate_mixability_score
-from utils.embedding import cosine_similarity
+from utils.embedding import cosine_similarity, neutral_similarity
 from domain.services.set_duration import calculate_set_duration
 
 class SetlistAppService:
@@ -319,17 +319,19 @@ class SetlistAppService:
                 target_vec = np.array(json.loads(target_emb.embedding_json))
             except: pass
 
+        similarities = [cosine_similarity(target_vec, cand["vector"],
+                                          target_emb.model_name if target_emb else None, cand.get("embedding_model"))
+                        for cand in pool]
+        neutral = neutral_similarity(similarities)
         scored_candidates = []
-        for cand in pool:
-            vec_sim = cosine_similarity(target_vec, cand["vector"],
-                                        target_emb.model_name if target_emb else None, cand.get("embedding_model"))
-            
+        for cand, vec_sim in zip(pool, similarities):
             score = calculate_mixability_score(
                 target_bpm=target_track.bpm,
                 target_key=target_track.key,
                 candidate_bpm=cand["track"].bpm,
                 candidate_key=cand["track"].key,
-                vector_similarity=vec_sim
+                vector_similarity=vec_sim,
+                neutral_similarity=neutral,
             )
             
             track_dict = cand["track"].model_dump()
