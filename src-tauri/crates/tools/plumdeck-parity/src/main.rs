@@ -4,13 +4,17 @@
 //! - `plumdeck-parity run --a URL --b URL --scenario FILE` sends each step to
 //!   both sides in order, normalizes (N1, N2, N7, N12) and prints a report.
 //! - `plumdeck-parity db-diff A.duckdb B.duckdb` compares two databases.
+//! - `plumdeck-parity startup --work DIR` starts both backends on copies of
+//!   each fixture library, stops them, and compares the files they leave.
 //!
 //! Exit status: 0 when nothing unexplained differs, 1 on differences, 2 when
 //! the comparison itself could not run.
 
 mod compare;
 mod dbdiff;
+mod fixture;
 mod scenario;
+mod startup;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -53,6 +57,32 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         max_rows: usize,
     },
+    /// Start A and B on copies of each fixture library, stop them with
+    /// SIGINT and compare startup output, files, databases and job queues.
+    Startup {
+        /// Scratch directory; each case gets <work>/<case>/{master,a,b}.
+        #[arg(long)]
+        work: PathBuf,
+        /// Python with the backend's dependencies (the oracle's interpreter).
+        #[arg(long, env = "PLUMDECK_ORACLE_PYTHON", default_value = "python3")]
+        python: PathBuf,
+        /// tools/parity/oracle_server.py.
+        #[arg(long, default_value = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../tools/parity/oracle_server.py"))]
+        oracle: PathBuf,
+        /// The Rust backend (default: plumdeck-backend next to this binary).
+        #[arg(long)]
+        backend: Option<PathBuf>,
+        /// Run only these cases (default: all).
+        #[arg(long = "case", value_parser = parse_case)]
+        cases: Vec<fixture::Case>,
+    },
+}
+
+fn parse_case(name: &str) -> Result<fixture::Case, String> {
+    fixture::Case::ALL.into_iter().find(|case| case.name() == name).ok_or_else(|| {
+        let names: Vec<&str> = fixture::Case::ALL.iter().map(|case| case.name()).collect();
+        format!("unknown case {name:?}; one of {}", names.join(", "))
+    })
 }
 
 fn run_command(command: Command) -> Result<bool> {
@@ -76,6 +106,18 @@ fn run_command(command: Command) -> Result<bool> {
                 println!("{line}");
             }
             Ok(result.differences == 0)
+        }
+        Command::Startup { work, python, oracle, backend, cases } => {
+            let backend = match backend {
+                Some(path) => path,
+                None => std::env::current_exe()?.with_file_name(format!("plumdeck-backend{}", std::env::consts::EXE_SUFFIX)),
+            };
+            let programs = startup::Programs { python, oracle, backend };
+            let cases = if cases.is_empty() { fixture::Case::ALL.to_vec() } else { cases };
+            std::fs::create_dir_all(&work)?;
+            let work = work.canonicalize()?;
+            let reports = startup::run(&programs, &work, &cases)?;
+            Ok(startup::print(&reports) == 0)
         }
     }
 }

@@ -25,3 +25,31 @@ deviations:
       /openapi.json, /docs, /docs/oauth2-redirect, /redoc. Nothing in the app
       calls them; B answers them with the unmatched-request 404.
     current: not ported; no scenario covers them.
+  - id: D-10
+    status: proposed
+    source: plan §1.4 (gate), §4.9 D-10; src-tauri/crates/plumdeck-db/src/handle.rs
+    summary: >
+      Backup/restore (the maintenance gate) waits up to 2 s for pooled
+      connections and queue accesses to be returned before refusing with
+      "データベースを使用中です。処理の完了後に再試行してください"; Python
+      refused at once, so a request racing the 2 s WebSocket snapshot made a
+      backup fail spuriously. Long-running analysis/import work (an
+      activity) makes maintenance refuse at once with
+      "解析・取り込みを停止してからバックアップ／復元してください" for every
+      kind of task; Python refused only for a running selective analysis or
+      ingest and otherwise blocked the backup behind database_activity until
+      e.g. a Play import finished. Messages are unchanged.
+    current: implemented in plumdeck-db (S1); no HTTP route uses it until S10.
+  - id: D-14
+    status: proposed
+    source: plan R1 (design.md W0-05); src-tauri/crates/plumdeck-db/src/schema.rs
+    summary: >
+      Startup refuses a library whose schema_info.version is newer than 5
+      (written by a newer app) before recovery-compaction or any DDL touches
+      it, and exits with "Error during database initialization:
+      このライブラリは新しいバージョンの plumdeck で更新されています（スキーマ
+      vN、このバージョンは v5 まで）。plumdeck を最新版に更新してください".
+      Python opened it and ran its v5 DDL and ALTERs against it.
+    current: >
+      B refuses; plumdeck-parity startup's newer-schema case checks that
+      the file stays byte-identical (A is not run for that case).
