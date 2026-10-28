@@ -20,6 +20,7 @@ import { PadModeSelect } from "./PadModeSelect";
 import { AutoBeatLoop, type LoopMode } from "./AutoBeatLoop";
 import { beatLoopPress, clampBeats, loopBeats, LOOP_BEATS_RANGE, LOOP_BEATS_RANGE_EXTENDED, resizeLoop, stepBeats } from "./loop-math";
 import { TempoPlatter, TEMPO_RANGES, type TempoRange } from "./TempoPlatter";
+import { clampRate, rangeLabel, tempoStep } from "./tempo-math";
 import { RotaryKnob } from "./RotaryKnob";
 import { JOG_WEIGHT_DEFAULT, jogWeight, jogWeightLabel, setJogWeight, subscribeJogWeight } from "@/services/dj-engine/jog-weight";
 import "./play-controls.css";
@@ -54,6 +55,8 @@ type Props = {
   onMemory?: (action: "save" | "delete" | "previous" | "next") => void; onMemoryCall?: (index: number) => void;
   onKeyShift?: (semitones: number) => void; onKeySync?: () => void; onKeyReset?: () => void;
   onSlip?: (enabled: boolean) => void; onReverse?: (enabled: boolean) => void;
+  /** Pitch bend while held: −1 / +1, 0 to stop. */
+  onBend?: (direction: -1 | 0 | 1) => void;
   savedLoops?: readonly PerformanceLoop[]; onRecallLoop?: (id: string) => void;
   trackKey?: string | null;
   cueColors?: (string|null)[];
@@ -61,7 +64,7 @@ type Props = {
   onGridEdit: () => void; onGridClose?: () => void; gridEditor?: ReactNode;
 };
 
-export function SoftwareDeck({ id, deck, channel, active, connected, capability, capabilities, tailLock, onActivate, onToggle, onCue, onSeekAbsolute, onTempo, onKeylock, onSync, onMaster, onUnload, syncLeader, onHotCue, onLoop, onBeatJump, onBeatLoop, onLoopEnable, onQuantize, onFx, onSaveLoop, onLoopIn, onLoopOut, onReloop, onLoopSet, pendingLoopIn, onMemory, onMemoryCall, onKeyShift, onKeySync, onKeyReset, onSlip, onReverse, savedLoops, onRecallLoop, trackKey, cueColors, onGridEdit, onGridClose, gridEditor }: Props) {
+export function SoftwareDeck({ id, deck, channel, active, connected, capability, capabilities, tailLock, onActivate, onToggle, onCue, onSeekAbsolute, onTempo, onKeylock, onSync, onMaster, onUnload, syncLeader, onHotCue, onLoop, onBeatJump, onBeatLoop, onLoopEnable, onQuantize, onFx, onSaveLoop, onLoopIn, onLoopOut, onReloop, onLoopSet, pendingLoopIn, onMemory, onMemoryCall, onKeyShift, onKeySync, onKeyReset, onSlip, onReverse, onBend, savedLoops, onRecallLoop, trackKey, cueColors, onGridEdit, onGridClose, gridEditor }: Props) {
   const deckDrop = usePlayDeckDrop(`play-deck-controls-${id}`, id);
   const left = id === "A" || id === "C";
   const [autoBeats, setAutoBeats] = useState(4);
@@ -302,10 +305,10 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
           title={slipReason ?? "SLIP：演奏操作の間も裏で再生位置を進めます"} onClick={() => onSlip?.(!deck?.slip)}>SLIP</button>
         <button className={cn("dj-chip dj-chip--toggle", deck?.reverse && "is-on")} disabled={Boolean(reverseReason)} aria-pressed={Boolean(deck?.reverse)}
           title={reverseReason ?? "REVERSE：逆再生"} onClick={() => onReverse?.(!deck?.reverse)}>REV</button>
-        <button className={cn("dj-chip", quantize && "is-on")} disabled={Boolean(quantizeReason)}
+        <button className={cn("dj-chip dj-chip--toggle", quantize && "is-on")} disabled={Boolean(quantizeReason)}
           title={quantizeReason ?? "クオンタイズ：キュー・ループを拍位置に合わせて置きます（再生位置は動きません）"} aria-pressed={quantize}
           onClick={() => onQuantize?.(!quantize)}>Q</button>
-        <button className={cn("dj-chip", deck?.keylock && "is-on")} disabled={!supported("deck.keylock")} aria-pressed={Boolean(deck?.keylock)}
+        <button className={cn("dj-chip dj-chip--toggle", deck?.keylock && "is-on")} disabled={!supported("deck.keylock")} aria-pressed={Boolean(deck?.keylock)}
           title="マスターテンポ：音程を変えずに再生速度を調整します" onClick={() => onKeylock(!deck?.keylock)}>MT</button>
         {/* 波形を投げたバックスピンの重さ。スクラッチの操作感とハードウェアのジョグには効かない。 */}
         <RotaryKnob className="dj-jog-weight" label="JOG" value={weight} min={0} max={1} step={.05} fineStep={.01} defaultValue={JOG_WEIGHT_DEFAULT}
@@ -314,7 +317,15 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
       </div>
       <TempoPlatter deckId={id} bpm={bpm} trackBpm={trackBpm} rate={rate} positionMs={position}
         playing={deck?.status === "playing"} disabled={!supported("deck.tempo")}
-        range={tempoRange} onRange={(range) => { setTempoRange(range); localStorage.setItem(`plumdeck.tempoRange.${id}`, String(range)); window.dispatchEvent(new CustomEvent("plumdeck:controller-tempo-range", { detail: { deck: id, range } })); }} onTempo={onTempo} />
+        range={tempoRange} onRange={(range) => { setTempoRange(range); localStorage.setItem(`plumdeck.tempoRange.${id}`, String(range)); window.dispatchEvent(new CustomEvent("plumdeck:controller-tempo-range", { detail: { deck: id, range } })); }} onTempo={onTempo}
+        onBend={capabilities.includes(DJ_ENGINE_CAPABILITIES.deckPitchbend) && onBend ? (direction) => { if (!disabled || direction === 0) onBend(direction); } : undefined} />
+      {/* Tempo fader follows the range; + is at the bottom like a player. */}
+      <label className="dj-deck-tempo" title={supported("deck.tempo") ? `テンポ ${rangeLabel(tempoRange)}%（下が＋）` : "テンポ操作はできません"}>
+        <span aria-hidden>−</span>
+        <Fader label={`Deck ${id} テンポ`} min={1 - tempoRange / 100} max={1 + tempoRange / 100} step={tempoStep(tempoRange) / 100} value={clampRate(rate, tempoRange)} vertical
+          disabled={!supported("deck.tempo")} onChange={onTempo} />
+        <span aria-hidden>+</span>
+      </label>
       <button className="dj-eject dj-eject--deck" disabled={disabled} onClick={onUnload} aria-label={`Eject deck ${id}`} title="デッキから取り出す"><Upload /></button>
     </div>
     {deck?.lastError && <div className="dj-deck-error" role="alert">{deck.lastError}</div>}

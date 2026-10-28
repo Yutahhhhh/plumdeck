@@ -2,12 +2,9 @@ import { deckRealtimeStore } from "@/services/dj-engine/deck-realtime-store";
 import { createWaveformRenderLoop } from "./waveform-render-loop";
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { cn } from "@/lib/utils";
-import { formatBpm } from "./tempo-math";
+import { formatBpm, formatTempoPercent, rangeLabel, stepTempo, tempoStep, TEMPO_RANGES, type TempoRange } from "./tempo-math";
 
-/** rekordbox のテンポレンジ。実機は ±6 / ±10 / ±16 / WIDE を順に切り換える。 */
-export const TEMPO_RANGES = [6, 10, 16, 75] as const;
-export type TempoRange = (typeof TEMPO_RANGES)[number];
-export const rangeLabel = (range: TempoRange) => range === 75 ? "WIDE" : `±${range}`;
+export { TEMPO_RANGES, rangeLabel, type TempoRange } from "./tempo-math";
 
 /** 一周の実時間。33⅓ 回転のレコードに合わせて 1.8 秒で一回転させる。 */
 const REVOLUTION_MS = 1800;
@@ -25,6 +22,8 @@ type Props = {
   range: TempoRange;
   onRange: (range: TempoRange) => void;
   onTempo: (rate: number) => void;
+  /** Hold to bend: −1 / +1 while pressed, 0 on release. Hidden without the capability. */
+  onBend?: (direction: -1 | 0 | 1) => void;
 };
 
 /**
@@ -95,7 +94,13 @@ export function TempoPlatter(props: Props) {
     window.addEventListener("pointercancel", stop);
   };
 
-  const nudge = (delta: number) => applyPercent(percent + delta);
+  // ± move by the range's resolution (0.02 / 0.04 / 0.04 / 0.5 %).
+  const nudge = (steps: number) => props.onTempo(stepTempo(rate, steps, range));
+  const step = tempoStep(range);
+  const bend = (direction: -1 | 1) => ({
+    onPointerDown: (event: PointerEvent<HTMLButtonElement>) => { if (event.button === 0) { event.currentTarget.setPointerCapture(event.pointerId); props.onBend?.(direction); } },
+    onPointerUp: () => props.onBend?.(0), onPointerCancel: () => props.onBend?.(0), onLostPointerCapture: () => props.onBend?.(0),
+  });
 
   return <div className={cn("dj-platter", !props.playing && "dj-platter--idle", drag && "is-dragging")}
     role="group" aria-label={`Deck ${props.deckId} テンポ`}>
@@ -121,8 +126,8 @@ export function TempoPlatter(props: Props) {
         onPointerDown={startDrag}
         onKeyDown={(event) => {
           if (!canSetTempo) return;
-          if (event.key === "ArrowUp") { event.preventDefault(); nudge(event.shiftKey ? 0.02 : 0.1); }
-          if (event.key === "ArrowDown") { event.preventDefault(); nudge(event.shiftKey ? -0.02 : -0.1); }
+          if (event.key === "ArrowUp") { event.preventDefault(); nudge(event.shiftKey ? 1 : 5); }
+          if (event.key === "ArrowDown") { event.preventDefault(); nudge(event.shiftKey ? -1 : -5); }
         }}>
         {displayBpm === null
           ? <strong>—</strong>
@@ -133,7 +138,7 @@ export function TempoPlatter(props: Props) {
         <button type="button" className="dj-platter-percent" disabled={!canSetTempo}
           title="ダブルクリックで 0% に戻す"
           onDoubleClick={() => canSetTempo && props.onTempo(1)}>
-          {percent >= 0 ? "+" : "−"}{Math.abs(percent).toFixed(1)}%
+          {formatTempoPercent(rate, range)}
         </button>
         <button type="button" className="dj-platter-range" disabled={disabled}
           title="テンポレンジ：再生速度を調整できる範囲。クリックで変更できます"
@@ -143,9 +148,13 @@ export function TempoPlatter(props: Props) {
       </div>
     </div>
 
-    <div className="dj-platter-nudge" aria-hidden={!canSetTempo}>
-      <button type="button" disabled={!canSetTempo} aria-label="テンポを下げる" title="テンポを下げる" onClick={() => nudge(-0.1)}>−</button>
-      <button type="button" disabled={!canSetTempo} aria-label="テンポを上げる" title="テンポを上げる" onClick={() => nudge(0.1)}>＋</button>
+    <div className="dj-platter-nudge">
+      <button type="button" disabled={!canSetTempo} aria-label="テンポを下げる" title={`テンポを ${step}% 下げる`} onClick={() => nudge(-1)}>−</button>
+      <button type="button" disabled={!canSetTempo} aria-label="テンポを上げる" title={`テンポを ${step}% 上げる`} onClick={() => nudge(1)}>＋</button>
     </div>
+    {props.onBend && <div className="dj-platter-bend" role="group" aria-label={`Deck ${props.deckId} ピッチベンド`}>
+      <button type="button" disabled={disabled} aria-label="ピッチベンド（遅く）" title="押している間だけ遅くして位相を合わせます" {...bend(-1)}>‹</button>
+      <button type="button" disabled={disabled} aria-label="ピッチベンド（速く）" title="押している間だけ速くして位相を合わせます" {...bend(1)}>›</button>
+    </div>}
   </div>;
 }

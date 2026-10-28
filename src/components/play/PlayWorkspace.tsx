@@ -52,6 +52,9 @@ import { KeyedTaskQueue } from "@/services/dj-engine/keyed-task-queue";
 type GridEditSession = { deck: DeckId; trackId: number; metadata: PerformanceMetadata; initialGrid: PerformanceBeatGrid };
 /** 助走の上限。これ以上は曲頭を見失うので、つまみ出せる長さを切る。 */
 
+/** Temporary speed offset while a pitch bend is held (about ±4%). */
+const PITCH_BEND_AMOUNT = 0.04;
+
 type HistoryRuntime = { key: string; trackId: number; loadedAt: string; startedAt?: string; playedMs: number; playingSince?: number };
 
 function DeckWaveformLane({ id, expandedPair, children }: { id: DeckId; expandedPair: 'AB' | 'CD' | null; children: ReactNode }) {
@@ -735,6 +738,19 @@ export function PlayWorkspace() {
     return next;
   });
 
+  // Pitch bend: the host releases a bend 150 ms after the last message, so
+  // holding re-sends every 50 ms and release sends 0 at once.
+  const bends = useRef(new Map<DeckId, number>());
+  const bend = useCallback((id: DeckId, direction: -1 | 0 | 1) => {
+    const timer = bends.current.get(id);
+    if (timer !== undefined) { window.clearInterval(timer); bends.current.delete(id); }
+    const send = (amount: number) => void client.pitchbend(id, amount).catch((cause) => setCommandError(cause instanceof Error ? cause.message : String(cause)));
+    if (direction === 0) { if (timer !== undefined) send(0); return; }
+    send(direction * PITCH_BEND_AMOUNT);
+    bends.current.set(id, window.setInterval(() => send(direction * PITCH_BEND_AMOUNT), 50));
+  }, [client]);
+  useEffect(() => () => { for (const timer of bends.current.values()) window.clearInterval(timer); bends.current.clear(); }, []);
+
   // Manual loop and loop resize. With Q on, IN and OUT land on the nearest beat.
   const gridOf = (track: { bpm: number | null; beatgridOffsetMs?: number; beatTimesMs?: number[] }) => ({ bpm: track.bpm, beatgridOffsetMs: track.beatgridOffsetMs, beatTimesMs: track.beatTimesMs });
   const placed = (deck: DeckState) => deck.track && deck.quantize ? snapToBeat(deck.positionMs, gridOf(deck.track)) : deck.positionMs;
@@ -833,6 +849,7 @@ export function PlayWorkspace() {
     onKeyReset={() => void run(() => client.keyReset(id))}
     onSlip={(enabled) => void run(() => client.setSlip(id, enabled))}
     onReverse={(enabled) => void run(() => client.setReverse(id, enabled))}
+    onBend={(direction) => bend(id, direction)}
     onMemoryCall={(index) => void run(async () => {
       const cue = await callMemoryCue(id, index);
       // A called memory cue becomes the CUE point, like CALL on a player.
@@ -931,7 +948,6 @@ export function PlayWorkspace() {
           {softwareDeck(left)}
           {waveformLayout === "vertical" && <div className="dj-center-waves" aria-label="中央縦波形">{lane(left, "vertical")}{lane(right, "vertical")}</div>}
           {panels.mixer && <MixerPanel decks={[left, right]}
-            deckState={(deck) => snapshot?.decks[deck]}
             channelState={(deck) => snapshot?.mixer.channels[deck]}
             handlers={(deck) => ({
               onTrim: (gain) => void run(() => client.setTrim(deck, gain)),
@@ -939,7 +955,6 @@ export function PlayWorkspace() {
               onFilter: (value) => void run(() => client.setFilter(deck, value)),
               onGain: (gain) => void run(() => client.setChannelGain(deck, gain)),
               onPfl: (enabled) => void run(() => client.setPfl(deck, enabled)),
-              onTempo: (rate) => void run(() => client.setTempo(deck, rate)),
             })}
             reason={(deck, capability, feature, controller) =>
               capability !== "mixer.pfl" && tailLock(deck) ? tailLock(deck)

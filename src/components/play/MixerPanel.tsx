@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import type { ChannelState, DeckId, DeckState, EqBand } from "@/types/dj-engine";
+import type { ChannelState, DeckId, EqBand } from "@/types/dj-engine";
 import { RotaryKnob } from "./RotaryKnob";
 import { Fader } from "./SoftwareDeck";
 
@@ -9,12 +9,10 @@ export type MixerChannelHandlers = {
   onFilter?: (value: number) => void;
   onGain: (gain: number) => void;
   onPfl?: (enabled: boolean) => void;
-  onTempo: (rate: number) => void;
 };
 
 type Props = {
   decks: readonly DeckId[];
-  deckState: (deck: DeckId) => DeckState | undefined;
   channelState: (deck: DeckId) => ChannelState | undefined;
   handlers: (deck: DeckId) => MixerChannelHandlers;
   /** 使えない理由。undefined なら操作可。 */
@@ -26,19 +24,16 @@ type Props = {
  * TRIM / HIGH / MID / LOW / FILTER・CUE・チャンネルフェーダー・テンポを持つ。
  * ツールバーのミキサーアイコンで開閉する（閉じるとつまみ自体が消える）。
  */
-export function MixerPanel({ decks, deckState, channelState, handlers, reason }: Props) {
+export function MixerPanel({ decks, channelState, handlers, reason }: Props) {
   return <div className="dj-mixer-panel" role="group" aria-label="ミキサーパネル">
     {decks.map((deck) => {
       const channel = channelState(deck) as (ChannelState & { trim?: number; filter?: number }) | undefined;
-      const state = deckState(deck);
       const on = handlers(deck);
       const eqReason = reason(deck, "mixer.eq", "EQ", Boolean(on.onEq));
       const trimReason = reason(deck, "mixer.trim", "TRIM", Boolean(on.onTrim));
       const filterReason = reason(deck, "mixer.filter", "FILTER", Boolean(on.onFilter));
       const pflReason = reason(deck, "mixer.pfl", "CUE", Boolean(on.onPfl));
       const gainReason = reason(deck, "mixer.gain", "LEVEL", true);
-      const tempoReason = reason(deck, "deck.tempo", "TEMPO", true);
-      const rate = state?.rate ?? 1;
 
       return <div className="dj-mixer-channel" key={deck} data-deck={deck} aria-label={`Deck ${deck} チャンネル`}>
         <div className="dj-mixer-knobs">
@@ -57,18 +52,11 @@ export function MixerPanel({ decks, deckState, channelState, handlers, reason }:
         <button type="button" className={cn("dj-mixer-cue", channel?.pfl && "is-on")} disabled={Boolean(pflReason)} aria-pressed={Boolean(channel?.pfl)}
           title={pflReason ?? "ヘッドホンでこのチャンネルをモニターする"} onClick={() => on.onPfl?.(!channel?.pfl)}>CUE</button>
 
-        {/* LEVEL と TEMPO は横に並べる。縦積みにするとデッキ行より背が高くなる。 */}
         <div className="dj-mixer-sliders">
           <label className="dj-mixer-slider">
             <Fader label={`Deck ${deck} チャンネルフェーダー`} min={0} max={1} value={channel?.gain ?? 0} vertical
               disabled={Boolean(gainReason)} onChange={on.onGain} />
             <span className="dj-control-label">LEVEL</span>
-          </label>
-          <label className="dj-mixer-slider">
-            <Fader label={`Deck ${deck} テンポ`} min={Math.min(.8, rate)} max={Math.max(1.2, rate)} step={.001} value={rate} vertical
-              disabled={Boolean(tempoReason)} onChange={on.onTempo} />
-            <button type="button" className="dj-mixer-tempo-reset dj-num" disabled={Boolean(tempoReason)}
-              title="テンポを0%に戻す" onClick={() => on.onTempo(1)}>{((rate - 1) * 100).toFixed(1)}</button>
           </label>
         </div>
       </div>;
