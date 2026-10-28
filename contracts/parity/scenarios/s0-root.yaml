@@ -1,0 +1,16 @@
+# S0: the health check the desktop polls while starting, and unknown routes.
+# Python answers unmatched paths from the MCP mount with text/plain
+# "Not Found"; Rust answers FastAPI's JSON {"detail": "Not Found"}. N7
+# compares status and detail, so the content-type difference is a note.
+name: s0-root
+db: fixture
+steps:
+  - name: health check
+    expect_status: 200
+    http: {method: GET, path: /}
+  - name: unknown API route
+    expect_status: 404
+    http: {method: GET, path: /api/does-not-exist}
+  - name: unknown top-level route with query
+    expect_status: 404
+    http: {method: GET, path: /nope, query: {q: "日本語 ß"}}

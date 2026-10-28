@@ -1,0 +1,7 @@
+# Global comparison rules for plumdeck-parity (plan §4.5).
+# N1 (JSON parse, key order ignored), N7 (errors: status + detail) and N12
+# (skip when Python answers 500) are built into the runner. N2 numeric
+# tolerances are declared per JSONPath; anything not listed compares exactly.
+#   - {path: "$..bpm", mode: f32}          # DuckDB FLOAT columns
+#   - {path: "$..score", mode: rel, value: 1e-9}
+tolerances: []
