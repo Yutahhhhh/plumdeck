@@ -20,6 +20,7 @@ pub mod suggestions;
 pub mod tracks;
 pub mod waveform_detail;
 pub mod wordplay;
+pub mod workflows;
 
 use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
@@ -81,6 +82,29 @@ pub fn api() -> Router<AppState> {
         .route("/api/play/recordings/{recording_id}", patch(play::name_recording).delete(play::discard_recording))
         .route("/api/play/recordings/{recording_id}/audio", get(play::recording_audio))
         .route("/api/play/tracks/{track_id}/waveform-detail", get(waveform_detail::get_waveform_detail))
+        .route("/api/workflows/summary", get(workflows::summary))
+        .route("/api/workflows/media/diagnose", post(workflows::diagnose_media))
+        .route("/api/workflows/media/repairs/{plan_id}/apply", post(workflows::apply_media_repair))
+        .route("/api/workflows/media/repairs/{plan_id}/undo", post(workflows::undo_media_repair))
+        .route("/api/workflows/version-groups", post(workflows::create_version_group))
+        .route("/api/workflows/tracks/{track_id}/versions", get(workflows::versions_for_track))
+        .route("/api/workflows/version-groups/{group_id}", patch(workflows::update_version_group))
+        .route("/api/workflows/setlist-entries/{entry_id}/version", patch(workflows::swap_setlist_version))
+        .route("/api/workflows/backups", post(workflows::backup))
+        .route("/api/workflows/restore/inspect", post(workflows::restore_inspect))
+        .route("/api/workflows/restore/apply", post(workflows::restore_apply))
+        .route("/api/workflows/audio-presets", get(workflows::audio_presets).put(workflows::save_audio_preset))
+        .route("/api/workflows/audio-presets/{preset_id}", delete(workflows::delete_audio_preset))
+        .route("/api/workflows/controller-profiles", get(workflows::controller_profiles).put(workflows::save_controller_profile))
+        .route("/api/workflows/usb/handoffs", get(workflows::list_usb_handoffs).post(workflows::create_usb_handoff))
+        .route("/api/workflows/usb/devices", get(workflows::list_usb_devices))
+        .route("/api/workflows/usb/devices/{device_id}/eject", post(workflows::eject_usb_device))
+        .route("/api/workflows/usb/handoffs/{export_id}/duplicate", post(workflows::duplicate_usb_handoff))
+        .route("/api/workflows/usb/handoffs/{export_id}/verify", post(workflows::verify_usb_handoff))
+        .route("/api/workflows/recordings/{recording_id}/timeline", get(workflows::recording_timeline).put(workflows::replace_recording_timeline))
+        .route("/api/workflows/recordings/{recording_id}/timeline/engine", post(workflows::upsert_recording_engine_timeline))
+        .route("/api/workflows/recordings/{recording_id}/tracklist.txt", get(workflows::recording_tracklist))
+        .route("/api/workflows/recordings/external", post(workflows::register_external_recording))
         .route("/api/mcp/info", get(mcp::info))
         .route("/mcp", post(mcp::post).get(mcp::get_stream).delete(mcp::delete_session))
         .route("/api/assist/library-status", get(assist::library_status))

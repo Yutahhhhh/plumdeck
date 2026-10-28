@@ -85,3 +85,10 @@ fn read(path: &Path) -> Option<TagMetadata> {
     out.artwork = cover(pictures).map(|picture| STANDARD.encode(picture.data()));
     Some(out)
 }
+
+/// `mutagen.File(path).info.length` in seconds; `None` when unreadable.
+pub fn duration_seconds(path: &Path) -> Option<f64> {
+    use lofty::file::AudioFile;
+    let tagged = Probe::open(path).ok()?.options(ParseOptions::new()).read().ok()?;
+    Some(tagged.properties().duration().as_secs_f64())
+}

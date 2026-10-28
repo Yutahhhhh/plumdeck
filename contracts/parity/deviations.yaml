@@ -178,3 +178,13 @@ deviations:
       the paged ranking. Argument validation errors are reported briefly
       instead of pydantic's full text.
     current: temporary for the analysis/Junction tools; the rest is proposed.
+  - id: D-23
+    status: proposed
+    source: backend/app/services/workflow_service.py (create_backup, removable_devices)
+    summary: >
+      Backups are written by the zip crate (same entries, names, manifest and
+      hashes; member order and DEFLATE bytes differ), and the manifest's
+      app_version comes from the package.json next to the build. USB device
+      discovery on macOS parses `diskutil info` text instead of its plist;
+      Windows discovery comes with S13. Ejecting is macOS-only until then.
+    current: B's archives restore in A and A's in B (inspect checks hashes, not bytes).

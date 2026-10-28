@@ -21,6 +21,33 @@ fn timestamp(unit: TimeUnit, value: i64) -> PyValue {
     }
 }
 
+/// One DuckDB value as the Python binding hands it over (datetimes kept).
+pub fn py_value(value: Value) -> PyValue {
+    match value {
+        Value::Timestamp(unit, v) => match timestamp(unit, v) {
+            PyValue::Str(text) => chrono::NaiveDateTime::parse_from_str(&text, "%Y-%m-%dT%H:%M:%S%.f").map(PyValue::DateTime).unwrap_or(PyValue::Str(text)),
+            other => other,
+        },
+        other => json_value(other),
+    }
+}
+
+/// [`json_rows`] with datetimes kept as values (`dict(row._mapping)`).
+pub fn py_rows(conn: &Connection, sql: &str, params: Vec<Value>) -> Result<Vec<PyValue>, DbError> {
+    let mut statement = conn.prepare(sql)?;
+    let mut rows = statement.query(params_from_iter(params))?;
+    let names: Vec<String> = rows.as_ref().expect("statement").column_names();
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        let mut pairs = Vec::with_capacity(names.len());
+        for (index, name) in names.iter().enumerate() {
+            pairs.push((PyValue::Str(name.clone()), py_value(row.get::<_, Value>(index)?)));
+        }
+        out.push(PyValue::Dict(pairs));
+    }
+    Ok(out)
+}
+
 /// One DuckDB value as the Python binding hands it over, JSON-encoded.
 pub fn json_value(value: Value) -> PyValue {
     match value {
