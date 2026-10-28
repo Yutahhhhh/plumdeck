@@ -10,8 +10,8 @@ PERSISTED_KEYS = (
     "analysis_components",
     "playback_grid",
     "playback_grid_version",
-    # Rekordbox-synced BPM marker and the analyzer's own value kept beside it.
-    "bpm_authority",
+    # The analyzer's own BPM kept beside a manual or rekordbox one. The old
+    # bpm_authority marker is rewritten to analysis_components.sources.bpm.
     "analysis_bpm",
 )
 

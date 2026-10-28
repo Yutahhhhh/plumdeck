@@ -186,8 +186,9 @@ _LEGACY_FX = {
     "analysis_components": {"rhythm": "rhythm-attacks-v4", "key": "key-v1", "timbre": "timbre-v1"},
     "playback_grid": _GRID, "playback_grid_version": 2, "bpm_authority": _AUTHORITY,
 }
-_KEPT_FX = {k: _LEGACY_FX[k] for k in
-            ("analysis_components", "playback_grid", "playback_grid_version", "bpm_authority")}
+# The bpm_authority marker becomes the recorded rekordbox source.
+_KEPT_FX = {**{k: _LEGACY_FX[k] for k in ("playback_grid", "playback_grid_version")},
+            "analysis_components": {**_LEGACY_FX["analysis_components"], "sources": {"bpm": "rekordbox"}}}
 # 既に許可リストだけの行 (区切りの空白なし) は 1 バイトも変えない
 _CLEAN_FX_TEXT = '{"analysis_components":{"embedding":"musicnn-16khz-v1"},"analysis_bpm":121.5}'
 

@@ -4,7 +4,8 @@ Every save that carries an analysis result resolves both fields with the same
 rule, reading the rekordbox collection at that moment, so a track rekordbox
 analyses later is picked up on its next save. The chosen source is recorded in
 features_extra.analysis_components.sources. Manual values come from the CSV
-metadata import. The legacy ``bpm_authority`` marker counts as a rekordbox BPM.
+metadata import. The legacy ``bpm_authority`` marker, which the library rebuild
+rewrites to a recorded source, still counts as a rekordbox BPM until then.
 """
 from __future__ import annotations
 

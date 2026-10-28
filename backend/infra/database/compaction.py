@@ -60,7 +60,7 @@ _FX_UDF = "plumdeck_clean_features_extra"
 # schema_info key marking that features_extra_json holds only PERSISTED_KEYS.
 # Bump FX_CLEAN_VERSION when PERSISTED_KEYS shrinks so existing rows are rebuilt.
 FX_CLEAN_KEY = "features_extra_clean"
-FX_CLEAN_VERSION = 1
+FX_CLEAN_VERSION = 2  # 2: bpm_authority -> analysis_components.sources.bpm
 _PERSISTED = frozenset(PERSISTED_KEYS)
 
 BACKUP_KEEP_DAYS = 30
@@ -297,6 +297,14 @@ def _clean_features_extra(fx) -> str:
         return fx
     if not isinstance(extra, dict) or extra.keys() <= _PERSISTED:
         return fx
+    if extra.get("bpm_authority"):
+        # The one-off sync marker becomes the recorded rekordbox source.
+        components = extra.get("analysis_components")
+        components = dict(components) if isinstance(components, dict) else {}
+        sources = components.get("sources")
+        sources = dict(sources) if isinstance(sources, dict) else {}
+        sources.setdefault("bpm", "rekordbox")
+        extra["analysis_components"] = {**components, "sources": sources}
     return json.dumps(persisted_features_extra(extra))
 
 
