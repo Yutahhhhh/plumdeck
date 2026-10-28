@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 from models import Track, TrackAnalysis, TrackEmbedding
+from domain.services.analysis.constants import EMBEDDING_MODEL
 
 def test_stream_track(client: TestClient, session: Session, tmp_path):
     # ダミーの音声ファイルを作成
@@ -148,9 +149,12 @@ def test_list_directory_only_marks_completed_analysis_as_analyzed(
         TrackEmbedding(
             track_id=completed.id,
             embedding_json=json.dumps([0.1] * 200),
-            model_name="test",
+            model_name=EMBEDDING_MODEL,
         )
     )
+    # A vector of another model is still pending for the background job.
+    session.add(TrackEmbedding(track_id=pending_embedding.id, embedding_json=json.dumps([0.1] * 200),
+                               model_name="musicnn"))
     for track in (completed, pending_embedding, failed):
         analysis = TrackAnalysis(track_id=track.id)
         analysis.waveform_peaks = [0.2, 0.7]
@@ -186,7 +190,8 @@ def test_metadata_omits_beat_positions(client: TestClient, session: Session, tmp
     from domain.models.track import TrackAnalysis
     audio = tmp_path / "song.mp3"
     audio.write_bytes(b"\0" * 64)
-    track = Track(filepath=str(audio), title="T", artist="A", bpm=120, duration=10)
+    track = Track(filepath=str(audio), title="T", artist="A", bpm=120, duration=10,
+                  energy=.7, danceability=.6, brightness=.4, noisiness=.2)
     session.add(track)
     session.flush()
     analysis = TrackAnalysis(track_id=track.id)
@@ -199,3 +204,8 @@ def test_metadata_omits_beat_positions(client: TestClient, session: Session, tmp
     assert "beat_positions" not in body
     assert body["analyzed"] is True
     assert len(body["waveform_peaks"]) == 2
+    # The one analyzed rule: a row with default timbre is not analyzed.
+    track.danceability = track.brightness = track.noisiness = 0.0
+    session.add(track)
+    session.commit()
+    assert client.get("/api/metadata", params={"track_id": track.id}).json()["analyzed"] is False

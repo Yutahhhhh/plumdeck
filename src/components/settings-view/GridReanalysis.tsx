@@ -33,7 +33,7 @@ export function GridReanalysis() {
   const done = count ? count.completed + count.skipped + count.failed : 0;
   return <div className="space-y-3 rounded-lg border p-4">
     <div><p className="font-medium">グリッドを一括再解析</p>
-      <p className="mt-1 text-xs text-muted-foreground">拍の位置だけを更新し、BPMは変更しません。rekordboxで解析済み（グリッドあり）の曲は対象外です。手動の保存済みグリッド、CUE、ループは保持します。完了後はデッキに曲を読み込み直してください。</p></div>
+      <p className="mt-1 text-xs text-muted-foreground">拍の位置を更新します。BPMは自前解析の曲だけ新しい拍に合わせ、手動・rekordboxのBPMは変更しません。rekordboxで解析済み（グリッドあり）の曲は対象外です。手動の保存済みグリッド、CUE、ループは保持します。完了後はデッキに曲を読み込み直してください。</p></div>
     <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={outdated} disabled={active || busy} onChange={e => { setOutdated(e.target.checked); setPlan(null); }} />未更新の曲だけ</label>
     <div className="flex flex-wrap items-center gap-2">
       <Button size="sm" variant="outline" disabled={active || busy} onClick={() => void run(async () => setPlan(await gridJobs.plan(outdated)))}>対象を確認</Button>

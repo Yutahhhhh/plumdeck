@@ -25,8 +25,9 @@ class AnalysisJobRepository:
     def recover(self):
         with self.connect() as con:
             # Automatic embedding jobs resume by themselves; user jobs wait
-            # for an explicit resume.
-            for row in con.execute("SELECT id,config FROM jobs WHERE status IN ('running','pausing')").fetchall():
+            # for an explicit resume, including ones queued behind the
+            # background job before the restart.
+            for row in con.execute("SELECT id,config FROM jobs WHERE status IN ('running','pausing','queued')").fetchall():
                 status = "queued" if json.loads(row["config"]).get("background") else "paused"
                 con.execute("UPDATE jobs SET status=? WHERE id=?", (status, row["id"]))
             con.execute("UPDATE items SET status='pending' WHERE status='running'")

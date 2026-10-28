@@ -100,9 +100,14 @@ def test_background_queue_recovers_after_shutdown_but_respects_explicit_pause(se
     recovered.shutdown()
     repo = AnalysisJobRepository(path)
     paused = repo.create({"background": True, "features": ["embedding"], "workers": 1, "only_outdated": True}, [{"id": ids[0], "filepath": "/auto/0.mp3"}])
+    queued_user_job = repo.create({"features": ["rhythm"], "workers": 1, "only_outdated": True},
+                                  [{"id": ids[0], "filepath": "/auto/0.mp3"}], status="queued")
     repo.recover()
     assert repo.get(paused)["status"] == "paused"
     assert repo.next_queued(background=True) is None
+    # A user job queued behind the background job waits for an explicit resume.
+    assert repo.get(queued_user_job)["status"] == "paused"
+    assert repo.next_queued() is None
 
 
 def test_play_import_is_load_ready_before_background_embedding_finishes(session, tmp_path, monkeypatch):

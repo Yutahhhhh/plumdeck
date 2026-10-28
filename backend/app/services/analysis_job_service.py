@@ -265,7 +265,7 @@ class AnalysisJobService:
             # Grid re-analysis leaves tracks with a rekordbox grid out entirely.
             "rekordbox_grid_tracks": rekordbox_grids,
             "preserves": ["metadata", "genres", "lyrics", "audio_files", "unselected_features"]
-                         + (["bpm"] if grid_only else []),
+                         + (["manual_and_rekordbox_bpm"] if grid_only else []),
             "priority": "tracks used in setlists first", "resumable": True,
         }
 
@@ -384,9 +384,10 @@ class AnalysisJobService:
                 raise ValueError("Track removed or path changed since this job was created")
             return self.outdated(config["features"], session.get(TrackAnalysis, track.id), session.get(TrackEmbedding, track.id)) if config["only_outdated"] else config["features"]
 
-    def _save(self, item, result, features, grid_only=False):
-        """Store one result. BPM/key follow manual > rekordbox > own; a grid
-        re-analysis (``grid_only``) updates beats and never replaces a BPM."""
+    def _save(self, item, result, features):
+        """Store one result. BPM/key follow manual > rekordbox > own, also for a
+        grid re-analysis: a manual or rekordbox BPM stays, an own one follows
+        the new beats."""
         # Deliberately bypass metadata ingestion: it may update tags and lyrics.
         with connection.db_lock, Session(self.engine) as session:
             track = session.get(Track, item["track_id"])
@@ -411,9 +412,6 @@ class AnalysisJobService:
                         continue  # follows the chosen key below
                     if name not in value_sources.FIELDS:
                         setattr(track, name, value)
-                        continue
-                    if name == "bpm" and grid_only:
-                        update["analysis_bpm"] = value
                         continue
                     if rekordbox is None:
                         rekordbox = value_sources.lookup(
@@ -551,7 +549,7 @@ class AnalysisJobService:
                             item, features = futures.pop(future)
                             try:
                                 result, seconds = future.result()
-                                self._save(item, result, features, grid_only=config["features"] == ["rhythm"])
+                                self._save(item, result, features)
                                 self.repository.finish(job_id, item["track_id"], "completed", seconds)
                             except Exception as exc:
                                 self.repository.finish(job_id, item["track_id"], "failed", error=str(exc))

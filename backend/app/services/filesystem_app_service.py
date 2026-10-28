@@ -7,7 +7,8 @@ from sqlmodel import Session, select
 from domain.constants import SUPPORTED_EXTENSIONS
 from utils.filesystem import resolve_path
 from utils.metadata import extract_full_metadata, update_file_metadata
-from utils.ingestion import completed_analysis_condition
+from utils.ingestion import completed_analysis_condition, has_completed_analysis, has_valid_embedding
+from domain.services.analysis.constants import EMBEDDING_MODEL
 from domain.models.track import Track, TrackAnalysis, TrackEmbedding
 
 def _is_supported_file(filename: str) -> bool:
@@ -33,7 +34,7 @@ class FilesystemAppService:
             "bpm": track.bpm,
             "key": track.key,
             "waveform_peaks": analysis.waveform_peaks if analysis else [],
-            "analyzed": analysis is not None,
+            "analyzed": has_completed_analysis(track, analysis=analysis),
         }
 
         tag_metadata = extract_full_metadata(resolved_path)
@@ -83,13 +84,16 @@ class FilesystemAppService:
                 # not mean analysis succeeded.  The shared analyzed rule keeps
                 # partially imported and failed tracks visible for a retry.
                 statement = (
-                    select(Track.filepath, Track.analysis_level, TrackEmbedding.track_id)
+                    select(Track.filepath, Track.analysis_level, TrackEmbedding.model_name,
+                           TrackEmbedding.embedding_json)
                     .outerjoin(TrackEmbedding, Track.id == TrackEmbedding.track_id)
                     .where(Track.filepath.in_(file_paths), completed_analysis_condition())
                 )
-                for filepath, level, embedded in self.session.exec(statement).all():
+                for filepath, level, model, vector in self.session.exec(statement).all():
                     analyzed_files[filepath] = level or "full"
-                    if embedded is not None:
+                    # The background job's rule: a vector of another model or an
+                    # invalid one is still pending.
+                    if model == EMBEDDING_MODEL and has_valid_embedding(vector):
                         embedded_files.add(filepath)
 
             final_result = []

@@ -204,17 +204,20 @@ def test_manual_csv_values_outrank_rekordbox_and_reanalysis(session, mocker):
     assert extra["analysis_bpm"] == 64.0
 
 
-def _job_save(session, tmp_path, features, result, grid_only=False):
+def _job_save(session, tmp_path, features, result):
     track_id = session.exec(select(Track.id).where(Track.filepath == PATH)).one()
     session.rollback()
     AnalysisJobService(session.bind, str(tmp_path / "jobs.sqlite3"))._save(
-        {"track_id": track_id, "filepath": PATH}, result, features, grid_only=grid_only)
+        {"track_id": track_id, "filepath": PATH}, result, features)
     return saved(session, track_id)
 
 
-@pytest.mark.parametrize("stored_bpm, source", [(None, None), (0.0, None), (125.0, "manual")])
-def test_grid_only_preserves_existing_bpm_and_source(session, mocker, tmp_path, stored_bpm, source):
-    use_rekordbox(mocker, "bpm")
+@pytest.mark.parametrize("stored_bpm, source, case, expected", [
+    (None, None, "bpm", (128.0, "rekordbox")), (0.0, None, "bpm", (128.0, "rekordbox")),
+    (125.0, "manual", "bpm", (125.0, "manual")), (120.0, "own", "unregistered", (64.0, "own")),
+])
+def test_grid_only_job_resolves_bpm_like_other_saves(session, mocker, tmp_path, stored_bpm, source, case, expected):
+    use_rekordbox(mocker, case)
     track = Track(filepath=PATH, title="Song", artist="Artist", bpm=stored_bpm, duration=180.0)
     session.add(track)
     session.flush()
@@ -222,10 +225,9 @@ def test_grid_only_preserves_existing_bpm_and_source(session, mocker, tmp_path, 
     session.add(TrackAnalysis(track_id=track.id, features_extra_json=json.dumps(extra)))
     session.commit()
 
-    track, extra = _job_save(session, tmp_path, ["rhythm"], analysis_result(), grid_only=True)
-    assert track.bpm == stored_bpm
-    assert value_sources.stored_sources(extra).get("bpm") == source
-    assert extra["analysis_bpm"] == 64.0
+    track, extra = _job_save(session, tmp_path, ["rhythm"], analysis_result())
+    assert (track.bpm, value_sources.stored_sources(extra).get("bpm")) == expected
+    assert extra.get("analysis_bpm") == (None if expected[1] == "own" else 64.0)
     assert session.get(TrackAnalysis, track.id).beat_positions
 
 
@@ -244,8 +246,6 @@ def test_analysis_job_save_applies_the_same_rule(session, mocker, tmp_path):
     assert extra["analysis_bpm"] == 64.0
 
     use_rekordbox(mocker, "unregistered")
-    track, extra = _job_save(session, tmp_path, ["rhythm"], result, grid_only=True)
-    assert track.bpm == 128.0  # a grid re-analysis never replaces a BPM
     track, extra = _job_save(session, tmp_path, ["rhythm"], result)
     assert (track.bpm, extra["analysis_components"]["sources"]["bpm"]) == (64.0, "own")
     assert "analysis_bpm" not in extra

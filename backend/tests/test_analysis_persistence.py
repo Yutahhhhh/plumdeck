@@ -125,12 +125,15 @@ def test_rhythm_job_does_not_overwrite_rekordbox_bpm(session, tmp_path):
     analysis = session.get(TrackAnalysis, track.id)
     assert analysis.beat_positions == [0.5, 1.0, 1.5]
     extra = analysis.features_extra
-    assert extra["bpm_authority"] == AUTHORITY
+    # The recorded source replaces the legacy marker.
+    assert extra["analysis_components"]["sources"]["bpm"] == "rekordbox"
+    assert "bpm_authority" not in extra
     assert extra["analysis_bpm"] == 64.0
     assert not {"bpm_confidence", "analysis_source", "beat_positions"} & extra.keys()
 
 
-def test_grid_job_never_replaces_bpm_but_selective_rhythm_job_updates_own_bpm(session, tmp_path):
+def test_grid_job_moves_an_own_bpm_with_the_new_beats(session, tmp_path):
+    # A rekordbox BPM stays: test_rhythm_job_does_not_overwrite_rekordbox_bpm.
     track = Track(filepath="/lib/plain.mp3", title="Song", artist="Artist", bpm=120.0, duration=180.0)
     session.add(track)
     session.commit()
@@ -138,9 +141,9 @@ def test_grid_job_never_replaces_bpm_but_selective_rhythm_job_updates_own_bpm(se
         "beat_positions": [0.5, 1.0, 1.5], "playback_grid": GRID, "playback_grid_version": 2,
         "analysis_components": {"rhythm": "rhythm-attacks-v4"}}}
     _run_job(session, tmp_path, ["rhythm"], rhythm)
-    assert session.get(Track, track.id).bpm == 120.0
+    assert session.get(Track, track.id).bpm == 124.0
     assert session.get(TrackAnalysis, track.id).beat_positions == [0.5, 1.0, 1.5]
-    assert session.get(TrackAnalysis, track.id).features_extra["analysis_bpm"] == 124.0
+    assert session.get(TrackAnalysis, track.id).features_extra["analysis_components"]["sources"]["bpm"] == "own"
 
     _run_job(session, tmp_path, ["rhythm", "key"], rhythm)
     saved = session.get(Track, track.id)
