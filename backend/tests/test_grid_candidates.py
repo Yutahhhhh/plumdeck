@@ -398,3 +398,61 @@ def test_invalid_stored_playback_grid_is_reported_without_failing_metadata_get(c
     assert response.status_code == 200
     assert response.json()["beat_grid"] is None
     assert "invalid playback grid" in response.json()["grid_warning"]
+
+
+def test_failed_on_demand_analysis_is_not_repeated_until_the_file_changes(client, session, monkeypatch, tmp_path):
+    import os
+    import app.services.grid_candidate_service as service
+    from app.services.analysis_coordinator import analysis_coordinator
+    from domain.services.analysis.rhythm_grid import GridAnalysisError
+    monkeypatch.setattr(rekordbox_grid, "find_analysis", lambda _: None)
+    monkeypatch.setattr(service, "_failed_on_demand", {})
+    track = _track(session)
+    audio = tmp_path / "undecodable.wav"
+    audio.write_bytes(b"not audio")
+    track.filepath = str(audio)
+    session.add(track)
+    session.commit()
+    calls = []
+
+    def fail(path):
+        calls.append(path)
+        raise GridAnalysisError("Grid analysis failed: cannot decode")
+    monkeypatch.setattr(service, "analyze_grid", fail)
+    url = f"/api/tracks/{track.id}/performance-metadata"
+    for _ in range(3):  # deck load, then the editor's re-GETs after cue saves
+        body = client.get(url).json()
+        assert body["beat_grid"] is None and "cannot decode" in body["grid_warning"]
+    assert len(calls) == 1
+    assert analysis_coordinator.owner is None  # the slot was released
+
+    stat = audio.stat()
+    os.utime(audio, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+    client.get(url)
+    assert len(calls) == 2
+
+
+def test_on_demand_analysis_waits_for_the_analysis_slot(client, session, monkeypatch, tmp_path):
+    import app.services.grid_candidate_service as service
+    from app.services.analysis_coordinator import analysis_coordinator
+    monkeypatch.setattr(rekordbox_grid, "find_analysis", lambda _: None)
+    monkeypatch.setattr(service, "_failed_on_demand", {})
+    monkeypatch.setattr(service, "ON_DEMAND_WAIT_SECONDS", 0.1)
+    track = _track(session)
+    audio = tmp_path / "track.wav"
+    audio.write_bytes(b"fixture")
+    track.filepath = str(audio)
+    session.add(track)
+    session.commit()
+    calls = []
+    monkeypatch.setattr(service, "analyze_grid", lambda path: calls.append(path) or {
+        "bpm": 120.0, "ticks": [0.3, 0.8, 1.3, 1.8], "confidence": 4.0})
+    url = f"/api/tracks/{track.id}/performance-metadata"
+    token = analysis_coordinator.acquire("Import")
+    try:
+        body = client.get(url).json()
+    finally:
+        analysis_coordinator.release(token)
+    # Busy is not a failure: no analysis ran and the next load analyzes.
+    assert body["beat_grid"] is None and "Another analysis" in body["grid_warning"] and not calls
+    assert client.get(url).json()["beat_grid"]["source"] == "analysis" and len(calls) == 1
