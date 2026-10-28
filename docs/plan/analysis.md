@@ -86,7 +86,7 @@
 | W1-03 | 時間軸の ADR と Mixxx デコーダのヘッドレス計測（macOS と Windows のランナーで `waveform.requestRange{detail:'pcm'}`）、`contracts/timeline/decoder-timing-v2.json` | 未。両 OS のオフセットがケースごとに 1ms 以内で一致しないものは `unresolved` とし、Rust 解析とエンジンの切替を止める |
 | W1-04 / W1-05 | `plumdeck-decode` のヘッダ解析とデコード、basis 整列、PcmPages | 済 |
 | W1-06 | OS フォールバック（HE-AAC：macOS は ExtAudioFile、Windows は Media Foundation。symphonia が拒否した入力だけ）と Opus | 未（今は型付きの Unsupported） |
-| W1-07 | `plumdeck-dsp`（Kaiser 窓 sinc のポリフェーズ・リサンプラと可変比モード、STFT、Hann、RBJ biquad、RMS / peak。通過域 ≤0.1 dB、阻止域 ≤−80 dB、割り当て 0） | 未（`plumdeck-decode` に簡易リサンプラあり） |
+| W1-07 | `plumdeck-dsp`（Kaiser 窓 sinc のポリフェーズ・リサンプラと可変比モード、STFT、Hann、RBJ biquad、RMS / peak。通過域 ≤0.1 dB、阻止域 ≤−80 dB、割り当て 0） | 済（`src-tauri/crates/plumdeck-dsp`。`plumdeck-decode` の簡易リサンプラは `Resampler` トレイトの差し替えで置き換え可能） |
 | W1-08 | `plumdeck-worker`（`--analysis-worker` は stdin から 1 行 16 MiB まで読み 1 op を実行して終了、`--serve` は id 付きで複数。出力は `PLUMDECK_ANALYSIS_WORKER_V1:` の後に progress か result。`catch_unwind` でパニックをエラーの result に。`priority: background` で自分の優先度を下げる） | 未 |
 | W1-39 | 性能判定ハーネス（Linux で命令数の予算を判定し、壁時計は macOS で記録するだけ） | 未 |
 

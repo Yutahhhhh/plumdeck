@@ -1,0 +1,12 @@
+[package]
+name = "plumdeck-dsp"
+version = "0.1.0"
+description = "plumdeck's own DSP building blocks: resamplers, windows, STFT, biquads, meters"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# No DuckDB; shared by analysis, the engine and Junction. Processing calls
+# never allocate (checked by tests/no_alloc.rs).
+[dependencies]
+rustfft.workspace = true

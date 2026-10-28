@@ -81,6 +81,7 @@ rust-version = "1.91"
 plumdeck-core = { path = "crates/plumdeck-core" }
 plumdeck-db = { path = "crates/plumdeck-db" }
 plumdeck-domain = { path = "crates/plumdeck-domain" }
+plumdeck-dsp = { path = "crates/plumdeck-dsp" }
 plumdeck-key = { path = "crates/plumdeck-key" }
 plumdeck-media = { path = "crates/plumdeck-media" }
 plumdeck-backend = { path = "crates/plumdeck-backend" }
@@ -102,6 +103,8 @@ md-5 = "=0.10.6"
 # zlib inflate for the rekordbox key blob (already locked through flate2).
 miniz_oxide = "=0.8.9"
 regex = "=1.12.2"
+# FFT for the STFT in plumdeck-dsp (MIT OR Apache-2.0; already locked through symphonia).
+rustfft = "=6.4.1"
 # SQLite with SQLCipher: the analysis-job queue now, rekordbox's encrypted
 # master.db later (one libsqlite3-sys may link per build). macOS uses
 # CommonCrypto; Windows adds bundled-sqlcipher-vendored-openssl per crate.

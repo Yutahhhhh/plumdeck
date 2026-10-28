@@ -4370,6 +4370,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "plumdeck-dsp"
+version = "0.1.0"
+dependencies = [
+ "rustfft",
+]
+
+[[package]]
 name = "plumdeck-key"
 version = "0.1.0"
 dependencies = [

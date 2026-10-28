@@ -170,7 +170,7 @@
 - ~~**RB-02** `plumdeck-key`~~（完了。`src-tauri/crates/plumdeck-key`、`contracts/key/keys.json`、`src/lib/keys.generated.ts`。`normalize_key` は Python の全件ベクタ `contracts/key/normalize_key.jsonl` で一致を確認）。
 - ~~**S3** ライブラリの中核~~（完了。`/api/fs/list` は D-15 として DROP を記録）。
 - **W1-06 / Opus**：`plumdeck-decode` の OS フォールバック（HE-AAC）と Opus（Mac / Win のランナーが要る）。
-- **W1-07** `plumdeck-dsp`（リサンプラ、STFT、biquad など）。
+- ~~**W1-07** `plumdeck-dsp`~~（完了。ポリフェーズと可変比のリサンプラ、Hann / Kaiser、STFT、RBJ biquad、RMS / peak。通過域 ±0.0001 dB 未満、阻止域 −93 dB 以下、処理中の割り当て 0 をテストで確認）。
 - **W2-01** エンジン契約 v1 の機械可読化、**W2-30** Junction の仕様ベースライン（どちらも C++ / TS からの抽出なので Linux で可）。
 
 ### 段 2：バックエンドの主要スライス
@@ -232,7 +232,7 @@
   ```
 
   別々に回すと build-dependency の feature が分かれ、bundled DuckDB を何度もビルドし直すことになる。新しく DuckDB を使う crate を足したら、このリストと CI の `backend-port` ジョブに加える。
-- DuckDB 非依存の crate は単独でよい：`cargo test -p plumdeck-rekordbox`、`cargo test -p plumdeck-decode`。
+- DuckDB 非依存の crate は単独でよい：`cargo test -p plumdeck-rekordbox`、`cargo test -p plumdeck-decode`、`cargo test -p plumdeck-dsp --release`（品質テストは release で回す）。
 - `#[ignore]` の「実ライブラリ」テストは、オーナーのローカルデータを前提にしているので、クラウドでは回さない。
 - Tauri 本体の `cargo test --lib` と、フロントの node テストも壊さない。
 

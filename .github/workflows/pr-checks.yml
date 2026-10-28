@@ -175,6 +175,9 @@ jobs:
         # One invocation: testing these packages separately splits host
         # build-dependency features and rebuilds bundled DuckDB per package.
         run: cargo test -p plumdeck-core -p plumdeck-db -p plumdeck-domain -p plumdeck-media -p plumdeck-key -p plumdeck-backend -p plumdeck-parity
+      - name: Test plumdeck-dsp (release; filter quality and no-allocation checks)
+        working-directory: src-tauri
+        run: cargo test -p plumdeck-dsp --release
 
   windows-shell:
     name: Windows shell and controller regression tests
