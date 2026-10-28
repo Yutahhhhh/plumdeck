@@ -613,15 +613,21 @@ test('Play engine conformance on BlackHole 2ch', { timeout: 900000, skip: !binar
       return [hz, best];
     }));
     const dryBands = bands(reference), filter = {};
-    for (const depth of [0, 1]) {
+    // 0/1 are the ends; 0.1/0.92 the depths the LPF/HPF presets use.
+    for (const depth of [0, 0.1, 0.92, 1]) {
       const recording = await take(() => pad('A', 'filter', true, { mix: 0.3, depth })); await pad('A', 'filter', false);
       const b = bands(recording);
       filter[`depth ${depth}`] = { '80Hz': db(b[80] / dryBands[80]), '8kHz': db(b[8000] / dryBands[8000]) };
     }
     metric('padFilterBandChangeDb', filter);
-    const lpf = Math.min(...Object.values(filter).map(v => v['8kHz'])), hpf = Math.min(...Object.values(filter).map(v => v['80Hz']));
-    expect('PAD FILTER reaches LPF: 8 kHz <= -40 dB', lpf <= -40, lpf);
-    expect('PAD FILTER reaches HPF: 80 Hz <= -40 dB', hpf <= -40, hpf);
+    const at = (depth, band) => filter[`depth ${depth}`][band];
+    expect('PAD FILTER reaches LPF: 8 kHz <= -40 dB', at(0, '8kHz') <= -40, at(0, '8kHz'));
+    expect('PAD FILTER reaches HPF: 80 Hz <= -40 dB', at(1, '80Hz') <= -40, at(1, '80Hz'));
+    // A filter, not a mute: the pass band stays audible.
+    expect('full LPF keeps the 80 Hz band (>= -20 dB)', at(0, '80Hz') >= -20, at(0, '80Hz'));
+    expect('full HPF keeps a thin 8 kHz (>= -20 dB)', at(1, '8kHz') >= -20, at(1, '8kHz'));
+    expect('preset LPF (0.1): 80 Hz within 3 dB, 8 kHz <= -40 dB', at(0.1, '80Hz') >= -3 && at(0.1, '8kHz') <= -40, filter['depth 0.1']);
+    expect('preset HPF (0.92): 8 kHz within 3 dB, 80 Hz <= -40 dB', at(0.92, '8kHz') >= -3 && at(0.92, '80Hz') <= -40, filter['depth 0.92']);
 
     // PITCH is an insert: the unshifted tone must not leak at low LEVEL.
     await h.load('A', files.sine);
@@ -641,14 +647,14 @@ test('Play engine conformance on BlackHole 2ch', { timeout: 900000, skip: !binar
   await check('QB-4', 'echo and reverb tails after release / OFF', ['QB-4', 'H-8', 'X-04'], async ({ metric, expect }) => {
     await solo('A', files.clicks, { play: false });
     const tails = {};
-    const takeTail = async (label, on, off, kind) => {
+    const takeTail = async (label, on, off, kind, tailMs = 2600) => {
       await h.ok('deck.pause', { deck: 'A' }); await h.ok('deck.seek', { deck: 'A', positionMs: 3850 });
       await flushTails();
       const accepted = await on();
       const recording = await h.record(async mark => {
         await h.ok('deck.play', { deck: 'A' }); mark('play');
         await delay(kind === 'echo' ? 500 : 400); await off(); mark('release');
-      }, 2600);
+      }, tailMs);
       // The first click is 150 ms into playback; use it to place the release on the WAV.
       const shift = onset(recording) - 0.15 - recording.marks.play;
       if (!accepted.ok) { tails[label] = rejected(accepted); expect(`${label} accepted`, false, tails[label]); return; }
@@ -657,8 +663,11 @@ test('Play engine conformance on BlackHole 2ch', { timeout: 900000, skip: !binar
         const found = copies(recording, CLICK_A, 0, -60, 20);
         const after = found.filter(c => c.ms / 1000 > release && c.db > -40);
         const span = after.length ? after.at(-1).ms - ms(release) : 0;
-        tails[label] = { spanMs: span, repeatsAfterRelease: after.length };
+        // The tail ends by level: the last repeat heard has decayed far down.
+        const quiet = found.filter(c => c.ms / 1000 > release);
+        tails[label] = { spanMs: span, repeatsAfterRelease: after.length, lastRepeatDb: quiet.at(-1)?.db ?? null, lastRepeatMs: quiet.length ? quiet.at(-1).ms - ms(release) : null };
         expect(`${label}: echo audible (> -40 dB) >= 2 beats after release`, span >= 2 * BEAT_MS - 250, span);
+        if (tailMs > 2600) expect(`${label}: repeats decay below -40 dB before the tail ends`, quiet.length > 0 && quiet.at(-1).db <= -40, tails[label]);
       } else {
         const env = envelope(recording.mono, RATE, 20), start = Math.ceil(release * 50);
         const top = Math.max(...env);
@@ -672,7 +681,7 @@ test('Play engine conformance on BlackHole 2ch', { timeout: 900000, skip: !binar
       }
     };
     const padBeats = h.has('mixer.fx.beats') ? { beats: 0.5 } : {};
-    await takeTail('PAD echo release', () => pad('A', 'echo', true, { mix: 0.5, depth: 0.7, ...padBeats }), () => pad('A', 'echo', false), 'echo');
+    await takeTail('PAD echo release', () => pad('A', 'echo', true, { mix: 0.5, depth: 0.7, ...padBeats }), () => pad('A', 'echo', false), 'echo', h.has('mixer.fx.beats') ? 6000 : 2600);
     await takeTail('BEAT FX echo OFF', () => h.try('mixer.beatfx.set', { effect: 'echo', target: 'A', enabled: true, mix: 0.7, beats: 0.5, auto: true }), () => h.try('mixer.beatfx.set', { enabled: false }), 'echo');
     await takeTail('PAD reverb release', () => pad('A', 'reverb', true, { mix: 0.8, depth: 0.8 }), () => pad('A', 'reverb', false), 'reverb');
     await takeTail('BEAT FX reverb OFF', () => h.try('mixer.beatfx.set', { effect: 'reverb', target: 'A', enabled: true, mix: 0.8, auto: true }), () => h.try('mixer.beatfx.set', { enabled: false }), 'reverb');
@@ -721,4 +730,29 @@ test('Play engine conformance on BlackHole 2ch', { timeout: 900000, skip: !binar
   });
 
   report.notRun = { 'QB-6': 'three simultaneous PAD FX need H-9 (optional, not implemented on the Mixxx host)' };
+  // ---------------------------------------------------------------- memory
+  await check('H-mem', 'host memory after delay FX on every deck and BEAT FX', ['H-8', 'H-10'], async ({ metric, expect }) => {
+    const rss = () => Number(execFileSync('ps', ['-o', 'rss=', '-p', String(h.child.pid)], { encoding: 'utf8' }).trim()) / 1024;
+    const start = rss();
+    for (const deck of DECKS) await solo(deck, files.clicks, { play: false });
+    await delay(1500);
+    const before = rss();
+    const delays = ['echo', 'lowcutecho', 'mtdelay', 'spiral'];
+    for (const effect of delays) for (const deck of DECKS) { await pad(deck, effect, true); await pad(deck, effect, false); }
+    await delay(500);
+    const afterPads = rss();
+    for (const effect of delays) {
+      await h.try('mixer.beatfx.set', { effect, target: 'master', enabled: true, mix: 0.5, beats: 1, auto: true });
+      await h.try('mixer.beatfx.set', { enabled: false });
+    }
+    await delay(500);
+    const after = rss();
+    let footprintMb = null;
+    try { footprintMb = Number(/phys_footprint:\s*([\d.]+)\s*MB/.exec(execFileSync('footprint', [String(h.child.pid)], { encoding: 'utf8' }))?.[1]) || null; } catch { /* tool unavailable */ }
+    metric('rssMb', { start, tracksLoaded: before, afterPadFx: afterPads, footprintMb, afterAllDecksAndBeatFx: after, growth: after - before });
+    // Rings are allocated per route (input x output): 16 s for BEAT FX, 4 s for PAD FX.
+    // At 16 s, 16 PAD loads alone would add ~180 MB (2 routes x 5.6 MB each).
+    expect('RSS growth from PAD delay FX on 4 decks <= 50 MB', afterPads - before <= 50, afterPads - before);
+    expect('RSS growth from all delay FX <= 80 MB', after - before <= 80, after - before);
+  });
 });

@@ -3,6 +3,7 @@
 #include "backend.h"
 #include "scratch_deck.h"
 #include "slip_return.h"
+#include "ddj_ring.h"
 #include "engine/enginexfader.h"
 #include "sampler_bank.h"
 #include "beat_fx.h"
@@ -885,9 +886,13 @@ public:
             const bool tail = parameterManifest("send_amount") && setParameter("send_amount", 0);
             fxTails_[index] = tail;
             if (tail) {
+                // Let the repeats decay to about -60 dB before the chain turns
+                // off (Mixxx then ramps over one buffer, now inaudible). The
+                // length follows the applied delay and feedback, not a fixed
+                // repeat count.
                 const double bpm = effectiveBpm(index) > 0 ? effectiveBpm(index) : 120;
-                const double length = effect == "reverb" ? 8 : std::max(1.0, fxBeats_[index] * 8);
-                const int duration = int(std::min(384000.0, 60000 * length / bpm));
+                const double length = effect == "reverb" ? 8 : fxBeats_[index] * tailRepeats(index, effect);
+                const int duration = int(std::min(30000.0, 60000 * std::max(1.0, length) / bpm));
                 QTimer::singleShot(duration, this, [this,index,generation] {
                     if (fxGenerations_[index] != generation) return;
                     ControlObject::set(ConfigKey(StandardEffectChain::formatEffectChainGroup(index), "enabled"), 0);
@@ -901,6 +906,8 @@ public:
         if (!fxLoaded_[index] || fxEffects_[index] != effect) {
             // Force a manifest transition even if the rack was preseeded with
             // the same name: it rebinds the macro and clears the old track tail.
+            // Pads use 2 beats or fewer: a 4 s ring instead of BEAT FX's 16 s.
+            DdjRingScope ring(4);
             if (const auto other = builtinEffect(effect == "reverb" ? "echo" : "reverb")) chain->getEffectSlot(0)->loadEffectWithDefaults(other);
             chain->getEffectSlot(0)->loadEffectWithDefaults(manifest);
             fxEffects_[index] = effect; fxLoaded_[index] = true;
@@ -917,8 +924,27 @@ public:
         ControlObject::set(ConfigKey(chain->group(), "mix"), insert ? 1 : mix);
         ControlObject::set(ConfigKey(chain->group(), "enabled"), 1);
         fxDepths_[index] = depth;
-        if (beats) fxBeats_[index] = *beats;
+        // The beat length actually applied: the request's, else the loaded
+        // effect's own (a press without beats must not reuse a stale value).
+        fxBeats_[index] = beats ? *beats : 1;
+        for (const auto* id : {"beats", "delay_time"}) if (const auto value = slotParameter(chain->getEffectSlot(0), id)) { fxBeats_[index] = *value; break; }
         return {};
+    }
+    static std::optional<double> slotParameter(const EffectSlotPointer& slot, const QString& id) {
+        for (const auto& map : {slot->getLoadedParameters(), slot->getHiddenParameters()})
+            for (const auto& parameters : map) for (const auto& parameter : parameters) if (parameter->manifest()->id() == id) return parameter->getValue();
+        return std::nullopt;
+    }
+    /** Repeats until a released delay's return falls ~51 dB below its first repeat. */
+    double tailRepeats(int index, const QString& effect) const {
+        // Per-repeat gain: the echo's feedback parameter, or the fixed gains
+        // of the owned processors in ddj_beat_processors.h.
+        const double depth = fxDepths_[index];
+        double feedback = slotParameter(effects_->getStandardEffectChain(index)->getEffectSlot(0), "feedback_amount").value_or(std::sqrt(.5));
+        if (effect == "lowcutecho") feedback = .2 + .55 * depth;
+        else if (effect == "spiral") feedback = .3 + .55 * depth;
+        else if (effect == "mtdelay") feedback = .35;
+        return feedback <= .001 ? 2 : std::clamp(std::ceil(51 / (-20 * std::log10(std::min(feedback, .98)))), 2.0, 48.0);
     }
 
     /**
@@ -927,9 +953,13 @@ public:
      * one onto the other so a pad at full depth is audible for every effect.
      */
     static double metaParameterFor(const QString& effect, double depth) {
-        // Filters are neutral at the centre and cut towards either end.
+        // Filters are neutral at the centre and cut towards either end: depth
+        // 0 sweeps LPF, 1 HPF. Stop short of the ends (corners ~32 Hz and
+        // ~9 kHz), so a full turn leaves a thin signal as hardware filters do.
+        // Since mixer.fx.beats this replaces the old 0.5 - depth/2 mapping;
+        // clients from before it are unsupported.
         if (effect == QLatin1String("filter") || effect == QLatin1String("moogladder4filter")) {
-            return depth;
+            return 0.06 + 0.88 * depth;
         }
         // Auto Pan's metaknob is its LFO rate: at the top the pan is too fast to
         // hear as movement, so keep full depth inside the range that reads.

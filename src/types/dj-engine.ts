@@ -138,7 +138,10 @@ export const DJ_ENGINE_CAPABILITIES = {
    * H-8: `mixer.fx.set` accepts `beats` (1/16..16) and native `params`, pads
    * load the beat processors (ROLL, TRANS, SPIRAL …), insert types run fully
    * wet with DEPTH on the macro only, and echo/reverb pads keep a tail after
-   * release (`fx.tail` while it decays).
+   * release (`fx.tail` while it decays, until the repeats reach about -60 dB).
+   * With it, filter `depth` is the sweep position: 0 LPF, 0.5 neutral, 1 HPF
+   * (stopping short of silence). Clients from before it sent 0.5 - depth/2
+   * semantics and are unsupported against such a host.
    */
   mixerFxBeats: "mixer.fx.beats",
   /** Rust: RELEASE pads (ECHO OUT, BACK SPIN, VINYL BRAKE). */

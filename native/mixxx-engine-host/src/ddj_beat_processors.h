@@ -3,6 +3,7 @@
 #include "effects/backends/effectprocessor.h"
 #include "engine/effects/engineeffectparameter.h"
 #include "control/controlobject.h"
+#include "ddj_ring.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -17,6 +18,7 @@
 #include "effects/backends/builtin/pitchshifteffect.h"
 
 template<int Mode> class DdjBeatProcessor;
+
 
 // A host-only timing adapter. AUTO forwards source beat information unchanged;
 // TAP supplies a fixed beat length to the same processor, including on master.
@@ -76,9 +78,10 @@ private:
 // Host-owned implementations of the eight missing selector positions and a
 // long-delay echo. These are independent DSP, not bit-identical Pioneer algorithms.
 struct DdjBeatState : EffectState {
-    // 16 beats at 60 BPM; slower grids clamp the longest delays. Each route
-    // (input x output) owns a ring, so keep this bounded. Two guard frames
-    // keep interpolation in bounds. Allocate only on the main thread.
+    // 16 beats at 60 BPM for BEAT FX (see ddjRingSeconds); slower grids clamp
+    // the longest delays. Each route (input x output) owns a ring, so keep
+    // this bounded. Two guard frames keep interpolation in bounds. Allocate
+    // only on the main thread.
     explicit DdjBeatState(const mixxx::EngineParameters& p, double seconds = 16)
         : EffectState(p), ring(2 * std::max<size_t>(16, size_t(std::ceil(double(p.sampleRate()) * seconds)) + 2), 0) {}
     std::vector<float> ring;
@@ -94,10 +97,11 @@ public:
     struct OwnedRoute {int input,output;unsigned rate;std::unique_ptr<DdjBeatState> state;};
     std::vector<OwnedRoute> routes_;
     std::atomic<size_t> publishedRoutes_{0};
-    DdjBeatProcessor(){routes_.reserve(1024);}
+    DdjBeatProcessor() : ringSeconds_(ddjRingSeconds()) {routes_.reserve(1024);}
+    const double ringSeconds_;
     QSet<ChannelHandleAndGroup> outputs_;
     void initialize(const QSet<ChannelHandleAndGroup>& inputs,const QSet<ChannelHandleAndGroup>& outputs,const mixxx::EngineParameters& parameters) override {outputs_=outputs;for(const auto& input:inputs)initializeInputChannel(input.handle(),parameters);}
-    void initializeInputChannel(ChannelHandle input,const mixxx::EngineParameters& parameters) override {for(const auto& output:outputs_){if(routes_.size()>=1024)return;routes_.push_back({input.handle(),output.handle().handle(),unsigned(parameters.sampleRate()),std::make_unique<DdjBeatState>(parameters, Mode==3 ? .02 : (Mode==6 || Mode==7) ? 0 : 16)});publishedRoutes_.store(routes_.size(),std::memory_order_release);}}
+    void initializeInputChannel(ChannelHandle input,const mixxx::EngineParameters& parameters) override {for(const auto& output:outputs_){if(routes_.size()>=1024)return;routes_.push_back({input.handle(),output.handle().handle(),unsigned(parameters.sampleRate()),std::make_unique<DdjBeatState>(parameters, Mode==3 ? .02 : (Mode==6 || Mode==7) ? 0 : ringSeconds_)});publishedRoutes_.store(routes_.size(),std::memory_order_release);}}
     bool hasStatesForInputChannel(ChannelHandle input) const override {for(const auto& route:routes_)if(route.input==input.handle())return true;return false;}
     SINT getGroupDelayFrames() override{return 0;}
     void process(const ChannelHandle& input,const ChannelHandle& output,const CSAMPLE* in,CSAMPLE* out,const mixxx::EngineParameters& parameters,EffectEnableState enabled,const GroupFeatureState& features) override {
