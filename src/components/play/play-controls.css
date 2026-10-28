@@ -14,8 +14,8 @@
 
 .dj-pad-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(32px, 1fr)); grid-auto-flow: row; gap: 4px; min-height: 68px; flex: 1 0 auto; }
 .dj-performance-pad { display: flex; align-items: center; justify-content: space-between; gap: 3px; min-width: 0; min-height: 0; padding: 1px 4px; overflow: hidden; border: 1px solid #2b2e33; border-radius: 2px; background: linear-gradient(#202226, #151719); box-shadow: inset 0 1px #2a2d32; text-align: left; }
-.dj-performance-pad b { min-width: 0; overflow: hidden; color: #c3c7ce; font-size: 9px; font-weight: 700; white-space: nowrap; text-overflow: ellipsis; }
-.dj-performance-pad span { color: #686d75; font-size: 7px; white-space: nowrap; }
+.dj-performance-pad b { min-width: 0; overflow: hidden; color: #c3c7ce; font-size: 10px; font-weight: 700; white-space: nowrap; text-overflow: ellipsis; }
+.dj-performance-pad span { color: #686d75; font-size: 10px; white-space: nowrap; }
 .dj-performance-pad:not(:disabled):hover { border-color: #454a52; background: #292c31; }
 .dj-performance-pad:active, .dj-performance-pad--fx:active { transform: translateY(1px); background: #31363d; }
 .dj-performance-pad:disabled { opacity: .35; }
@@ -29,20 +29,20 @@
 
 
 .dj-deck-controls .dj-loop-controls { width: auto; min-width: 0; gap: 2px; }
-.dj-saved-loops { width: 100%; height: 15px; min-width: 0; border: 1px solid #30343a; border-radius: 2px; padding: 0 2px; background: #17191c; color: #aeb3bb; font-size: 7px; }
+.dj-saved-loops { width: 100%; height: 15px; min-width: 0; border: 1px solid #30343a; border-radius: 2px; padding: 0 2px; background: #17191c; color: #aeb3bb; font-size: 10px; }
 
 .dj-channel.dj-channel--mixer { display: grid; grid-template-columns: minmax(0, 1fr) 23px; grid-template-rows: minmax(0, 1fr) 16px; gap: 2px 3px; width: 148px; padding: 0 0 0 4px; overflow: hidden; }
 .dj-deck--right .dj-channel.dj-channel--mixer { padding: 0 4px 0 0; border-left: 0; border-right: 1px solid var(--dj-line-soft); }
 .dj-eq-bank { display: flex; grid-column: 1; grid-row: 1; align-items: flex-start; justify-content: space-around; gap: 1px; min-width: 0; overflow: hidden; }
 .dj-knob-control { display: flex; flex: 1 1 0; min-width: 0; max-width: 27px; flex-direction: column; align-items: center; gap: 1px; color: #aeb3bb; }
-.dj-knob-label { max-width: 100%; overflow: hidden; color: #9298a1; font-size: 8px; font-weight: 700; letter-spacing: -.02em; line-height: 9px; text-overflow: ellipsis; }
+.dj-knob-label { max-width: 100%; overflow: hidden; color: #9298a1; font-size: 10px; font-weight: 700; letter-spacing: -.02em; line-height: 11px; text-overflow: ellipsis; }
 .dj-knob { position: relative; width: 24px; height: 24px; flex-shrink: 0; border: 1px solid #50555d; border-radius: 50%; background: radial-gradient(circle at 38% 32%, #4a4e55 0, #292c31 42%, #101113 72%); box-shadow: 0 1px 2px #000, inset 0 0 0 2px #1d1f22; touch-action: none; cursor: ns-resize; }
 .dj-knob::before { content: ''; position: absolute; inset: -3px; border: 1px solid #2c3035; border-top-color: #68707a; border-radius: 50%; }
 .dj-knob i { position: absolute; inset: 3px; border-radius: 50%; pointer-events: none; }
 .dj-knob i::after { content: ''; position: absolute; left: 50%; top: -1px; width: 1px; height: 7px; background: #d7dbe1; box-shadow: 0 0 2px #fff8; }
 .dj-knob-control.is-disabled { opacity: .3; }
 .dj-knob-control.is-disabled .dj-knob { cursor: default; }
-.dj-knob-value { max-width: 100%; overflow: hidden; color: #9ca2aa; font-size: 7px; line-height: 8px; white-space: nowrap; text-overflow: ellipsis; }
+.dj-knob-value { max-width: 100%; overflow: hidden; color: #9ca2aa; font-size: 10px; line-height: 11px; white-space: nowrap; text-overflow: ellipsis; }
 .dj-channel-fader { display: flex; grid-column: 2; grid-row: 1; min-height: 0; flex-direction: column; align-items: center; }
 .dj-channel-fader .dj-fader--vertical { flex: 1; height: 0; min-height: 0; direction: rtl; }
 .dj-channel-actions { display: grid; grid-column: 1 / -1; grid-row: 2; grid-template-columns: 1fr 22px; gap: 2px; min-width: 0; }
@@ -66,12 +66,12 @@
 .dj-workspace--compact .dj-deck--right .dj-deck-controls { grid-template-columns: 116px var(--d-tempo) var(--d-btn) 62px minmax(84px, 1fr); grid-template-areas: 'channel tempo transport loop perf'; }
 .dj-workspace--compact .dj-perf-caption, .dj-workspace--compact .dj-perf .dj-phase { display: none; }
 .dj-workspace--compact .dj-channel--mixer { width: 116px; }
-.dj-workspace--compact .dj-pad-modes button { height: 13px; font-size: 6px; }
+.dj-workspace--compact .dj-pad-modes button { height: 13px; font-size: 10px; }
 .dj-workspace--compact .dj-pad-grid { grid-template-rows: repeat(2, minmax(28px, 1fr)); min-height: 60px; }
 .dj-workspace--compact .dj-performance-pad { padding-inline: 2px; }
 .dj-workspace--compact .dj-performance-pad span, .dj-workspace--compact .dj-knob-value { display: none; }
 .dj-workspace--compact .dj-knob { width: 17px; height: 17px; }
-.dj-workspace--compact .dj-knob-label { font-size: 6px; line-height: 7px; }
+.dj-workspace--compact .dj-knob-label { font-size: 10px; line-height: 11px; }
 .dj-workspace--compact .dj-knob::before { inset: -2px; }
 .dj-workspace--compact .dj-saved-loops { display: none; }
 
@@ -90,14 +90,14 @@
 .dj-workspace .dj-deck--right .dj-deck-controls { grid-template-columns: 174px var(--d-tempo) var(--d-btn) 78px minmax(96px, 1fr); }
 .dj-workspace .dj-channel--mixer { width: 174px; }
 .dj-perf { container-type: inline-size; }
-.dj-pad-modes button { height: 20px; font-size: 9px; color: #b6bdc8; letter-spacing: 0; }
+.dj-pad-modes button { height: 20px; font-size: 10px; color: #b6bdc8; letter-spacing: 0; }
 .dj-performance-pad b { font-size: 11px; }
-.dj-performance-pad span { font-size: 9px; }
-.dj-knob-label { font-size: 9px; line-height: 11px; color: #b6bdc8; }
+.dj-performance-pad span { font-size: 10px; }
+.dj-knob-label { font-size: 10px; line-height: 12px; color: #b6bdc8; }
 .dj-knob-control { max-width: 32px; }
 .dj-knob { width: 24px; height: 24px; }
-.dj-workspace--compact .dj-pad-modes button { height: 18px; font-size: 9px; }
-.dj-workspace--compact .dj-knob-label { font-size: 8px; line-height: 10px; }
+.dj-workspace--compact .dj-pad-modes button { height: 18px; font-size: 10px; }
+.dj-workspace--compact .dj-knob-label { font-size: 10px; line-height: 12px; }
 .dj-workspace--compact .dj-knob { width: 21px; height: 21px; }
 .dj-performance-pad--fx { justify-content: center; }
 .dj-workspace .dj-channel--mixer { position: relative; }
@@ -116,7 +116,7 @@
 /* rekordbox の PAD モードセレクタ（`HOT CUE ∨`）とパッド内の追加操作。 */
 .dj-pad-mode-row { display: flex; align-items: center; gap: 4px; flex-shrink: 0; flex-wrap: wrap; }
 .dj-pad-pages { display:flex; gap:3px; }
-.dj-pad-pages button { font-size:9px; padding:4px 6px; border:1px solid #424951; border-radius:3px; color:#89939f; background:#14181d; }
+.dj-pad-pages button { font-size: 10px; padding:4px 6px; border:1px solid #424951; border-radius:3px; color:#89939f; background:#14181d; }
 .dj-pad-pages button[aria-pressed="true"] { color:#fff; background:#29486b; border-color:#6bb8fb; }
 .dj-pad-grid[aria-label="Beat loops"] { --pad-color:#ff923a; }
 .dj-pad-grid[aria-label="Keyboard"] { --pad-color:#00df80; }
@@ -129,12 +129,12 @@
 .dj-workspace .dj-pad-grid .dj-performance-pad:not(.dj-performance-pad--cue) b { color:var(--pad-color,#a878ff); }
 .dj-workspace .dj-pad-grid .dj-performance-pad.is-on { box-shadow:inset 0 0 0 2px var(--pad-color,#a878ff); }
 .dj-pad-mode-select { position: relative; }
-.dj-pad-mode-trigger { display: flex; align-items: center; gap: 4px; height: 15px; padding: 0 5px; border: 1px solid #34383f; border-radius: 2px; background: #202327; color: #d0d4da; font-size: 8px; font-weight: 700; letter-spacing: .04em; white-space: nowrap; }
+.dj-pad-mode-trigger { display: flex; align-items: center; gap: 4px; height: 15px; padding: 0 5px; border: 1px solid #34383f; border-radius: 2px; background: #202327; color: #d0d4da; font-size: 10px; font-weight: 700; letter-spacing: .04em; white-space: nowrap; }
 .dj-pad-mode-trigger:not(:disabled):hover { background: #2a2e34; }
 .dj-pad-mode-trigger:disabled { opacity: .4; }
 .dj-pad-mode-chevron { width: 7px; height: 4px; flex-shrink: 0; opacity: .8; }
 .dj-pad-mode-menu { position: fixed; z-index: 60; min-width: 108px; margin: 0; padding: 3px 0; list-style: none; border: 1px solid #4a4f57; border-radius: 3px; background: #16181b; box-shadow: 0 6px 18px #000b; outline: 0; }
-.dj-pad-mode-option { display: flex; align-items: center; gap: 5px; padding: 3px 8px 3px 4px; color: #c9ced5; font-size: 9px; white-space: nowrap; cursor: pointer; }
+.dj-pad-mode-option { display: flex; align-items: center; gap: 5px; padding: 3px 8px 3px 4px; color: #c9ced5; font-size: 10px; white-space: nowrap; cursor: pointer; }
 .dj-pad-mode-option i { width: 8px; flex-shrink: 0; font-style: normal; color: #eaecef; }
 .dj-pad-mode-option.is-cursor { background: #2c3138; color: #fff; }
 .dj-pad-mode-option.is-current { color: #fff; }
@@ -143,7 +143,7 @@
 .dj-performance-pad--jump { display: grid; grid-template-columns: 14px minmax(0, 1fr) 14px; align-items: center; padding: 0; }
 .dj-performance-pad--jump b { text-align: center; }
 .dj-performance-pad--jump.is-disabled { opacity: .35; }
-.dj-jump-arrow { height: 100%; min-width: 0; border: 0; border-radius: 0; background: transparent; color: #8d939c; font-size: 7px; line-height: 1; }
+.dj-jump-arrow { height: 100%; min-width: 0; border: 0; border-radius: 0; background: transparent; color: #8d939c; font-size: 10px; line-height: 1; }
 .dj-jump-arrow:not(:disabled):hover { background: #31363d; color: #e6e9ed; }
 .dj-performance-pad--value { justify-content: center; }
 .dj-performance-pad--value b { font-size: 10px; }
@@ -157,25 +157,25 @@
 .dj-abl-manual .dj-abl-reloop { grid-column: 1 / -1; }
 .dj-abl-manual button.is-armed { border-color: #ff6b6b; color: #ffb3b3; }
 .dj-abl-manual button.is-on { border-color: var(--deck-accent); background: color-mix(in srgb, var(--deck-accent) 26%, #17191c); color: #fff; }
-.dj-abl-manual button { border: 1px solid #34383f; border-radius: 2px; background: #17191c; color: #c7ccd3; font-size: 8px; font-weight: 700; }
+.dj-abl-manual button { border: 1px solid #34383f; border-radius: 2px; background: #17191c; color: #c7ccd3; font-size: 10px; font-weight: 700; }
 .dj-abl-step { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; height: 18px; }
 .dj-abl-step button { border: 1px solid #30343a; border-radius: 2px; background: #202327; color: #c3c8cf; font-size: 11px; line-height: 1; }
 .dj-abl-step button:not(:disabled):hover, .dj-abl-mode button:not(:disabled):hover { background: #2b2f35; }
 .dj-abl-mode { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; height: 15px; }
-.dj-abl-mode button { border: 1px solid #30343a; border-radius: 2px; background: #1b1d20; color: #8f959d; font-size: 8px; font-weight: 700; }
+.dj-abl-mode button { border: 1px solid #30343a; border-radius: 2px; background: #1b1d20; color: #8f959d; font-size: 10px; font-weight: 700; }
 .dj-abl-mode button.is-on { border-color: #2f6fd0; background: #2f6fd0; color: #fff; }
 .dj-loop-extra { display: flex; flex-direction: column; gap: 2px; }
-.dj-loop-extra button { height: 14px; border: 1px solid #30343a; border-radius: 2px; background: #202327; color: #b8bdc5; font-size: 7px; }
+.dj-loop-extra button { height: 14px; border: 1px solid #30343a; border-radius: 2px; background: #202327; color: #b8bdc5; font-size: 10px; }
 .dj-loop-extra button:disabled { opacity: .32; }
 
 /* SLIP / Q / MT の縦レール。rekordbox ではプラッタの外側に縦に並ぶ。 */
 .dj-deck-rail { display: flex; flex-direction: column; align-items: stretch; justify-content: center; gap: 4px; width: 26px; flex-shrink: 0; }
-.dj-deck-rail .dj-chip { width: 100%; height: 15px; padding: 0; font-size: 8px; }
+.dj-deck-rail .dj-chip { width: 100%; height: 15px; padding: 0; font-size: 10px; }
 .dj-workspace--compact .dj-deck-rail { gap: 3px; width: 22px; }
 .dj-workspace--compact .dj-panel-rail { width: 16px; }
 .dj-workspace--compact .dj-panel-tab { width: 16px; height: 16px; }
 .dj-workspace--compact .dj-panel-tab svg { width: 10px; height: 10px; }
-.dj-workspace--compact .dj-deck-rail .dj-chip { height: 13px; font-size: 7px; }
+.dj-workspace--compact .dj-deck-rail .dj-chip { height: 13px; font-size: 10px; }
 /* JOG の重さはレール幅に収める。値はツールチップと読み上げで示す。 */
 .dj-deck-rail .dj-jog-weight { flex: 0 0 auto; max-width: none; }
 .dj-deck-rail .dj-jog-weight .dj-knob { width: 18px; height: 18px; }
@@ -211,7 +211,7 @@
 .dj-panel-toggle svg { width: 13px; height: 13px; }
 .dj-panel-toggle:not(:disabled):hover { background: #2a2e34; color: #dfe3e8; }
 .dj-panel-toggle.is-on { border-color: #2f6fd0; background: #2f6fd0; color: #fff; }
-.dj-panel-glyph--text { font-size: 9px; font-weight: 800; letter-spacing: .02em; }
+.dj-panel-glyph--text { font-size: 10px; font-weight: 800; letter-spacing: .02em; }
 
 /* ミキサーパネル：デッキ間に立つチャンネルストリップ */
 .dj-deck-pair:has(.dj-mixer-panel) { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
@@ -219,7 +219,7 @@
 .dj-mixer-panel { display: flex; gap: 1px; flex-shrink: 0; padding: 3px 2px; background: #0f1012; border-inline: 1px solid #000; }
 .dj-mixer-channel + .dj-mixer-channel { border-left: 1px solid #1c1e21; }
 .dj-mixer-channel .dj-knob-control { max-width: 100%; }
-.dj-mixer-cue { width: 100%; height: 15px; flex-shrink: 0; border: 1px solid #34383f; border-radius: 2px; background: #1b1d20; color: #a9aeb6; font-size: 8px; font-weight: 700; letter-spacing: .06em; }
+.dj-mixer-cue { width: 100%; height: 15px; flex-shrink: 0; border: 1px solid #34383f; border-radius: 2px; background: #1b1d20; color: #a9aeb6; font-size: 10px; font-weight: 700; letter-spacing: .06em; }
 .dj-mixer-cue.is-on { border-color: #2f6fd0; background: #2f6fd0; color: #fff; }
 .dj-mixer-cue:disabled { opacity: .32; }
 
@@ -236,11 +236,11 @@
 .dj-mixer-knobs .dj-knob-control { max-width: none; gap: 0; }
 .dj-mixer-knobs .dj-knob-value { display: none; }
 .dj-mixer-knobs .dj-knob { width: 17px; height: 17px; }
-.dj-mixer-knobs .dj-knob-label { font-size: 6px; line-height: 8px; letter-spacing: .02em; }
+.dj-mixer-knobs .dj-knob-label { font-size: 10px; line-height: 12px; letter-spacing: .02em; }
 .dj-mixer-sliders { display: grid; grid-template-columns: 1fr; gap: 2px; width: 100%; height: 62px; flex-shrink: 0; }
 .dj-mixer-slider { display: flex; min-height: 0; flex-direction: column; align-items: center; gap: 1px; }
 .dj-mixer-slider .dj-fader--vertical { flex: 1 1 auto; height: auto; min-height: 0; width: 16px; }
-.dj-mixer-slider .dj-control-label { flex-shrink: 0; font-size: 6px; letter-spacing: .02em; }
+.dj-mixer-slider .dj-control-label { flex-shrink: 0; font-size: 10px; letter-spacing: .02em; }
 
 /* ターンテーブル風のテンポ表示。白いリングは切れ目（赤いマーカー）ごと回る。 */
 .dj-workspace .dj-platter { grid-area: platter; position: relative; align-self: center; justify-self: center; width: 84px; height: 84px; }
@@ -258,7 +258,7 @@
 .dj-platter-bpm.is-adjustable { cursor: ns-resize; touch-action: none; }
 .dj-platter.is-dragging .dj-platter-bpm { color: #fff; }
 .dj-platter-tempo { display: flex; align-items: baseline; gap: 4px; }
-.dj-platter-percent, .dj-platter-range { border: 0; background: transparent; font-size: 8px; font-variant-numeric: tabular-nums; line-height: 1; }
+.dj-platter-percent, .dj-platter-range { border: 0; background: transparent; font-size: 10px; font-variant-numeric: tabular-nums; line-height: 1; }
 .dj-platter-percent { color: #e2e5e9; }
 .dj-platter-range { color: var(--deck-accent); }
 .dj-platter-percent:disabled, .dj-platter-range:disabled { opacity: .4; }
@@ -367,3 +367,56 @@
 
 /* SLIP / REV / Q / MT light red when on (the rekordbox colour meaning). */
 .dj-workspace .dj-chip--toggle.is-on { border-color: var(--dj-on-red); background: var(--dj-on-red); color: #fff; }
+
+/* Mixer: COLOR FX type above the channels; per channel TRIM / HI / MID / LOW /
+   COLOR, crossfader assign, CUE, fader and (when published) a level meter. */
+.dj-mixer-panel { flex-direction: column; gap: 2px; }
+.dj-mixer-channels { display: flex; flex: 1 1 auto; gap: 1px; min-height: 0; }
+.dj-mixer-channel { display: flex; flex-direction: column; align-items: center; }
+.dj-mixer-colorfx { display: flex; flex-direction: column; align-items: stretch; gap: 1px; color: #b6bdc8; font-size: 10px; font-weight: 700; letter-spacing: .04em; text-align: center; }
+.dj-mixer-colorfx select { width: 100%; height: 20px; min-width: 0; border: 1px solid #3a3f46; border-radius: 2px; padding: 0 2px; background: #1b1d20; color: #e2e5e9; font-size: 10px; }
+.dj-knob-label--button { max-width: 100%; padding: 0 2px; border: 1px solid transparent; border-radius: 2px; cursor: pointer; }
+.dj-knob-label--button:not(:disabled):hover { border-color: #4a4f57; color: #fff; }
+.dj-knob-label--button.is-on { border-color: var(--dj-on-red); background: var(--dj-on-red); color: #fff; }
+.dj-knob-label--button:disabled { cursor: default; }
+.dj-mixer-color .dj-knob { border-color: #6b5a2c; }
+.dj-mixer-assign { display: grid; grid-template-columns: 13px minmax(0, 1fr) 13px; gap: 1px; width: 100%; flex-shrink: 0; }
+.dj-mixer-assign button { height: 20px; min-width: 0; padding: 0; overflow: hidden; border: 1px solid #34383f; border-radius: 2px; background: #1b1d20; color: #a9aeb6; font-size: 10px; font-weight: 700; letter-spacing: 0; }
+.dj-mixer-assign button.is-on { border-color: #2f6fd0; background: #2f6fd0; color: #fff; }
+.dj-mixer-assign button:disabled { opacity: .32; }
+.dj-mixer-sliders { flex: 1 1 auto; min-height: 62px; height: auto; grid-template-columns: 1fr auto; }
+.dj-mixer-meter { position: relative; width: 4px; height: 100%; border-radius: 1px; background: #08090a; box-shadow: inset 0 0 0 1px #2a2d31; overflow: hidden; }
+/* The full-scale gradient is clipped to the level, so colour marks the absolute level. */
+.dj-mixer-meter i { position: absolute; inset: 0; background: linear-gradient(to top, #4caf50 0 70%, #e0c341 70% 90%, #e2564b 90%); clip-path: inset(calc((1 - var(--level, 0)) * 100%) 0 0 0); }
+
+/* Master strip: crossfader curve and headphone MIX / LEVEL. */
+.dj-crossfader-curve { height: 20px; border: 1px solid #3a3f46; border-radius: 2px; padding: 0 3px; background: #1b1d20; color: #d0d4da; font-size: 10px; font-weight: 600; letter-spacing: 0; }
+.dj-headphone { display: flex; align-items: center; gap: 6px; padding-left: 12px; border-left: 1px solid var(--dj-line); }
+.dj-headphone .dj-knob-control { flex-direction: row; gap: 4px; max-width: none; }
+.dj-headphone .dj-knob { width: 20px; height: 20px; }
+.dj-headphone .dj-knob-value { display: none; }
+
+/* Dropout indicator in the global bar. */
+.dj-dropout { flex-shrink: 0; padding: 1px 6px; border: 1px solid var(--dj-line); border-radius: 3px; color: var(--dj-dim); font-size: 10px; font-weight: 700; letter-spacing: .06em; font-variant-numeric: tabular-nums; }
+.dj-dropout.has-dropouts { border-color: #7d3c38; color: #f0b3ae; }
+.dj-dropout.is-recent { border-color: #d23c33; background: #d23c33; color: #fff; }
+
+/* Keyboard help: the active preset's table. */
+.dj-shortcuts { flex-wrap: wrap; align-items: flex-start; gap: 6px 14px; }
+.dj-shortcuts label { display: flex; align-items: center; gap: 6px; color: #d7e3f3; font-weight: 600; }
+.dj-shortcuts select { height: 22px; border: 1px solid #3c5070; border-radius: 2px; background: #121a26; color: #e2ebf7; }
+.dj-shortcuts table { border-collapse: collapse; }
+.dj-shortcuts th { padding: 0 10px 2px 0; color: #d7e3f3; font-weight: 700; text-align: left; }
+.dj-shortcuts td { padding: 1px 10px 1px 0; white-space: nowrap; }
+.dj-shortcuts kbd { display: inline-block; min-width: 22px; padding: 0 4px; border: 1px solid #3c5070; border-radius: 3px; background: #121a26; color: #fff; font: inherit; font-weight: 700; text-align: center; }
+.dj-shortcuts dl { display: grid; grid-template-columns: repeat(2, auto); align-content: start; gap: 2px 14px; margin: 0; }
+.dj-shortcuts dl div { display: flex; gap: 6px; min-width: 0; }
+.dj-shortcuts dt { flex-shrink: 0; min-width: 58px; color: #fff; font-weight: 700; font-variant-numeric: tabular-nums; }
+.dj-shortcuts dd { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dj-shortcuts small { width: 100%; color: #a9bcd6; }
+/* The decks set the row height; the mixer fits inside it instead of growing it. */
+.dj-workspace .dj-deck-pair > .dj-mixer-panel { height: 0; min-height: 100%; overflow: hidden; }
+/* Knobs in two columns (TRIM HI / MID LOW / COLOR) leave the fader its height. */
+.dj-workspace .dj-mixer-knobs { display: grid; grid-template-columns: 1fr 1fr; column-gap: 2px; }
+.dj-workspace .dj-mixer-knobs .dj-mixer-color { grid-column: 1 / -1; }
+.dj-workspace.dj-workspace .dj-mixer-channel { width: 64px; }
