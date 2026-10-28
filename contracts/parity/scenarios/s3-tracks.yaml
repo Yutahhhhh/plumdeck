@@ -1,0 +1,282 @@
+# S3: the library list (backend/api/routers/tracks.py get_tracks,
+# get_tracks_page, get_tracks_count, get_track_ids) on the library fixture.
+# Search: raw phrase and token AND across title/artist/album/genre/subgenre/
+# filepath (file extensions dropped, % and _ act as ILIKE wildcards),
+# Unicode (ß/ẞ, full-width digits, NFC vs NFD paths), the analyzed rule,
+# enharmonic/Camelot key spellings and the Major/Minor suffix filter, the
+# half/double-time BPM window, feature and year ranges, the lyrics filters,
+# FastAPI's lax query parsing (last value wins, empty strings are values)
+# and its 422s. /ids orders by created_at only (ties undefined), so its steps
+# compare the ids as an unordered list.
+name: s3-tracks
+db: fixture
+fixture: library
+steps:
+  - name: default list (newest first, id tie-break)
+    expect_status: 200
+    http: {method: GET, path: /api/tracks}
+  - name: limit and offset
+    expect_status: 200
+    http: {method: GET, path: /api/tracks, query: {limit: 3, offset: 2}}
+  - name: offset past the end
+    expect_status: 200
+    http: {method: GET, path: /api/tracks, query: {offset: 50}}
+  - name: limit zero
+    expect_status: 200
+    http: {method: GET, path: /api/tracks, query: {limit: 0}}
+  - name: repeated scalar keeps the last value
+    expect_status: 200
+    http: {method: GET, path: /api/tracks, query: {limit: [1, 4]}}
+  - name: analyzed only
+    expect_status: 200
+    http: {method: GET, path: /api/tracks, query: {status: analyzed}}
+  - name: unanalyzed only
+    expect_status: 200
+    http: {method: GET, path: /api/tracks, query: {status: unanalyzed}}
+  - name: unknown status is ignored
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/count, query: {status: Analyzed}}
+  - name: search phrase
+    expect_status: 200
+    http: {method: GET, path: /api/tracks, query: {q: alpha song}}
+  - name: search tokens across fields, extension dropped
+    expect_status: 200
+    http: {method: GET, path: /api/tracks, query: {q: "dj_alpha first mp3"}}
+  - name: search filepath
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {q: vorbis.flac}}
+  - name: percent is a wildcard
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {q: "100%"}}
+  - name: underscore is a wildcard
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {q: "pure_noise"}}
+  - name: whitespace-only search matches every row with a value
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/count, query: {q: "   "}}
+  - name: empty search is no filter
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/count, query: {q: ""}}
+  - name: sharp s
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {q: straße}}
+  - name: capital sharp s
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {q: ẞ}}
+  - name: full-width digits
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {q: １２３}}
+  - name: NFC query against an NFD path
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {q: café nfd}}
+  - name: apostrophe tokens
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {q: "rock'n'roll don't"}}
+  - name: japanese title
+    expect_status: 200
+    http: {method: GET, path: /api/tracks, query: {q: 日本語}}
+  - name: title artist album filters
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {title: a, artist: DJ, album: album}}
+  - name: genres list
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {genres: [House, house, Techno]}}
+  - name: empty genre value is a filter on ''
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {genres: ""}}
+  - name: subgenres list
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {subgenres: [Liquid, trap]}}
+  - name: key with enharmonic spelling
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {key: "D# Minor"}}
+  - name: key in short form
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {key: Fm}}
+  - name: Camelot code
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {key: 8a}}
+  - name: Camelot code matching a spelled key
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {key: 1A}}
+  - name: Minor suffix
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {key: Minor}}
+  - name: Major suffix
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {key: Major}}
+  - name: unreadable key matches its own spelling
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {key: " C MAJOR "}}
+  - name: bpm window with half and double time
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {bpm: 124}}
+  - name: bpm window narrowed
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {bpm: 171, bpm_range: 1}}
+  - name: bpm zero is no filter
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/count, query: {bpm: 0}}
+  - name: bpm nan is no filter
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/count, query: {bpm: nan}}
+  - name: negative range empties the window
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/count, query: {bpm: 124, bpm_range: -10}}
+  - name: feature ranges
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {min_energy: 0.5, max_energy: 0.9, min_danceability: "0.4", max_brightness: 1e0}}
+  - name: duration range with f32 values
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {min_duration: 0.1, max_duration: 200.25}}
+  - name: nan lower bound
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/count, query: {min_energy: nan}}
+  - name: year range with lax ints
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {min_year: " 1_999 ", max_year: "2010.0"}}
+  - name: year set
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {year_status: set}}
+  - name: year unset
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {year_status: unset}}
+  - name: lyrics set
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {lyrics_status: set}}
+  - name: lyrics unset
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {lyrics_status: unset}}
+  - name: lyrics text
+    expect_status: 200
+    http: {method: GET, path: /api/tracks, query: {lyrics: NIGHT}}
+  - name: lyrics text with status on the count query
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/count, query: {lyrics: night, lyrics_status: set}}
+  - name: everything at once
+    expect_status: 200
+    http: {method: GET, path: /api/tracks, query: {q: a, status: analyzed, genres: [House, Drum & Bass], key: Minor, bpm: 87, min_year: 1990, lyrics_status: set}}
+  - name: page default
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/page}
+  - name: page with total and has_more
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/page, query: {limit: 5, offset: 5}}
+  - name: page sorted by key on the Camelot wheel
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/page, query: {sort: key}}
+  - name: page sorted by key descending
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/page, query: {sort: key, order: desc}}
+  - name: page sorted by title
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/page, query: {sort: title}}
+  - name: page sorted by album descending (empty last)
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/page, query: {sort: album, order: desc}}
+  - name: page sorted by bpm
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/page, query: {sort: bpm, limit: 4}}
+  - name: page sorted by year descending
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/page, query: {sort: year, order: desc}}
+  - name: page sorted by created_at
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/page, query: {sort: created_at}}
+  - name: page sorted by genre with a filter
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/page, query: {sort: genre, q: o, limit: 2, offset: 1}}
+  - name: page sorted by energy, danceability, duration, subgenre, artist
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/page, query: {sort: energy, order: desc}}
+  - name: page sorted by danceability
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/page, query: {sort: danceability}}
+  - name: page sorted by duration
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/page, query: {sort: duration}}
+  - name: page sorted by subgenre
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/page, query: {sort: subgenre}}
+  - name: page sorted by artist
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/page, query: {sort: artist}}
+  - name: unknown sort column keeps the default order
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/page, query: {sort: filepath, order: desc}}
+  - name: page at the bounds
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/page, query: {limit: 500, offset: 0}}
+  - name: page with lyrics filter (count joins lyrics)
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/page, query: {lyrics: night}}
+  - name: count
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/count}
+  - name: count with filters
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/count, query: {genres: [House, house], status: analyzed}}
+  - name: ids
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids}
+  - name: ids ignore limit
+    expect_status: 200
+    unordered: [\"$\"]
+    http: {method: GET, path: /api/tracks/ids, query: {limit: 1}}
+
+  - name: page limit below 1
+    expect_status: 422
+    http: {method: GET, path: /api/tracks/page, query: {limit: 0}}
+  - name: page limit above 500
+    expect_status: 422
+    http: {method: GET, path: /api/tracks/page, query: {limit: 501}}
+  - name: page negative offset
+    expect_status: 422
+    http: {method: GET, path: /api/tracks/page, query: {offset: -1}}
+  - name: page order outside the pattern
+    expect_status: 422
+    http: {method: GET, path: /api/tracks/page, query: {order: DESC}}
+  - name: bpm not a number
+    expect_status: 422
+    http: {method: GET, path: /api/tracks, query: {bpm: fast}}
+  - name: empty float
+    expect_status: 422
+    http: {method: GET, path: /api/tracks/count, query: {min_energy: ""}}
+  - name: fractional limit
+    expect_status: 422
+    http: {method: GET, path: /api/tracks, query: {limit: "1.5"}}
+  - name: hex year
+    expect_status: 422
+    http: {method: GET, path: /api/tracks/ids, query: {min_year: "0x7cf"}}
+  - name: several errors at once
+    expect_status: 422
+    http: {method: GET, path: /api/tracks/page, query: {limit: x, offset: y, bpm: z}}

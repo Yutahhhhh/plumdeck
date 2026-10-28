@@ -1,0 +1,101 @@
+# S3: GET /api/tracks/{id}/lyrics and GET /api/lyrics/search
+# (backend/api/routers/lyrics.py) on the library fixture: LyricsRead with
+# NULL source, whitespace-only and empty content, NULL timestamps (Python's
+# response validation fails: 500, skipped by N12); the search's ILIKE
+# prefilter (% and _ are wildcards there but the per-line check is
+# literal), case folding, LRC time tags ([mm:ss.xx] removed, [m:ss] parsed,
+# [123:45.6] kept in the text but parsed as a timestamp), one hit per
+# track, context lines, exclude_track_id (0 means no exclusion) and the
+# 3-character minimum. The search has no ORDER BY: compared unordered.
+name: s3-lyrics
+db: fixture
+fixture: library
+compare_overrides:
+  unordered: ["$"]
+steps:
+  - name: lyrics with LRC tags
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/1/lyrics}
+  - name: japanese lyrics
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/2/lyrics}
+  - name: whitespace-only lyrics
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/4/lyrics}
+  - name: empty lyrics
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/6/lyrics}
+  - name: NULL source and language
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/8/lyrics}
+  - name: NULL timestamps fail LyricsRead
+    http: {method: GET, path: /api/tracks/11/lyrics}
+  - name: no lyrics row
+    expect_status: 404
+    http: {method: GET, path: /api/tracks/3/lyrics}
+  - name: lax id
+    expect_status: 200
+    http: {method: GET, path: "/api/tracks/+01/lyrics"}
+  - name: id not an int
+    expect_status: 422
+    http: {method: GET, path: /api/tracks/one/lyrics}
+  - name: search one word
+    expect_status: 200
+    http: {method: GET, path: /api/lyrics/search, query: {q: night}}
+  - name: search across case
+    expect_status: 200
+    http: {method: GET, path: /api/lyrics/search, query: {q: NIGHT MOVES}}
+  - name: search excluding a track
+    expect_status: 200
+    http: {method: GET, path: /api/lyrics/search, query: {q: night, exclude_track_id: 8}}
+  - name: exclude zero excludes nothing
+    expect_status: 200
+    http: {method: GET, path: /api/lyrics/search, query: {q: night, exclude_track_id: 0}}
+  - name: search a timed line
+    expect_status: 200
+    http: {method: GET, path: /api/lyrics/search, query: {q: two}}
+  - name: search the last line (no next line)
+    expect_status: 200
+    http: {method: GET, path: /api/lyrics/search, query: {q: tail}}
+  - name: search the first line (no previous line)
+    expect_status: 200
+    http: {method: GET, path: /api/lyrics/search, query: {q: Into the}}
+  - name: search japanese
+    expect_status: 200
+    http: {method: GET, path: /api/lyrics/search, query: {q: 夜のう}}
+  - name: underscore matches in SQL but not literally
+    expect_status: 200
+    http: {method: GET, path: /api/lyrics/search, query: {q: a_b}}
+  - name: wildcard pattern finds rows the literal check drops
+    expect_status: 200
+    http: {method: GET, path: /api/lyrics/search, query: {q: "n_ght"}}
+  - name: percent in the query
+    expect_status: 200
+    http: {method: GET, path: /api/lyrics/search, query: {q: "100%"}}
+  - name: a time tag as the query
+    expect_status: 200
+    http: {method: GET, path: /api/lyrics/search, query: {q: "[00:15"}}
+  - name: across a line break finds nothing
+    expect_status: 200
+    http: {method: GET, path: /api/lyrics/search, query: {q: "night\nWe"}}
+  - name: two characters is too short
+    expect_status: 200
+    http: {method: GET, path: /api/lyrics/search, query: {q: ni}}
+  - name: empty query
+    expect_status: 200
+    http: {method: GET, path: /api/lyrics/search, query: {q: ""}}
+  - name: no match
+    expect_status: 200
+    http: {method: GET, path: /api/lyrics/search, query: {q: zzzzzz}}
+  - name: q missing
+    expect_status: 422
+    http: {method: GET, path: /api/lyrics/search}
+  - name: exclude not an int
+    expect_status: 422
+    http: {method: GET, path: /api/lyrics/search, query: {q: night, exclude_track_id: x}}
+  - name: restored PUT for a missing track
+    deviation: {id: D-02, b_status: 404, b_body: {detail: Track not found}}
+    http: {method: PUT, path: /api/tracks/404/lyrics, body: {track_id: 404, content: la}}
+  - name: restored PUT without content
+    deviation: {id: D-02, b_status: 422}
+    http: {method: PUT, path: /api/tracks/1/lyrics, body: {track_id: 1}}

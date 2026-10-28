@@ -1,0 +1,97 @@
+# S3: PATCH /api/tracks/{id}/info and /genre (backend/api/routers/tracks.py)
+# on the library fixture, then the lists that show the edits. Covers
+# partial updates, explicit nulls (ignored), lax ints for year ("1999",
+# 2000.0, true), Unicode values, a missing track (404), path and body
+# validation (422), JSON syntax errors and non-JSON bodies. The suite
+# db-diffs both libraries after the writes.
+name: s3-track-edits
+db: fixture
+fixture: library
+steps:
+  - name: set every field
+    expect_status: 200
+    http: {method: PATCH, path: /api/tracks/1/info, body: {title: New Title, artist: New Artist, album: New Album, year: 2001}}
+  - name: only the title
+    expect_status: 200
+    http: {method: PATCH, path: /api/tracks/2/info, body: {title: "改題 ß"}}
+  - name: nulls are ignored
+    expect_status: 200
+    http: {method: PATCH, path: /api/tracks/3/info, body: {title: null, artist: null, album: null, year: null}}
+  - name: empty object changes nothing
+    expect_status: 200
+    http: {method: PATCH, path: /api/tracks/4/info, body: {}}
+  - name: year as a numeric string
+    expect_status: 200
+    http: {method: PATCH, path: /api/tracks/5/info, body: {year: "1999"}}
+  - name: year as an integral float
+    expect_status: 200
+    http: {method: PATCH, path: /api/tracks/6/info, body: {year: 2000.0}}
+  - name: year zero and empty strings
+    expect_status: 200
+    http: {method: PATCH, path: /api/tracks/7/info, body: {year: 0, title: "", album: ""}}
+  - name: year true is 1
+    expect_status: 200
+    http: {method: PATCH, path: /api/tracks/8/info, body: {year: true}}
+  - name: extra fields ignored
+    expect_status: 200
+    http: {method: PATCH, path: /api/tracks/9/info, body: {genre: Ignored, bpm: 1, title: Straße 2}}
+  - name: lax path id
+    expect_status: 200
+    http: {method: PATCH, path: /api/tracks/010/info, body: {artist: Leading Zero}}
+  - name: missing track
+    expect_status: 404
+    http: {method: PATCH, path: /api/tracks/999/info, body: {title: x}}
+  - name: id zero
+    expect_status: 404
+    http: {method: PATCH, path: /api/tracks/0/info, body: {}}
+  - name: negative id
+    expect_status: 404
+    http: {method: PATCH, path: /api/tracks/-1/genre, body: {genre: x}}
+  - name: id not an int
+    expect_status: 422
+    http: {method: PATCH, path: /api/tracks/abc/info, body: {}}
+  - name: fractional year
+    expect_status: 422
+    http: {method: PATCH, path: /api/tracks/1/info, body: {year: 1999.5}}
+  - name: title not a string
+    expect_status: 422
+    http: {method: PATCH, path: /api/tracks/1/info, body: {title: 5}}
+  - name: path and body errors together
+    expect_status: 422
+    http: {method: PATCH, path: /api/tracks/x/info, body: {year: "y"}}
+  - name: no body
+    expect_status: 422
+    http: {method: PATCH, path: /api/tracks/1/info, headers: {content-type: application/json}, raw: ""}
+  - name: body is a list
+    expect_status: 422
+    http: {method: PATCH, path: /api/tracks/1/info, body: [1]}
+  - name: JSON syntax error
+    expect_status: 422
+    http: {method: PATCH, path: /api/tracks/1/info, headers: {content-type: application/json}, raw: "{bad"}
+  - name: text body
+    expect_status: 422
+    http: {method: PATCH, path: /api/tracks/1/info, headers: {content-type: text/plain}, raw: '{"title": "x"}'}
+  - name: set a genre
+    expect_status: 200
+    http: {method: PATCH, path: /api/tracks/2/genre, body: {genre: City Pop}}
+  - name: empty genre
+    expect_status: 200
+    http: {method: PATCH, path: /api/tracks/7/genre, body: {genre: ""}}
+  - name: genre with duplicate keys (last wins)
+    expect_status: 200
+    http: {method: PATCH, path: /api/tracks/13/genre, headers: {content-type: application/json}, raw: '{"genre": "first", "genre": "Ambient"}'}
+  - name: genre missing
+    expect_status: 422
+    http: {method: PATCH, path: /api/tracks/2/genre, body: {}}
+  - name: genre null
+    expect_status: 422
+    http: {method: PATCH, path: /api/tracks/2/genre, body: {genre: null}}
+  - name: genre for a missing track
+    expect_status: 404
+    http: {method: PATCH, path: /api/tracks/404/genre, body: {genre: House}}
+  - name: the list after the edits
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/page, query: {sort: title}}
+  - name: genres after the edits
+    expect_status: 200
+    http: {method: GET, path: /api/genres/list}

@@ -168,11 +168,11 @@ jobs:
           workspaces: './src-tauri -> target'
           key: backend-port
           cache-on-failure: true
-      - name: Test plumdeck-core, -db, -backend and -parity
+      - name: Test plumdeck-core, -db, -domain, -media, -backend and -parity
         working-directory: src-tauri
         # One invocation: testing these packages separately splits host
         # build-dependency features and rebuilds bundled DuckDB per package.
-        run: cargo test -p plumdeck-core -p plumdeck-db -p plumdeck-backend -p plumdeck-parity
+        run: cargo test -p plumdeck-core -p plumdeck-db -p plumdeck-domain -p plumdeck-media -p plumdeck-backend -p plumdeck-parity
 
   windows-shell:
     name: Windows shell and controller regression tests

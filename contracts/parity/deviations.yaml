@@ -68,3 +68,53 @@ deviations:
       reached the API, /mcp and the file-writing routes). The WebView, the
       Vite dev server and every loopback client are unaffected.
     current: implemented in plumdeck-backend (S2); s2-middleware.yaml pins B's answers.
+  - id: D-01
+    status: proposed
+    source: plan §5 D-01; backend/infra/repositories/genre_repository.py; src-tauri/crates/plumdeck-db/src/repos/genres.rs
+    summary: >
+      GET /api/genres/unknown and /api/genres/unknown-ids order by tracks.id.
+      Python sent no ORDER BY, so pages taken with LIMIT/OFFSET could skip or
+      repeat tracks when DuckDB returned another order. On a library DuckDB
+      scans in insertion order the answers are the same.
+    current: >
+      B orders by id; s3-genres.yaml compares unknown-ids as an unordered
+      list and the pages on the fixture (where both orders agree).
+  - id: D-15
+    status: proposed
+    source: owner decision (README §2.5, plan §2.1 Explorer); backend/api/routers/filesystem.py list_directory
+    summary: >
+      POST /api/fs/list (the File Explorer listing with Hide Analyzed) and the
+      Explorer's queue start are not ported: the Explorer UI is removed and
+      imports go through drag-and-drop, "曲を追加" and the rekordbox
+      collection import. B answers the route with the unmatched-request 404.
+    current: not ported; s3-media.yaml pins B's 404.
+  - id: D-16
+    status: proposed
+    source: Starlette FileResponse (mimetypes.guess_type); src-tauri/crates/plumdeck-media/src/mime.rs
+    summary: >
+      GET /api/stream sends a Content-Type from a fixed table: Python 3.12's
+      built-in mimetypes table with the audio types of macOS's
+      /etc/apache2/mime.types over it (.flac audio/x-flac, .m4a audio/mp4,
+      .aac audio/x-aac, .ogg audio/ogg, ...). Python asked the OS, so the
+      type differed by platform (Windows registry, Linux /etc/mime.types).
+      The macOS values are what the shipped macOS app sent.
+    current: >
+      B uses the table; the parity oracle installs the same table
+      (tools/parity/oracle_server.py fixed_mimetypes), s3-media.yaml compares
+      Content-Type. On Windows the type changes from the registry's value.
+  - id: D-02
+    status: proposed
+    source: plan §2.2; src/services/metadata.ts saveLyrics; backend/app/services/lyrics_app_service.py register_lyrics
+    summary: >
+      PUT /api/tracks/{track_id}/lyrics is restored: the lyrics editor
+      (src/services/metadata.ts) calls it, but the Python route was removed
+      and answered 405, so edits were lost. Body {content, language?}
+      (track_id in the body is ignored). The write follows register_lyrics
+      with overwrite: source 'user', keywords_json and keywords_content_hash
+      cleared, updated_at (and created_at for a new row) set to local now; a
+      row with the same content, source and language is left as is. Answers
+      LyricsRead, 404 "Track not found", 422 for a bad body.
+    current: >
+      B implements it (unit tests in plumdeck-backend and plumdeck-db);
+      s3-lyrics.yaml pins B's 404 and 422 where A answers 405 (steps that
+      write would differ in the db-diff by design).

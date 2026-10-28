@@ -1,0 +1,64 @@
+# S3: rows the response models reject or the JSON encoder cannot write, on
+# the library fixture. TrackRead (GET /api/tracks, /api/genres/unknown) is
+# a ResponseValidationError (500, skipped by N12) when a required field is
+# NULL or analysis_level is not light/full; the dict routes (/page, lyrics
+# search) still answer. A NaN or Infinity float becomes null in the
+# response-model routes (pydantic-core dump_json) and is a 500 in the dict
+# routes (json.dumps allow_nan=False). The steps filter to the rows each
+# case needs.
+name: s3-tracks-odd-rows
+db: fixture
+fixture: library
+fixture_sql: |
+  UPDATE tracks SET bpm = 'nan', energy = 'inf' WHERE id = 4;
+  UPDATE tracks SET title = NULL, scale = NULL WHERE id = 5;
+  UPDATE tracks SET analysis_level = 'draft' WHERE id = 6;
+  UPDATE tracks SET is_genre_verified = NULL, created_at = NULL WHERE id = 7;
+  UPDATE tracks SET album = NULL, year = NULL, duration = 'inf' WHERE id = 12;
+steps:
+  - name: NaN and Infinity become null in TrackRead
+    expect_status: 200
+    http: {method: GET, path: /api/tracks, query: {genres: Drum & Bass}}
+  - name: Infinity duration in TrackRead
+    expect_status: 200
+    http: {method: GET, path: /api/tracks, query: {genres: R and B}}
+  - name: NaN in the dict page is a 500
+    http: {method: GET, path: /api/tracks/page, query: {genres: Drum & Bass}}
+  - name: NULL title fails TrackRead
+    http: {method: GET, path: /api/tracks, query: {genres: drum and bass}}
+  - name: the dict page carries the NULL title
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/page, query: {genres: drum and bass}}
+  - name: unknown analysis_level fails TrackRead
+    http: {method: GET, path: /api/tracks, query: {genres: DnB}}
+  - name: the dict page carries the unknown level
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/page, query: {genres: DnB}}
+  - name: NULL verified and created_at fail TrackRead
+    http: {method: GET, path: /api/genres/unknown, query: {mode: genre}}
+  - name: the dict page carries NULL created_at
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/page, query: {genres: Unknown}}
+  - name: sorting puts the NULL title last
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/page, query: {sort: title, genres: [drum and bass, House]}}
+  - name: the count and ids are unaffected
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/count}
+  - name: lyrics search with an odd track
+    expect_status: 200
+    http: {method: GET, path: /api/lyrics/search, query: {q: night}}
+  - name: metadata with a NaN bpm is a 500
+    http: {method: GET, path: /api/metadata, query: {track_id: 4}}
+  - name: metadata with a NULL title still reads the tags
+    expect_status: 200
+    http: {method: GET, path: /api/metadata, query: {track_id: 5}}
+  - name: cleanup suggestions with a NULL title in a variant is a 500
+    http: {method: GET, path: /api/genres/cleanup-suggestions}
+  - name: genre edit on a NaN row is a 500
+    http: {method: PATCH, path: /api/tracks/4/genre, body: {genre: Liquid DnB}}
+  - name: apply-analyses with a NULL title is a 500 and writes nothing
+    http: {method: POST, path: /api/genres/apply-analyses, body: {analyses: [{track_id: 1, genre: Techno}, {track_id: 5, genre: Techno}], overwrite: true}}
+  - name: nothing was written
+    expect_status: 200
+    http: {method: GET, path: /api/genres/list}

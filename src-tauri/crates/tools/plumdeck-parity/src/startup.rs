@@ -280,7 +280,7 @@ pub fn run(programs: &Programs, work: &Path, cases: &[Case]) -> Result<Vec<CaseR
             std::fs::remove_dir_all(&dir).with_context(|| format!("clear {}", dir.display()))?;
         }
         let master = dir.join("master");
-        fixture::build(case, &master).with_context(|| format!("build fixture {}", case.name()))?;
+        fixture::build(case, &master, &dir.join("media")).with_context(|| format!("build fixture {}", case.name()))?;
         if case == Case::NewerSchema {
             reports.push(newer_schema_case(&dir, &master, programs)?);
             continue;

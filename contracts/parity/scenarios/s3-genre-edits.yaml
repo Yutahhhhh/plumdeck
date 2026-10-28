@@ -1,0 +1,121 @@
+# S3: the genre bulk edits (backend/api/routers/genres.py,
+# genre_app_service.py) on the library fixture: batch-update (the parent's
+# genre and subgenre copied, verified set; 400 for a missing parent or one
+# without a genre), cleanup-execute (genre or subgenre mode) and
+# apply-analyses (labels sanitized, reused from the library case-
+# insensitively or mapped through the aliases; overwrite and verified
+# rules; confidence title-cased; single-field modes keep the other value;
+# missing tracks skipped; duplicate items see the earlier ones), with their
+# validation errors. Each write is followed by a read; the suite db-diffs
+# both libraries at the end.
+name: s3-genre-edits
+db: fixture
+fixture: library
+steps:
+  - name: batch update from a parent
+    expect_status: 200
+    http: {method: POST, path: /api/genres/batch-update, body: {parent_track_id: 1, target_track_ids: [3, 7, 7, 999]}}
+  - name: batch update with lax ids
+    expect_status: 200
+    http: {method: POST, path: /api/genres/batch-update, body: {parent_track_id: "4", target_track_ids: ["5", 6.0, true]}}
+  - name: batch update with no targets
+    expect_status: 200
+    http: {method: POST, path: /api/genres/batch-update, body: {parent_track_id: 8, target_track_ids: []}}
+  - name: parent without a genre
+    expect_status: 400
+    http: {method: POST, path: /api/genres/batch-update, body: {parent_track_id: 13, target_track_ids: [1]}}
+  - name: missing parent
+    expect_status: 400
+    http: {method: POST, path: /api/genres/batch-update, body: {parent_track_id: 404, target_track_ids: [1]}}
+  - name: targets missing
+    expect_status: 422
+    http: {method: POST, path: /api/genres/batch-update, body: {parent_track_id: 1}}
+  - name: targets not a list
+    expect_status: 422
+    http: {method: POST, path: /api/genres/batch-update, body: {parent_track_id: 1, target_track_ids: "3"}}
+  - name: a target not an int
+    expect_status: 422
+    http: {method: POST, path: /api/genres/batch-update, body: {parent_track_id: 1, target_track_ids: [3, x]}}
+  - name: genres after batch updates
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/page, query: {sort: genre}}
+  - name: cleanup into one spelling
+    expect_status: 200
+    http: {method: POST, path: /api/genres/cleanup-execute, body: {target_genre: Drum & Bass, track_ids: [5, 6]}}
+  - name: cleanup a subgenre
+    expect_status: 200
+    http: {method: POST, path: /api/genres/cleanup-execute, body: {target_genre: Trap, track_ids: [9, 404], mode: subgenre}}
+  - name: cleanup in both mode sets the genre
+    expect_status: 200
+    http: {method: POST, path: /api/genres/cleanup-execute, body: {target_genre: R&B, track_ids: [12], mode: both}}
+  - name: cleanup with no tracks
+    expect_status: 200
+    http: {method: POST, path: /api/genres/cleanup-execute, body: {target_genre: X, track_ids: []}}
+  - name: cleanup with a bad mode
+    expect_status: 422
+    http: {method: POST, path: /api/genres/cleanup-execute, body: {target_genre: X, track_ids: [1], mode: GENRE}}
+  - name: cleanup without a target
+    expect_status: 422
+    http: {method: POST, path: /api/genres/cleanup-execute, body: {track_ids: [1]}}
+  - name: suggestions after cleanup
+    expect_status: 200
+    http: {method: GET, path: /api/genres/cleanup-suggestions}
+  - name: analyses in both mode
+    expect_status: 200
+    http:
+      method: POST
+      path: /api/genres/apply-analyses
+      body:
+        analyses:
+          - {track_id: 2, genre: "'j-pop'", subgenre: "city pop / funk", confidence: high, reason: r}
+          - {track_id: 10, genre: rap, subgenre: trap soul, confidence: " Medium "}
+          - {track_id: 11, genre: "  hip   hop ", confidence: low}
+          - {track_id: 404, genre: House}
+          - {track_id: 13, genre: "", subgenre: ""}
+  - name: analyses respect verified genres without overwrite
+    expect_status: 200
+    http:
+      method: POST
+      path: /api/genres/apply-analyses
+      body:
+        mode: genre
+        analyses:
+          - {track_id: 1, genre: Techno, confidence: HIGH}
+          - {track_id: 7, genre: unknown}
+          - {track_id: 8, subgenre: Drill}
+  - name: analyses with overwrite
+    expect_status: 200
+    http:
+      method: POST
+      path: /api/genres/apply-analyses
+      body:
+        overwrite: "yes"
+        mode: subgenre
+        analyses:
+          - {track_id: 1, subgenre: "\"deep house\"", confidence: very high}
+          - {track_id: 1, subgenre: Tech House}
+          - {track_id: "3", genre: ignored in subgenre mode}
+  - name: analyses with an empty list
+    expect_status: 200
+    http: {method: POST, path: /api/genres/apply-analyses, body: {analyses: []}}
+  - name: analyses without track_id
+    expect_status: 422
+    http: {method: POST, path: /api/genres/apply-analyses, body: {analyses: [{genre: House}]}}
+  - name: analyses with a non-string genre
+    expect_status: 422
+    http: {method: POST, path: /api/genres/apply-analyses, body: {analyses: [{track_id: 1, genre: 5}]}}
+  - name: analyses with a bad mode
+    expect_status: 422
+    http: {method: POST, path: /api/genres/apply-analyses, body: {analyses: [], mode: all}}
+  - name: analyses with a bad overwrite
+    expect_status: 422
+    http: {method: POST, path: /api/genres/apply-analyses, body: {analyses: [], overwrite: maybe}}
+  - name: analyses item not an object
+    expect_status: 422
+    http: {method: POST, path: /api/genres/apply-analyses, body: {analyses: [1]}}
+  - name: the library after the analyses
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/page, query: {sort: genre}}
+  - name: subgenres after the analyses
+    expect_status: 200
+    http: {method: GET, path: /api/genres/subgenres}

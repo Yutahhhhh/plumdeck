@@ -54,12 +54,17 @@ fn run_one(
         std::fs::remove_dir_all(&dir).with_context(|| format!("clear {}", dir.display()))?;
     }
     let master = dir.join("master");
-    fixture::build(case, &master).with_context(|| format!("build fixture {}", case.name()))?;
+    // Both sides read the same synthetic media (never written by a route
+    // ported so far).
+    let media = dir.join("media");
+    crate::media::write(&media)?;
+    fixture::build(case, &master, &media).with_context(|| format!("build fixture {}", case.name()))?;
     if let Some(sql) = &loaded.fixture_sql {
         let conn = duckdb::Connection::open(master.join(DB_NAME))?;
-        conn.execute_batch(sql).context("fixture_sql")?;
+        conn.execute_batch(&fixture::with_media(sql, &media)).context("fixture_sql")?;
         conn.execute_batch("CHECKPOINT")?;
     }
+    let vars = scenario::Vars { media: media.to_string_lossy().into_owned() };
     for side in ["a", "b"] {
         fixture::copy_dir(&master, &dir.join(side).join("ud"))?;
     }
@@ -75,7 +80,7 @@ fn run_one(
     let outcome = match ready {
         (Ok(true), Ok(true)) => {
             let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-            runtime.block_on(scenario::run(&loaded, global, ledger, &target(&a), &target(&b)))
+            runtime.block_on(scenario::run(&loaded, global, ledger, &target(&a), &target(&b), &vars))
         }
         other => Err(anyhow::anyhow!("a side did not come up: A {:?} B {:?}", other.0, other.1)),
     };

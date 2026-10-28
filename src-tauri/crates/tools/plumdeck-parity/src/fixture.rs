@@ -38,10 +38,17 @@ pub enum Case {
     /// A library from a newer app (schema v6). Python opens it; Rust refuses
     /// it untouched (deviation D-14). Run on side B only.
     NewerSchema,
+    /// The S3 library: tracks whose files are the synthetic media
+    /// ([`crate::media`]) with analyzed and unanalyzed rows, enharmonic and
+    /// Camelot key spellings, genre spelling variants, half/double-time
+    /// BPMs, tied timestamps, Unicode titles and NFD paths, lyrics with LRC
+    /// tags. Every analyzed track has a valid embedding, so startup queues
+    /// no backfill job.
+    Library,
 }
 
 impl Case {
-    pub const ALL: [Case; 8] = [
+    pub const ALL: [Case; 9] = [
         Case::Fresh,
         Case::Populated,
         Case::UpgradedLayout,
@@ -50,6 +57,7 @@ impl Case {
         Case::Unreadable,
         Case::NewerSchema,
         Case::Catalog,
+        Case::Library,
     ];
 
     pub fn name(self) -> &'static str {
@@ -62,6 +70,7 @@ impl Case {
             Case::Unreadable => "unreadable",
             Case::NewerSchema => "newer-schema",
             Case::Catalog => "catalog",
+            Case::Library => "library",
         }
     }
 }
@@ -128,6 +137,47 @@ INSERT INTO setlists (name, description, display_order, genre, target_duration, 
   ('Never updated', NULL, 5, NULL, NULL, NULL, '2026-01-06 00:00:00', NULL);
 ";
 
+/// The S3 library rows; `{media}` is the media directory.
+const LIBRARY_ROWS: &str = r#"
+INSERT INTO schema_info VALUES ('version', '5');
+INSERT INTO settings VALUES ('root_path', '{media}');
+INSERT INTO tracks (filepath, title, artist, album, genre, subgenre, year, bpm, key, scale, duration, analysis_level,
+                    energy, danceability, brightness, noisiness, is_genre_verified, created_at) VALUES
+  ('{media}/id3v23.mp3', 'Alpha Song', 'DJ Alpha', 'First Album', 'House', 'Deep House', 1999, 124.0, 'F minor', 'minor', 300.5, NULL, 0.5, 0.6, 0.7, 0.1, true, '2026-03-01 10:00:00'),
+  ('{media}/日本語 ß.mp3', '日本語のタイトル', 'アーティスト ß', NULL, 'J-Pop', '', NULL, 62.0, '4A', 'minor', 200.25, 'light', 0.3, 0.4, 0.5, 0.2, false, '2026-03-01 10:00:00'),
+  ('{media}/vorbis.flac', 'Flac Title', 'Flac Artist', 'Flac Album', 'house', 'deep house', 0, 128.0, 'Eb Minor', 'minor', 250.0, 'full', 0.0, 0.0, 0.0, 0.2, true, '2026-03-02 09:00:00'),
+  ('{media}/tagged.m4a', 'M4A Title', 'M4A Artist', 'M4A Album', 'Drum & Bass', 'Liquid', 2010, 174.0, 'C major', 'major', 180.0, NULL, 0.9, 0.8, 0.6, 0.3, true, '2026-03-03 08:00:00.250000'),
+  ('{media}/plain.wav', 'Plain Wave', 'Wave Artist', '', 'drum and bass', 'liquid', 2011, 172.0, '', '', 0.1, NULL, 0.2, 0.2, 0.2, 0.2, true, '2026-03-03 08:00:00.250000'),
+  ('{media}/id3v1.mp3', 'Old Title', 'Old Artist', 'Old Album', 'DnB', 'Neurofunk', 1985, 170.0, '8A', 'minor', 400.0, NULL, 0.7, 0.7, 0.7, 0.7, false, '2026-03-04 00:00:00'),
+  ('{media}/cafe' || chr(769) || ' nfd.mp3', 'Café NFD', 'Zoë', 'Été', 'Unknown', '', NULL, 0.0, '', '', 120.0, NULL, 0.0, 0.0, 0.0, 0.0, false, '2026-03-04 00:00:01'),
+  ('{media}/noise.mp3', '100% Pure_Noise', 'DJ_Test', 'Noise LP', 'Hip Hop', 'Trap', 2020, 140.5, 'G# Minor', 'minor', 90.0, NULL, 0.5, 0.5, 0.5, 0.5, true, '2026-03-05 12:00:00'),
+  ('{media}/empty.mp3', 'Straße', 'ẞ Artist', 'Ｆｕｌｌ１２３', 'hip-hop', 'trap', 2021, 70.25, 'Ab minor', 'minor', 95.5, NULL, 0.4, 0.4, 0.4, 0.4, true, '2026-03-05 12:00:01'),
+  ('{media}/missing.mp3', 'Missing File', 'Ghost', NULL, 'Techno', 'Peak Time', 2015, 130.0, 'A minor', 'minor', 360.0, NULL, 0.8, 0.8, 0.8, 0.8, true, '2026-03-06 00:00:00'),
+  ('{media}/untagged.flac', 'rock''n''roll don''t', 'R&B Group', 'Soul', 'R&B', 'Contemporary R&B', 2005, 95.0, '10a', 'minor', 210.0, NULL, 0.5, 0.5, 0.5, 0.5, false, '2026-03-07 00:00:00'),
+  ('{media}/UPPER.MP3', 'Upper Case', 'Loud', 'CAPS', 'R and B', 'contemporary r&b', 2006, 96.0, 'B minor', 'minor', 205.0, NULL, 0.5, 0.5, 0.5, 0.5, true, '2026-03-07 00:00:00'),
+  ('{media}/folder.mp3', 'Folder', 'Nobody', NULL, '', '', NULL, NULL, '', '', 1.0, NULL, 0.0, 0.0, 0.0, 0.0, false, '2026-03-08 00:00:00');
+INSERT INTO track_analyses (track_id, waveform_u8, beats_f32, features_extra_json) VALUES
+  (1, '\x00\x7f\xff'::BLOB, NULL, '{"analysis_components": {"timbre": "t1", "rhythm": "r1"}}'),
+  (2, '\x10\x20'::BLOB, '\x00\x00\x80\x3f'::BLOB, '{"analysis_components": {"rhythm": "numpy-autocorrelation-light-v3"}}'),
+  (3, '\x01'::BLOB, NULL, '{}'),
+  (4, '\x05'::BLOB, NULL, '{"analysis_components": {}}'),
+  (5, ''::BLOB, NULL, '{}'),
+  (6, '\x40'::BLOB, NULL, 'not json'),
+  (8, '\x80\x80'::BLOB, NULL, '{}'),
+  (9, '\x01'::BLOB, NULL, '{}'),
+  (11, '\x02'::BLOB, NULL, '{}'),
+  (12, '\x03'::BLOB, NULL, '{}');
+INSERT INTO track_embeddings (track_id, model_name, embedding_json)
+  SELECT id, 'msd-musicnn-1:musicnn-16khz-v1', (SELECT list_transform(range(200), x -> 0.25)::VARCHAR) FROM tracks;
+INSERT INTO lyrics (track_id, content, source, language, created_at, updated_at) VALUES
+  (1, '[00:12.50]Into the night' || chr(10) || '[00:15.00]We dance tonight' || chr(10) || 'Outro line', 'user', 'en', '2026-03-01 10:00:00', '2026-03-02 11:00:00.5'),
+  (2, '夜に駆ける' || chr(10) || '夜のうた', 'lrclib', 'ja', '2026-03-01 10:00:00', '2026-03-01 10:00:00'),
+  (4, '   ', 'user', NULL, '2026-03-03 08:00:00', '2026-03-03 08:00:00'),
+  (6, '', 'user', NULL, '2026-03-04 00:00:00', '2026-03-04 00:00:00'),
+  (8, 'NIGHT moves [chorus]' || chr(10) || '[1:02]night two' || chr(10) || '[123:45.6] tail', NULL, NULL, '2026-03-05 12:00:00', '2026-03-05 12:00:00'),
+  (11, 'a_b 100% line', 'user', NULL, NULL, NULL);
+"#;
+
 fn build_library(path: &Path, upgraded_layout: bool) -> Result<()> {
     let conn = Connection::open(path)?;
     plumdeck_db::create_schema_v5(&conn)?;
@@ -162,7 +212,9 @@ fn build_queue(path: &Path) -> Result<()> {
 }
 
 /// Build `case` into the empty directory `dir` (the side's USER_DATA_DIR).
-pub fn build(case: Case, dir: &Path) -> Result<()> {
+/// `media` is where the scenario's synthetic audio lives (used by
+/// [`Case::Library`], whose paths point into it).
+pub fn build(case: Case, dir: &Path, media: &Path) -> Result<()> {
     std::fs::create_dir_all(dir)?;
     let db = dir.join(DB_NAME);
     match case {
@@ -219,8 +271,20 @@ pub fn build(case: Case, dir: &Path) -> Result<()> {
             build_library(&db, false)?;
             Connection::open(&db)?.execute_batch("UPDATE schema_info SET value = '6'; CHECKPOINT")?;
         }
+        Case::Library => {
+            crate::media::write(media)?;
+            let conn = Connection::open(&db)?;
+            plumdeck_db::create_schema_v5(&conn)?;
+            conn.execute_batch(&with_media(LIBRARY_ROWS, media)).context("library rows")?;
+            conn.execute_batch("CHECKPOINT")?;
+        }
     }
     Ok(())
+}
+
+/// `text` with `{media}` replaced by the media directory (SQL-quoted).
+pub fn with_media(text: &str, media: &Path) -> String {
+    text.replace("{media}", &media.to_string_lossy().replace('\'', "''"))
 }
 
 /// Copy every file of `from` into `to` (flat directories only).
@@ -245,7 +309,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         for case in Case::ALL {
             let dir = root.join(case.name());
-            build(case, &dir).unwrap();
+            build(case, &dir, &root.join("media")).unwrap();
             let db = dir.join(DB_NAME);
             match case {
                 Case::Fresh => assert!(!db.exists()),
@@ -255,7 +319,7 @@ mod tests {
                 }
                 Case::PendingWal => assert!(dir.join(format!("{DB_NAME}.wal")).exists()),
                 Case::Unreadable => assert!(db.exists()),
-                Case::Catalog => assert!(db.exists() && !queue_of(&db).exists()),
+                Case::Catalog | Case::Library => assert!(db.exists() && !queue_of(&db).exists()),
                 Case::Populated | Case::UpgradedLayout | Case::NewerSchema => {
                     let conn = plumdeck_db::open_read_only(&db).unwrap();
                     let version = plumdeck_db::schema::read_schema_version(&conn).unwrap();

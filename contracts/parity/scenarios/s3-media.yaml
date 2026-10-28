@@ -1,0 +1,189 @@
+# S3: GET /api/stream (Starlette FileResponse) and GET /api/metadata
+# (filesystem_app_service.get_track_metadata) on the library fixture and its
+# synthetic media. Stream: the Content-Type table (D-16), NFC/NFD path
+# resolution, missing files (404; a directory is not covered: uvicorn drops
+# the connection on FileResponse's RuntimeError, B answers 500),
+# single, suffix, open-ended, clamped, overlapping and multiple ranges
+# (multipart boundaries normalized, N9), 416 and the 400s, If-Range that
+# does not match; the range and stat headers are compared too. Metadata: tags from ID3v2.3, ID3v2.4 (UTF-8, non-cover
+# picture), ID3v1, FLAC Vorbis comments, MP4 ilst, untagged and unreadable
+# files, a directory, lyrics always "" (TinyTag 2 keeps them elsewhere),
+# the stored BPM/key/waveform and the analyzed rule. POST /api/fs/list is
+# not ported (D-15).
+name: s3-media
+db: fixture
+fixture: library
+steps:
+  - name: mp3
+    expect_status: 200
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/id3v23.mp3"}}
+  - name: flac
+    expect_status: 200
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/vorbis.flac"}}
+  - name: m4a
+    expect_status: 200
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/tagged.m4a"}}
+  - name: wav
+    expect_status: 200
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/plain.wav"}}
+  - name: upper-case extension
+    expect_status: 200
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/UPPER.MP3"}}
+  - name: text file
+    expect_status: 200
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/notes.txt"}}
+  - name: gzip suffix
+    expect_status: 200
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/archive.mp3.gz"}}
+  - name: no extension
+    expect_status: 200
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/no-extension"}}
+  - name: empty file
+    expect_status: 200
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/empty.mp3"}}
+  - name: NFC request for an NFD name
+    expect_status: 200
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/café nfd.mp3"}}
+  - name: japanese name
+    expect_status: 200
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/日本語 ß.mp3"}}
+  - name: missing file
+    expect_status: 404
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/missing.mp3"}}
+  - name: empty path
+    expect_status: 404
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: ""}}
+  - name: NUL in the path
+    expect_status: 404
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/a\u0000b.mp3"}}
+  - name: path missing
+    expect_status: 422
+    http: {method: GET, path: /api/stream}
+  - name: first bytes
+    expect_status: 206
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/plain.wav"}, headers: {range: bytes=0-99}}
+  - name: suffix range
+    expect_status: 206
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/plain.wav"}, headers: {range: bytes=-128}}
+  - name: open-ended range
+    expect_status: 206
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/plain.wav"}, headers: {range: bytes=17000-}}
+  - name: end past the file is clamped
+    expect_status: 206
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/plain.wav"}, headers: {range: bytes=17600-99999}}
+  - name: suffix longer than the file
+    expect_status: 206
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/notes.txt"}, headers: {range: bytes=-500}}
+  - name: whitespace and case in the header
+    expect_status: 206
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/plain.wav"}, headers: {range: " Bytes = 10 - 20 "}}
+  - name: several ranges
+    expect_status: 206
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/plain.wav"}, headers: {range: "bytes=0-9, 100-109, -5"}}
+  - name: overlapping ranges merge into one part
+    expect_status: 206
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/plain.wav"}, headers: {range: "bytes=0-50,25-75"}}
+  - name: invalid parts are skipped
+    expect_status: 206
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/plain.wav"}, headers: {range: "bytes=x-y,,-,5,2-3"}}
+  - name: start past the end
+    expect_status: 416
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/plain.wav"}, headers: {range: bytes=99999-}}
+  - name: any range of an empty file
+    expect_status: 416
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/empty.mp3"}, headers: {range: bytes=0-1}}
+  - name: start after end
+    expect_status: 400
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/plain.wav"}, headers: {range: bytes=50-10}}
+  - name: other units
+    expect_status: 400
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/plain.wav"}, headers: {range: items=0-1}}
+  - name: no equals sign
+    expect_status: 400
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/plain.wav"}, headers: {range: bytes}}
+  - name: nothing requested
+    expect_status: 400
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/plain.wav"}, headers: {range: "bytes=a-b"}}
+  - name: If-Range that does not match serves the whole file
+    expect_status: 200
+    compare_headers: [content-range, accept-ranges, content-length, last-modified, etag]
+    http: {method: GET, path: /api/stream, query: {path: "{media}/plain.wav"}, headers: {range: bytes=0-9, if-range: '"not-the-etag"'}}
+
+  - name: metadata from ID3v2.3 with a front cover
+    expect_status: 200
+    http: {method: GET, path: /api/metadata, query: {track_id: 1}}
+  - name: metadata from ID3v2.4 UTF-8, light analysis
+    expect_status: 200
+    http: {method: GET, path: /api/metadata, query: {track_id: 2}}
+  - name: metadata from FLAC Vorbis comments, not analyzed
+    expect_status: 200
+    http: {method: GET, path: /api/metadata, query: {track_id: 3}}
+  - name: metadata from MP4
+    expect_status: 200
+    http: {method: GET, path: /api/metadata, query: {track_id: 4}}
+  - name: untagged WAV with an empty waveform
+    expect_status: 200
+    http: {method: GET, path: /api/metadata, query: {track_id: 5}}
+  - name: ID3v1 only, unreadable features_extra
+    expect_status: 200
+    http: {method: GET, path: /api/metadata, query: {track_id: 6}}
+  - name: NFD path, no analysis row
+    expect_status: 200
+    http: {method: GET, path: /api/metadata, query: {track_id: 7}}
+  - name: unreadable file
+    expect_status: 200
+    http: {method: GET, path: /api/metadata, query: {track_id: 8}}
+  - name: empty file
+    expect_status: 200
+    http: {method: GET, path: /api/metadata, query: {track_id: 9}}
+  - name: untagged FLAC
+    expect_status: 200
+    http: {method: GET, path: /api/metadata, query: {track_id: 11}}
+  - name: a directory
+    expect_status: 200
+    http: {method: GET, path: /api/metadata, query: {track_id: 13}}
+  - name: file missing
+    expect_status: 404
+    http: {method: GET, path: /api/metadata, query: {track_id: 10}}
+  - name: track missing
+    expect_status: 404
+    http: {method: GET, path: /api/metadata, query: {track_id: 404}}
+  - name: track_id missing
+    expect_status: 422
+    http: {method: GET, path: /api/metadata}
+  - name: track_id not an int
+    expect_status: 422
+    http: {method: GET, path: /api/metadata, query: {track_id: one}}
+
+  - name: the Explorer listing is not ported
+    deviation: {id: D-15, b_status: 404}
+    http: {method: POST, path: /api/fs/list, body: {path: "{media}", hide_analyzed: false}}

@@ -10,6 +10,8 @@
 //!   each fixture library, stops them, and compares the files they leave.
 //! - `plumdeck-parity suite --work DIR SCENARIO...` starts both backends on
 //!   each scenario's fixture, runs it, stops them and diffs the libraries.
+//! - `plumdeck-parity media --out DIR` writes the synthetic audio files the
+//!   media scenarios use (to inspect them with other tag readers).
 //!
 //! Exit status: 0 when nothing unexplained differs, 1 on differences, 2 when
 //! the comparison itself could not run.
@@ -18,6 +20,7 @@ mod compare;
 mod dbdiff;
 mod dbstats;
 mod fixture;
+mod media;
 mod scenario;
 mod startup;
 mod suite;
@@ -107,6 +110,11 @@ enum Command {
         #[arg(long = "case", value_parser = parse_case)]
         cases: Vec<fixture::Case>,
     },
+    /// Write the synthetic media files of the S3 scenarios into a directory.
+    Media {
+        #[arg(long)]
+        out: PathBuf,
+    },
 }
 
 fn parse_case(name: &str) -> Result<fixture::Case, String> {
@@ -125,7 +133,7 @@ fn run_command(command: Command) -> Result<bool> {
             let ledger = scenario::load_ledger(scenario::default_ledger_path(&scenario).as_deref())?;
             let (ta, tb) = (scenario::Target::from_url(&a)?, scenario::Target::from_url(&b)?);
             let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-            let result = runtime.block_on(scenario::run(&loaded, &global, &ledger, &ta, &tb))?;
+            let result = runtime.block_on(scenario::run(&loaded, &global, &ledger, &ta, &tb, &scenario::Vars::default()))?;
             result.print(&a, &b);
             if let Some(path) = report {
                 let text = serde_json::to_string_pretty(&result.to_json())?;
@@ -159,6 +167,10 @@ fn run_command(command: Command) -> Result<bool> {
             let work = work.canonicalize()?;
             let reports = startup::run(&programs, &work, &cases)?;
             Ok(startup::print(&reports) == 0)
+        }
+        Command::Media { out } => {
+            media::write(&out)?;
+            Ok(true)
         }
     }
 }

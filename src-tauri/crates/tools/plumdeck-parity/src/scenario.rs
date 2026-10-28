@@ -27,7 +27,13 @@
 //! headers. `{port}` in a header value is the side's own port (CORS origins
 //! that main.py derives from PLUMDECK_PORT); compared headers map each
 //! side's `:<port>` back to `:{port}`. `fixture_sql` (suite only) runs on the
-//! fixture library before the sides start.
+//! fixture library before the sides start. `{media}` in `fixture_sql`, a
+//! path, a query value, a header or a JSON body string is the scenario's synthetic media
+//! directory (suite only; both sides read the same files).
+//!
+//! `compare_overrides.unordered` (or a step's `unordered`) lists JSON arrays
+//! whose order is undefined (no ORDER BY in Python): both sides are sorted
+//! before comparing (N6).
 //!
 //! A `deviation` step names an entry of contracts/parity/deviations.yaml:
 //! A's answer is recorded but not compared, and B must answer `b_status`
@@ -84,6 +90,36 @@ pub struct Overrides {
     pub tolerances: Vec<Tolerance>,
     #[serde(default)]
     pub ties: Vec<Ties>,
+    /// JSONPaths of arrays compared as multisets.
+    #[serde(default)]
+    pub unordered: Vec<String>,
+}
+
+/// Values substituted into a scenario's requests.
+#[derive(Clone, Debug, Default)]
+pub struct Vars {
+    /// `{media}`: the synthetic media directory.
+    pub media: String,
+}
+
+impl Vars {
+    fn apply(&self, text: &str) -> String {
+        if self.media.is_empty() {
+            text.to_owned()
+        } else {
+            text.replace("{media}", &self.media)
+        }
+    }
+
+    /// [`Self::apply`] to every string in a JSON body.
+    fn apply_json(&self, value: &Value) -> Value {
+        match value {
+            Value::String(text) => Value::String(self.apply(text)),
+            Value::Array(items) => Value::Array(items.iter().map(|item| self.apply_json(item)).collect()),
+            Value::Object(map) => Value::Object(map.iter().map(|(k, v)| (k.clone(), self.apply_json(v))).collect()),
+            other => other.clone(),
+        }
+    }
 }
 
 /// Global rules shared by every scenario (contracts/parity/normalize.yaml).
@@ -104,6 +140,10 @@ pub struct Step {
     /// N14: headers to compare on this step (CORS).
     #[serde(default)]
     pub compare_headers: Vec<String>,
+    /// N6: arrays of this step's answer compared as multisets (added to
+    /// the scenario's `unordered`).
+    #[serde(default)]
+    pub unordered: Vec<String>,
     #[serde(default)]
     pub deviation: Option<StepDeviation>,
     #[serde(default)]
@@ -270,8 +310,8 @@ fn decode_hex(text: &str) -> Result<Vec<u8>> {
 }
 
 /// Query pairs in order; an array becomes one pair per element.
-fn query_pairs(query: &BTreeMap<String, Value>) -> Vec<(String, String)> {
-    let text = |v: &Value| v.as_str().map_or_else(|| v.to_string(), str::to_owned);
+fn query_pairs(query: &BTreeMap<String, Value>, vars: &Vars) -> Vec<(String, String)> {
+    let text = |v: &Value| vars.apply(&v.as_str().map_or_else(|| v.to_string(), str::to_owned));
     let mut pairs = Vec::new();
     for (key, value) in query {
         match value {
@@ -298,19 +338,19 @@ pub fn load_normalize(path: Option<&Path>) -> Result<NormalizeFile> {
     }
 }
 
-async fn send(client: &reqwest::Client, target: &Target, step: &HttpStep) -> Result<(Captured, Duration)> {
+async fn send(client: &reqwest::Client, target: &Target, step: &HttpStep, vars: &Vars) -> Result<(Captured, Duration)> {
     let method = reqwest::Method::from_bytes(step.method.to_ascii_uppercase().as_bytes())
         .with_context(|| format!("method {}", step.method))?;
-    let url = format!("{}{}", target.base.trim_end_matches('/'), step.path);
+    let url = format!("{}{}", target.base.trim_end_matches('/'), vars.apply(&step.path));
     let mut request = client.request(method, &url);
     if !step.query.is_empty() {
-        request = request.query(&query_pairs(&step.query));
+        request = request.query(&query_pairs(&step.query, vars));
     }
     for (name, value) in &step.headers {
-        request = request.header(name, value.replace("{port}", &target.port.to_string()));
+        request = request.header(name, vars.apply(&value.replace("{port}", &target.port.to_string())));
     }
     if let Some(body) = &step.body {
-        request = request.json(body);
+        request = request.json(&vars.apply_json(body));
     } else if let Some(raw) = &step.raw {
         request = request.body(raw.clone());
     } else if let Some(hex) = &step.raw_hex {
@@ -423,6 +463,7 @@ pub async fn run(
     ledger: &Ledger,
     a: &Target,
     b: &Target,
+    vars: &Vars,
 ) -> Result<RunReport> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
@@ -434,6 +475,7 @@ pub async fn run(
     tolerances.extend(scenario.compare_overrides.tolerances.iter().cloned());
     let comparer = JsonComparer::new(&tolerances);
     let ties = &scenario.compare_overrides.ties;
+    let unordered = &scenario.compare_overrides.unordered;
     let mut steps = Vec::new();
     for (index, step) in scenario.steps.iter().enumerate() {
         let http = step.http.as_ref().expect("validated in load");
@@ -446,12 +488,13 @@ pub async fn run(
             }
             None => None,
         };
-        let (ra, ta) = send(&client, a, http).await?;
-        let (rb, tb) = send(&client, b, http).await?;
+        let (ra, ta) = send(&client, a, http, vars).await?;
+        let (rb, tb) = send(&client, b, http, vars).await?;
         let verdict = match &step.deviation {
             Some(expected) => deviation_verdict(expected, &ra, &rb),
             None => {
-                let mut verdict = compare_responses_with(&ra, &rb, &comparer, ties);
+                let paths: Vec<String> = unordered.iter().chain(&step.unordered).cloned().collect();
+                let mut verdict = compare_responses_with(&ra, &rb, &comparer, ties, &paths);
                 if !verdict.skipped {
                     // Each side echoes its own port (CORS origins): compare as `{port}`.
                     let (ha, hb) = (ra.with_port_placeholder(a.port), rb.with_port_placeholder(b.port));
@@ -541,7 +584,7 @@ mod tests {
             "name: q\nsteps:\n  - http: {method: GET, path: /, query: {ids: [1, 2], q: x, on: true}}\n",
         );
         let scenario = load(&path).unwrap();
-        let pairs = query_pairs(&scenario.steps[0].http.as_ref().unwrap().query);
+        let pairs = query_pairs(&scenario.steps[0].http.as_ref().unwrap().query, &Vars::default());
         let expected = [("ids", "1"), ("ids", "2"), ("on", "true"), ("q", "x")];
         assert_eq!(pairs, expected.map(|(k, v)| (k.to_owned(), v.to_owned())));
         let path = write("bad.yaml", "name: b\nsteps:\n  - http: {method: GET, path: /, query: {f: {a: 1}}}\n");

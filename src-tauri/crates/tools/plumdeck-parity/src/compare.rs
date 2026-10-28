@@ -16,7 +16,10 @@
 //! - N14: Content-Type must match in full (media type and parameters);
 //!   other headers (date, content-length, server) are ignored.
 //!
-//! - N6: `ties` rules sort runs of equal sort keys (see [`Ties`]).
+//! - N6: `ties` rules sort runs of equal sort keys (see [`Ties`]);
+//!   `unordered` paths sort whole arrays (queries without ORDER BY).
+//! - N9: a `multipart/byteranges` answer's random boundary is replaced by
+//!   `{boundary}` in the Content-Type and the body before comparing.
 //!
 //! Deviations (contracts/parity/deviations.yaml) are applied per step by the
 //! scenario runner, not here.
@@ -293,6 +296,55 @@ pub fn canonical(value: &Value) -> String {
     sorted(value).to_string()
 }
 
+/// Sort every array at one of `paths` by canonical JSON (N6, no ORDER BY).
+pub fn normalize_unordered(value: &mut Value, paths: &[String]) {
+    let patterns: Vec<Vec<Pat>> = paths.iter().map(|path| parse_pattern(path)).collect();
+    fn walk(value: &mut Value, path: &mut Vec<Seg>, patterns: &[Vec<Pat>]) {
+        match value {
+            Value::Array(items) => {
+                for (index, item) in items.iter_mut().enumerate() {
+                    path.push(Seg::Index(index));
+                    walk(item, path, patterns);
+                    path.pop();
+                }
+                if patterns.iter().any(|pattern| matches(pattern, path)) {
+                    items.sort_by_cached_key(canonical);
+                }
+            }
+            Value::Object(map) => {
+                for (key, item) in map.iter_mut() {
+                    path.push(Seg::Key(key.clone()));
+                    walk(item, path, patterns);
+                    path.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+    walk(value, &mut Vec::new(), &patterns);
+}
+
+/// N9: `(content type, body)` with a multipart boundary replaced.
+fn without_boundary(captured: &Captured) -> (String, Vec<u8>) {
+    let prefix = "multipart/byteranges; boundary=";
+    let Some(boundary) = captured.content_type.strip_prefix(prefix) else {
+        return (captured.content_type.clone(), captured.body.clone());
+    };
+    let needle = boundary.as_bytes();
+    let mut body = Vec::with_capacity(captured.body.len());
+    let mut at = 0;
+    while at < captured.body.len() {
+        if !needle.is_empty() && captured.body[at..].starts_with(needle) {
+            body.extend_from_slice(b"{boundary}");
+            at += needle.len();
+        } else {
+            body.push(captured.body[at]);
+            at += 1;
+        }
+    }
+    (format!("{prefix}{{boundary}}"), body)
+}
+
 /// One side's HTTP response.
 #[derive(Clone, Debug)]
 pub struct Captured {
@@ -382,11 +434,17 @@ pub fn compare_headers(a: &Captured, b: &Captured, names: &[String]) -> Vec<Stri
 /// Compare A (Python) with B (Rust).
 #[cfg(test)]
 pub fn compare_responses(a: &Captured, b: &Captured, comparer: &JsonComparer) -> Verdict {
-    compare_responses_with(a, b, comparer, &[])
+    compare_responses_with(a, b, comparer, &[], &[])
 }
 
 /// [`compare_responses`] with N6 tie rules applied to JSON bodies.
-pub fn compare_responses_with(a: &Captured, b: &Captured, comparer: &JsonComparer, ties: &[Ties]) -> Verdict {
+pub fn compare_responses_with(
+    a: &Captured,
+    b: &Captured,
+    comparer: &JsonComparer,
+    ties: &[Ties],
+    unordered: &[String],
+) -> Verdict {
     let mut verdict = Verdict::default();
     if a.status == 500 {
         verdict.skipped = true;
@@ -397,7 +455,8 @@ pub fn compare_responses_with(a: &Captured, b: &Captured, comparer: &JsonCompare
         verdict.diffs.push(format!("status {} vs {}", a.status, b.status));
         return verdict;
     }
-    if a.content_type != b.content_type {
+    let ((type_a, body_a), (type_b, body_b)) = (without_boundary(a), without_boundary(b));
+    if type_a != type_b {
         verdict.diffs.push(format!("content-type {:?} vs {:?}", a.content_type, b.content_type));
     }
     if a.is_json() && b.is_json() {
@@ -406,6 +465,10 @@ pub fn compare_responses_with(a: &Captured, b: &Captured, comparer: &JsonCompare
                 normalize_ties(&mut ja, ties);
                 normalize_ties(&mut jb, ties);
             }
+            if !unordered.is_empty() {
+                normalize_unordered(&mut ja, unordered);
+                normalize_unordered(&mut jb, unordered);
+            }
             if a.status == 422 && without_validation_detail(&mut ja, &mut jb) {
                 verdict.notes.push("N7: 422 validation detail compared by shape only".into());
             }
@@ -413,7 +476,7 @@ pub fn compare_responses_with(a: &Captured, b: &Captured, comparer: &JsonCompare
             return verdict;
         }
     }
-    if a.body != b.body {
+    if body_a != body_b {
         verdict.diffs.push(format!("body bytes differ: {} vs {}", a.snippet(), b.snippet()));
     }
     verdict
@@ -426,6 +489,21 @@ mod tests {
 
     fn captured(status: u16, content_type: &str, body: &str) -> Captured {
         Captured { status, content_type: content_type.into(), headers: Vec::new(), body: body.as_bytes().to_vec() }
+    }
+
+    #[test]
+    fn unordered_arrays_and_multipart_boundaries() {
+        let comparer = JsonComparer::new(&[]);
+        let a = captured(200, "application/json", r#"{"x": [3, 1, {"b": 1, "a": 2}]}"#);
+        let b = captured(200, "application/json", r#"{"x": [{"a": 2, "b": 1}, 1, 3]}"#);
+        assert!(!compare_responses(&a, &b, &comparer).diffs.is_empty());
+        assert!(compare_responses_with(&a, &b, &comparer, &[], &["$.x".into()]).diffs.is_empty());
+        let part = |boundary: &str| {
+            captured(206, &format!("multipart/byteranges; boundary={boundary}"), &format!("--{boundary}\r\nx\r\n--{boundary}--"))
+        };
+        assert!(compare_responses(&part("aaaa"), &part("bbbb"), &comparer).diffs.is_empty());
+        let other = captured(206, "multipart/byteranges; boundary=cccc", "--cccc\r\ny\r\n--cccc--");
+        assert!(!compare_responses(&part("aaaa"), &other, &comparer).diffs.is_empty());
     }
 
     #[test]
@@ -445,11 +523,11 @@ mod tests {
         let comparer = JsonComparer::new(&[]);
         let a = captured(200, "application/json", r#"{"genres":[{"name":"b","count":3},{"name":"x","count":2},{"name":"a","count":2}]}"#);
         let b = captured(200, "application/json", r#"{"genres":[{"name":"b","count":3},{"name":"a","count":2},{"name":"x","count":2}]}"#);
-        assert!(compare_responses_with(&a, &b, &comparer, &rules).diffs.is_empty());
+        assert!(compare_responses_with(&a, &b, &comparer, &rules, &[]).diffs.is_empty());
         assert_eq!(compare_responses(&a, &b, &comparer).diffs.len(), 2);
         // The order between different counts still matters.
         let c = captured(200, "application/json", r#"{"genres":[{"name":"x","count":2},{"name":"a","count":2},{"name":"b","count":3}]}"#);
-        assert!(!compare_responses_with(&a, &c, &comparer, &rules).diffs.is_empty());
+        assert!(!compare_responses_with(&a, &c, &comparer, &rules, &[]).diffs.is_empty());
     }
 
     #[test]

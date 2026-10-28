@@ -1,0 +1,66 @@
+# S3: the genre lists (backend/api/routers/genres.py, genre_repository.py,
+# genre_app_service.get_cleanup_suggestions) on the library fixture: sorted
+# distinct genres and subgenres (case variants kept, 'Unknown' and '' left
+# out), the unknown-genre pages and ids per mode (D-01: B orders by id;
+# the ids compare unordered, the pages agree on this fixture), and the
+# spelling-variant groups ('Drum & Bass' / 'drum and bass' / 'DnB',
+# 'Hip Hop' / 'hip-hop', 'R&B' / 'R and B', case variants) with their
+# primary spelling, per genre and subgenre mode.
+name: s3-genres
+db: fixture
+fixture: library
+steps:
+  - name: genres
+    expect_status: 200
+    http: {method: GET, path: /api/genres/list}
+  - name: subgenres
+    expect_status: 200
+    http: {method: GET, path: /api/genres/subgenres}
+  - name: unknown genres (default mode)
+    expect_status: 200
+    http: {method: GET, path: /api/genres/unknown}
+  - name: unknown genres paged
+    expect_status: 200
+    http: {method: GET, path: /api/genres/unknown, query: {offset: 1, limit: 2}}
+  - name: unknown subgenres
+    expect_status: 200
+    http: {method: GET, path: /api/genres/unknown, query: {mode: subgenre}}
+  - name: unknown in both
+    expect_status: 200
+    http: {method: GET, path: /api/genres/unknown, query: {mode: both, limit: 100}}
+  - name: unknown page past the end
+    expect_status: 200
+    http: {method: GET, path: /api/genres/unknown, query: {offset: 40}}
+  - name: unknown ids
+    expect_status: 200
+    unordered: ["$"]
+    http: {method: GET, path: /api/genres/unknown-ids}
+  - name: unknown subgenre ids
+    expect_status: 200
+    unordered: ["$"]
+    http: {method: GET, path: /api/genres/unknown-ids, query: {mode: subgenre}}
+  - name: unknown ids in both
+    expect_status: 200
+    unordered: ["$"]
+    http: {method: GET, path: /api/genres/unknown-ids, query: {mode: both}}
+  - name: cleanup suggestions for genres
+    expect_status: 200
+    http: {method: GET, path: /api/genres/cleanup-suggestions}
+  - name: cleanup suggestions for subgenres
+    expect_status: 200
+    http: {method: GET, path: /api/genres/cleanup-suggestions, query: {mode: subgenre}}
+  - name: cleanup suggestions in both mode use the genre
+    expect_status: 200
+    http: {method: GET, path: /api/genres/cleanup-suggestions, query: {mode: both}}
+  - name: mode is case-sensitive
+    expect_status: 422
+    http: {method: GET, path: /api/genres/unknown, query: {mode: Genre}}
+  - name: unknown mode on ids
+    expect_status: 422
+    http: {method: GET, path: /api/genres/unknown-ids, query: {mode: all}}
+  - name: unknown mode on cleanup
+    expect_status: 422
+    http: {method: GET, path: /api/genres/cleanup-suggestions, query: {mode: ""}}
+  - name: limit not an int
+    expect_status: 422
+    http: {method: GET, path: /api/genres/unknown, query: {limit: ten}}

@@ -27,9 +27,33 @@ from pathlib import Path
 import parity_env
 
 
+# Audio types of macOS's /etc/apache2/mime.types, which Python loads over its
+# defaults there. Keep in sync with plumdeck-media's mime.rs (deviation D-16).
+MACOS_AUDIO_TYPES = {
+    ".aac": "audio/x-aac", ".aif": "audio/x-aiff", ".aifc": "audio/x-aiff", ".aiff": "audio/x-aiff",
+    ".flac": "audio/x-flac", ".m4a": "audio/mp4", ".mp3": "audio/mpeg", ".oga": "audio/ogg",
+    ".ogg": "audio/ogg", ".wav": "audio/x-wav", ".wma": "audio/x-ms-wma",
+}
+
+
+def fixed_mimetypes() -> None:
+    """Make mimetypes.guess_type independent of the host's mime.types files
+    and registry: Python's built-in table plus the macOS audio types."""
+    import mimetypes
+
+    db = mimetypes.MimeTypes(filenames=())
+    for ext, mime in MACOS_AUDIO_TYPES.items():
+        db.add_type(mime, ext, strict=True)
+    mimetypes._db = db
+    mimetypes.inited = True
+
+
 def install_patches(cache_dir: Path) -> None:
-    """Determinism and sandbox hooks; S0 only moves the waveform cache."""
+    """Determinism and sandbox hooks: the waveform cache moves into the
+    sandbox and Content-Type guessing uses a fixed table."""
     from app.services import waveform_detail_service
+
+    fixed_mimetypes()
 
     target = cache_dir / "waveform-detail-v1"
     # platformdirs ignores XDG_CACHE_HOME on Windows; patch the one caller.

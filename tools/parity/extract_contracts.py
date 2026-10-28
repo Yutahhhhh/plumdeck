@@ -35,10 +35,11 @@ from pathlib import Path
 import parity_env
 
 # Packages whose behaviour reaches the wire or the DB file. backend/requirements.txt
-# leaves fastapi and pydantic unpinned, so the oracle records what it ran.
+# leaves fastapi, pydantic and the tag readers unpinned, so the oracle records
+# what it ran.
 ORACLE_PACKAGES = ("fastapi", "starlette", "pydantic", "pydantic-core", "pydantic-settings",
                    "mcp", "uvicorn", "duckdb", "duckdb-engine", "sqlmodel", "sqlalchemy",
-                   "platformdirs")
+                   "platformdirs", "tinytag", "mutagen")
 
 
 def dump_json(path: Path, value) -> None:
