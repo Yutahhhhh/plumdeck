@@ -97,3 +97,19 @@ export function nextDropouts(previous: DropoutState | null, session: string, xru
   const count = xruns - previous.baseline;
   return { session, baseline: previous.baseline, count, lastAt: count > previous.count ? now : previous.lastAt };
 }
+
+/** Meter scale: −48 dBFS at the bottom, 0 dBFS at the top. */
+export const METER_FLOOR_DB = -48;
+/** Linear peak (0..1+) to a 0..1 bar position on the dB scale. */
+export function meterPosition(linear: number): number {
+  if (!(linear > 0)) return 0;
+  const decibels = 20 * Math.log10(linear);
+  return Math.max(0, Math.min(1, (decibels - METER_FLOOR_DB) / -METER_FLOOR_DB));
+}
+/** Peak hold: a new peak holds for `holdMs`, then falls at `fallPerS` of the scale per second. */
+export type PeakHold = { position: number; at: number };
+export function nextPeakHold(previous: PeakHold | null, position: number, now: number, holdMs = 1500, fallPerS = 0.5): PeakHold {
+  if (!previous || position >= previous.position) return { position, at: now };
+  const held = now - previous.at <= holdMs ? previous.position : previous.position - (now - previous.at - holdMs) / 1000 * fallPerS;
+  return held > position ? { position: held, at: previous.at } : { position, at: now };
+}

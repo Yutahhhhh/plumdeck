@@ -1,7 +1,8 @@
-import { useRef, type CSSProperties } from "react";
+import { useRef } from "react";
 import { cn } from "@/lib/utils";
 import type { ChannelState, DeckId, EqBand, MetersPayload } from "@/types/dj-engine";
 import { RotaryKnob } from "./RotaryKnob";
+import { LevelMeter } from "./LevelMeter";
 import { Fader } from "./SoftwareDeck";
 import { COLOR_FX, CROSSFADER_ASSIGN, faderGain, faderPosition, formatColorAmount, formatDb, isKilled, type ColorFxEffect, type FaderCurve } from "./mixer-math";
 
@@ -99,8 +100,7 @@ export function MixerPanel({ decks, channelState, handlers, reason, colorFx, col
               disabled={Boolean(gainReason)} onChange={(position) => on.onGain(faderGain(position, faderCurve))} />
             <span className="dj-control-label">{deck}</span>
           </label>
-          {meters && <div className="dj-mixer-meter" role="meter" aria-label={`Deck ${deck} レベル`} aria-valuemin={0} aria-valuemax={1}
-            aria-valuenow={meters.channels[deck]?.peak ?? 0} style={{ "--level": Math.max(0, Math.min(1, meters.channels[deck]?.peak ?? 0)) } as CSSProperties}><i /></div>}
+          {meters && <LevelMeter peak={meters.channels[deck]?.peak ?? 0} label={`Deck ${deck} レベル`} />}
         </div>
       </div>;
     })}

@@ -166,6 +166,7 @@ export const DJ_ENGINE_CAPABILITIES = {
    * H-1: `meters.subscribe` streams `meters` events (20..2000 ms). Levels are
    * linear amplitudes: `peak` is held since the previous event, `rms` is the
    * latest audio block; channel meters are taken before the channel fader.
+   * Master/headphone may add `peakL`/`peakR` and a sticky `clip`.
    */
   meters: "meters",
   sampler: "sampler",
@@ -394,11 +395,14 @@ export interface AudioConfig {
   microphone?: MicrophoneState;
 }
 
+/** `peakL`/`peakR` and the sticky `clip` (a sample at full scale since the previous event) are optional. */
+export interface BusMeter { peak: number; rms: number; peakL?: number; peakR?: number; clip?: boolean }
+
 export interface MetersPayload {
   simulated: boolean;
-  master: { peak: number; rms: number };
+  master: BusMeter;
   /** Headphone (cue) bus, when the engine has one. */
-  headphone?: { peak: number; rms: number };
+  headphone?: BusMeter;
   /** Pre-fader channel levels. */
   channels: Record<string, { peak: number; rms: number; pfl: boolean }>;
 }

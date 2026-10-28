@@ -17,6 +17,8 @@ import { useDdj1000 } from "@/hooks/useDdj1000";
 import type { ControllerActions } from "@/services/midi/ddj1000-runtime";
 import { usePlayKeyboard } from "./usePlayKeyboard";
 import { createPadFxSender } from "@/services/midi/pad-fx-send";
+import { acquireMeters } from "@/services/dj-engine/meter-subscription";
+import { MasterMeter } from "./LevelMeter";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { AlertTriangle, Circle, Columns3, Disc3, Keyboard, Loader2, Mic, Power, Rows3, Settings2, Square, Volume2 } from "lucide-react";
 import { useDjEngine } from "@/hooks/useDjEngine";
@@ -757,13 +759,13 @@ export function PlayWorkspace() {
   }, [client, connected, dropoutUnsupported, sessionId]);
   const recentDropout = Boolean(dropouts?.lastAt && Date.now() - dropouts.lastAt < 10_000);
 
-  // Channel meters while the mixer is open, on hosts that publish them (H-1).
+  // Meters while connected, on hosts that publish them (H-1): the master
+  // meter in the global bar is always shown. Shared with other consumers.
   const metersSupported = capabilities.includes(DJ_ENGINE_CAPABILITIES.meters);
   useEffect(() => {
-    if (!connected || !metersSupported || !panels.mixer) return;
-    void client.subscribeMeters(true, 33).catch(() => undefined);
-    return () => { void client.subscribeMeters(false).catch(() => undefined); };
-  }, [client, connected, metersSupported, panels.mixer, sessionId]);
+    if (!connected || !metersSupported) return;
+    return acquireMeters(client, 33);
+  }, [client, connected, metersSupported, sessionId]);
   const headphoneSupported = capabilities.includes(DJ_ENGINE_CAPABILITIES.mixerHeadphone);
 
   // A toggle exists only when its panel has something to operate.
@@ -956,6 +958,7 @@ export function PlayWorkspace() {
       </div></details>
       <div className="dj-segmented" aria-label="波形レイアウト">{(["horizontal", "vertical"] as const).map((layout) => <button key={layout} title={layout === "horizontal" ? "横波形（デッキ上部に重ねて表示）" : "縦波形（デッキ中央に並べて表示）"} aria-label={layout === "horizontal" ? "横波形" : "縦波形（デッキ中央）"} aria-pressed={waveformLayout === layout} className={waveformLayout === layout ? "is-on" : ""} onClick={() => { setWaveformLayout(layout); localStorage.setItem("plumdeck.waveformLayout", layout); }}>{layout === "horizontal" ? <Rows3 /> : <Columns3 />}</button>)}</div>
       <div className="dj-engine-status"><i className={connected && snapshot?.audio.applied ? "is-connected" : ""} /><span>{connected ? snapshot?.engine.simulated ? "SIMULATOR · 音声出力なし" : snapshot?.audio.applied ? "AUDIO CONNECTED" : "音声出力を確認中" : busy ? "音声エンジンを起動中…" : "AUDIO OFFLINE"}</span></div>
+      {connected && metersSupported && <MasterMeter meter={state.meters?.master} />}
       {connected && dropouts && !dropoutUnsupported && <span className={cn("dj-dropout", dropouts.count > 0 && "has-dropouts", recentDropout && "is-recent")} role="status"
         title={dropouts.count ? `このセッションで音切れ（オーディオ処理の遅れ）が ${dropouts.count} 回ありました。バッファを大きくするか、他のアプリを閉じてください。` : "音切れは起きていません"}>
         {dropouts.count ? `DROPOUT ${dropouts.count}` : "DROPOUT 0"}</span>}

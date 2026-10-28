@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { beatLoopPress, formatBeats, loopBeats, manualLoopOut, resizeLoop, snapToBeat, stepBeats, LOOP_BEATS_RANGE, LOOP_BEATS_RANGE_EXTENDED } from "./loop-math.ts";
 import { formatBpm, formatTempoPercent, stepTempo, tempoStep, TEMPO_RANGES } from "./tempo-math.ts";
-import { faderGain, faderPosition, formatColorAmount, formatDb, FADER_CURVES, isKilled, nextDropouts, readCrossfaderCurve } from "./mixer-math.ts";
+import { faderGain, faderPosition, formatColorAmount, formatDb, FADER_CURVES, isKilled, meterPosition, nextDropouts, nextPeakHold, readCrossfaderCurve } from "./mixer-math.ts";
+import { acquireMeters } from "../../services/dj-engine/meter-subscription.ts";
 import { beatFxMaxBeats, beatFxMinBeats, beatFxHasBeats, BEAT_FX_MENU } from "../../services/midi/beat-fx.ts";
 import { readFileSync, readdirSync } from "node:fs";
 import { readShortcutPreset, resolveShortcut, shortcutHelp, shortcutTable, isMomentary } from "./keyboard-shortcuts.ts";
@@ -300,4 +301,27 @@ test("Play styles keep text at 10px or larger", () => {
     });
   }
   assert.deepEqual(small, []);
+});
+
+test("meters use a dB scale with a falling peak hold", () => {
+  assert.equal(meterPosition(1), 1);
+  assert.equal(meterPosition(0), 0);
+  assert.ok(Math.abs(meterPosition(10 ** (-24 / 20)) - 0.5) < 1e-9); // -24 dBFS is mid-scale
+  assert.equal(meterPosition(2), 1);
+  let hold = nextPeakHold(null, 0.9, 0);
+  hold = nextPeakHold(hold, 0.2, 1000);
+  assert.equal(hold.position, 0.9); // still held
+  hold = nextPeakHold(hold, 0.2, 2500);
+  assert.ok(Math.abs(hold.position - 0.4) < 1e-9); // 1 s of fall at 0.5/s after 1.5 s hold
+  assert.equal(nextPeakHold(hold, 0.95, 2600).position, 0.95);
+});
+
+test("meter subscription stays on until the last consumer releases it", () => {
+  const calls = [];
+  const client = { subscribeMeters: async (enabled) => { calls.push(enabled); } };
+  const mixer = acquireMeters(client), controller = acquireMeters(client);
+  mixer(); mixer();
+  assert.deepEqual(calls, [true, true]);
+  controller();
+  assert.deepEqual(calls, [true, true, false]);
 });

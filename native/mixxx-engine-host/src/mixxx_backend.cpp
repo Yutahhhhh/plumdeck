@@ -444,8 +444,10 @@ public:
             levels["pfl"] = ControlObject::get(ConfigKey(groups[index], "pfl")) > 0;
             channels[names[index]] = levels;
         }
-        return {{"simulated", false}, {"master", QJsonObject{{"peak", masterMeter_.takePeak()}, {"rms", masterMeter_.rms()}}},
-                {"headphone", QJsonObject{{"peak", headphoneMeter_.takePeak()}, {"rms", headphoneMeter_.rms()}}}, {"channels", channels}};
+        const auto bus = [](const AudioMeter& meter) {
+            return QJsonObject{{"peak", meter.takePeak()}, {"rms", meter.rms()}, {"peakL", meter.takeSidePeak(0)}, {"peakR", meter.takeSidePeak(1)}, {"clip", meter.takeClip()}};
+        };
+        return {{"simulated", false}, {"master", bus(masterMeter_)}, {"headphone", bus(headphoneMeter_)}, {"channels", channels}};
     }
     QJsonObject mixer() const override {
         auto value = PlaybackBackend::mixer();

@@ -386,8 +386,18 @@
 .dj-mixer-assign button:disabled { opacity: .32; }
 .dj-mixer-sliders { flex: 1 1 auto; min-height: 62px; height: auto; grid-template-columns: 1fr auto; }
 .dj-mixer-meter { position: relative; width: 4px; height: 100%; border-radius: 1px; background: #08090a; box-shadow: inset 0 0 0 1px #2a2d31; overflow: hidden; }
-/* The full-scale gradient is clipped to the level, so colour marks the absolute level. */
-.dj-mixer-meter i { position: absolute; inset: 0; background: linear-gradient(to top, #4caf50 0 70%, #e0c341 70% 90%, #e2564b 90%); clip-path: inset(calc((1 - var(--level, 0)) * 100%) 0 0 0); }
+/* dB scale (−48..0 dBFS). The full-scale gradient is clipped to the level, so
+   colour marks the absolute level: yellow from −12 dB, red from −3 dB. */
+.dj-mixer-meter i { position: absolute; inset: 0; background: linear-gradient(to top, #4caf50 0 75%, #e0c341 75% 93.75%, #e2564b 93.75%); clip-path: inset(calc((1 - var(--level, 0)) * 100%) 0 0 0); }
+.dj-mixer-meter b { position: absolute; left: 0; right: 0; bottom: calc(var(--hold, 0) * 100%); height: 1px; background: #f2f4f6; opacity: calc(min(1, var(--hold, 0) * 40)); }
+.dj-mixer-meter.dj-meter--horizontal { width: 72px; height: 4px; }
+.dj-meter--horizontal i { background: linear-gradient(to right, #4caf50 0 75%, #e0c341 75% 93.75%, #e2564b 93.75%); clip-path: inset(0 calc((1 - var(--level, 0)) * 100%) 0 0); }
+.dj-meter--horizontal b { top: 0; bottom: 0; left: calc(var(--hold, 0) * 100% - 1px); right: auto; width: 1px; height: auto; }
+.dj-master-meter { display: grid; flex-shrink: 0; grid-template-columns: auto 72px auto; grid-template-rows: 4px 4px; column-gap: 6px; row-gap: 2px; align-items: center; }
+.dj-master-meter > .dj-control-label { grid-row: 1 / span 2; }
+.dj-master-meter > .dj-mixer-meter { grid-column: 2; }
+.dj-master-meter > .dj-clip { grid-column: 3; grid-row: 1 / span 2; padding: 0 4px; border: 1px solid var(--dj-line); border-radius: 3px; color: var(--dj-dim); font-size: 10px; font-weight: 700; letter-spacing: .06em; }
+.dj-master-meter > .dj-clip.is-on { border-color: #d23c33; background: #d23c33; color: #fff; }
 
 /* Master strip: crossfader curve and headphone MIX / LEVEL. */
 .dj-crossfader-curve { height: 20px; border: 1px solid #3a3f46; border-radius: 2px; padding: 0 3px; background: #1b1d20; color: #d0d4da; font-size: 10px; font-weight: 600; letter-spacing: 0; }
