@@ -456,3 +456,36 @@ def test_on_demand_analysis_waits_for_the_analysis_slot(client, session, monkeyp
     # Busy is not a failure: no analysis ran and the next load analyzes.
     assert body["beat_grid"] is None and "Another analysis" in body["grid_warning"] and not calls
     assert client.get(url).json()["beat_grid"]["source"] == "analysis" and len(calls) == 1
+
+
+def test_selected_jobs_skip_components_rekordbox_replaces(session, mocker, tmp_path, monkeypatch):
+    from app.services.analysis_job_service import AnalysisJobService
+    from domain.models.setting import Setting
+    from domain.models.track import Track
+    from infra import rekordbox_library
+    from infra.rekordbox_library import CollectionIndex, CollectionValues
+
+    analysis_file = tmp_path / "ANLZ0000.DAT"
+    analysis_file.write_bytes(anlz([(1, 12000, 100), (2, 12000, 600)]))
+    monkeypatch.setenv("PLUMDECK_REKORDBOX_DB", str(tmp_path / "master.db"))
+    for path in ("/lib/pqtz.mp3", "/lib/bpm-only.mp3", "/lib/unregistered.mp3"):
+        session.add(Track(filepath=path, title="Song", artist="Artist", bpm=120.0, duration=180.0))
+    session.add(Setting(key="rekordbox_key_source", value="true"))
+    session.commit()
+    mocker.patch.object(rekordbox_library, "collection_index", return_value=CollectionIndex({
+        "/lib/pqtz.mp3": CollectionValues(120.0, "Am", str(analysis_file)),
+        "/lib/bpm-only.mp3": CollectionValues(120.0, None, None),
+    }))
+    service = AnalysisJobService(session.bind, str(tmp_path / "jobs.sqlite3"))
+    session.rollback()
+    _, candidates, selected, _ = service._select(None, None, ["rhythm", "key"], False, None)
+    needed = {item["filepath"]: item["features"] for item in candidates}
+    # PQTZ + BPM: rhythm has no reader; rekordbox key with the source on: key neither.
+    assert needed == {"/lib/pqtz.mp3": [], "/lib/bpm-only.mp3": ["rhythm", "key"],
+                      "/lib/unregistered.mp3": ["rhythm", "key"]}
+    assert "/lib/pqtz.mp3" not in {item["filepath"] for item in selected}
+    # The same rule applies when a queued item runs.
+    track_id = session.exec(text("SELECT id FROM tracks WHERE filepath='/lib/pqtz.mp3'")).one()[0]
+    session.rollback()
+    config = {"features": ["rhythm", "key", "timbre"], "only_outdated": False}
+    assert service._prepare_item({"track_id": track_id, "filepath": "/lib/pqtz.mp3"}, config) == ["timbre"]

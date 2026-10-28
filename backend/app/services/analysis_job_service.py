@@ -76,6 +76,31 @@ def _rekordbox_grid_check():
     return has_grid
 
 
+def _rekordbox_coverage(keys: bool):
+    """Return (filepath, needed) -> needed without the components whose
+    output rekordbox replaces: rhythm when it has a BPM and a usable PQTZ grid
+    (its BPM wins and the deck reads PQTZ), key when it has a key and the key
+    source is on. When master.db cannot be read, nothing is dropped."""
+    try:
+        index = rekordbox_library.collection_index()
+        database = rekordbox_grid.master_db_path()
+    except Exception:
+        return lambda path, needed: needed
+
+    def covered(path, needed):
+        entry = index.get(path) if {"rhythm", "key"} & set(needed) else None
+        if entry is None:
+            return needed
+        drop = set()
+        if "key" in needed and keys and entry.key:
+            drop.add("key")
+        if ("rhythm" in needed and entry.bpm and entry.analysis_path and database
+                and rekordbox_grid.has_usable_grid(entry.analysis_path, database)):
+            drop.add("rhythm")
+        return [feature for feature in needed if feature not in drop]
+    return covered
+
+
 class AnalysisJobService:
     def __init__(self, engine=None, queue_path=None, analyze_fn=None):
         self._engine = engine
@@ -260,8 +285,10 @@ class AnalysisJobService:
                                "features": [] if only_outdated and version in current_versions else features}
                               for id, path, title, genre, version in kept]
             else:
+                covered = _rekordbox_coverage(value_sources.key_source_enabled(session)) \
+                    if {"rhythm", "key"} & set(features) else (lambda path, needed: needed)
                 candidates = [{"id": t.id, "filepath": t.filepath, "title": t.title, "genre": t.genre,
-                               "features": self.outdated(features, a, e) if only_outdated else features}
+                               "features": covered(t.filepath, self.outdated(features, a, e) if only_outdated else features)}
                               for t, a, e in rows]
         eligible = [t for t in candidates if t["features"]]
         eligible.sort(key=lambda t: (t["id"] not in priority, t["id"]))
@@ -394,7 +421,11 @@ class AnalysisJobService:
             track = session.get(Track, item["track_id"])
             if track is None or track.filepath != item["filepath"]:
                 raise ValueError("Track removed or path changed since this job was created")
-            return self.outdated(config["features"], session.get(TrackAnalysis, track.id), session.get(TrackEmbedding, track.id)) if config["only_outdated"] else config["features"]
+            needed = self.outdated(config["features"], session.get(TrackAnalysis, track.id), session.get(TrackEmbedding, track.id)) if config["only_outdated"] else config["features"]
+            if config["features"] != ["rhythm"] and {"rhythm", "key"} & set(needed):
+                # A grid job already left PQTZ tracks out when it was planned.
+                needed = _rekordbox_coverage(value_sources.key_source_enabled(session))(track.filepath, needed)
+            return needed
 
     def _save(self, item, result, features):
         """Store one result. BPM/key follow manual > rekordbox > own, also for a
