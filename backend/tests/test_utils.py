@@ -14,9 +14,9 @@ def test_audio_math_normalize_key():
 def test_calculate_mixability_score():
     score = audio_math.calculate_mixability_score(120, "8B", 120, "8B", 1.0)
     assert score == 1.0
-    # Adjacent key
+    # Key matching is optional; legacy recommendations no longer rank by key.
     score_adj = audio_math.calculate_mixability_score(120, "8B", 120, "8A", 1.0)
-    assert score_adj < 1.0 and score_adj > 0.8
+    assert score_adj == score
     # No key
     score_none = audio_math.calculate_mixability_score(120, None, 120, None)
     assert score_none > 0

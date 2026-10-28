@@ -159,5 +159,5 @@ def test_similarity_and_genre_suggestions_never_mix_pipeline_versions(session):
     session.commit()
     assert [t["id"] for t in TrackRepository(session).get_similar_tracks(current.id)] == [compatible.id]
     assert RecommendationAppService(session).suggest_genre(current.id)["suggested_genre"] == "House"
-    assert cosine_similarity(np.ones(200), np.ones(200), "musicnn", EMBEDDING_MODEL) == 0
+    assert cosine_similarity(np.ones(200), np.ones(200), "musicnn", EMBEDDING_MODEL) is None
     assert cosine_similarity(np.ones(200), np.ones(200), EMBEDDING_MODEL, EMBEDDING_MODEL) == pytest.approx(1)

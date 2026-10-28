@@ -752,7 +752,7 @@ def build_reasons(
     elif has_analysis:
         reasons.append(Reason("similarity", "caution", "音色を比較できません"))
     else:
-        reasons.append(Reason("similarity", "caution", "音響解析が未実行です"))
+        reasons.append(Reason("similarity", "caution", "音色の比較は計算待ち"))
     return reasons
 
 

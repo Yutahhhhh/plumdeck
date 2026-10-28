@@ -98,18 +98,25 @@ def bpm_distance(target_bpm: float, candidate_bpm: float) -> float:
     ratio = math.log2(candidate) - math.log2(target)
     return min(abs(ratio + shift) for shift in (-1, 0, 1))
 
+# Legacy recommenders, aligned with Assist: key carries no weight (the DJ
+# does not match keys) and a missing embedding is left out, not scored 0.
+DEFAULT_MIXABILITY_WEIGHTS = {"bpm": 0.35, "key": 0.0, "vector": 0.4}
+# Set builders (Setlist Auto / phased sets) weigh tempo over timbre.
+SET_TRANSITION_WEIGHTS = {"bpm": 0.4, "key": 0.0, "vector": 0.3}
+
+
 def calculate_mixability_score(
     target_bpm: float, 
     target_key: Optional[str], 
     candidate_bpm: float, 
     candidate_key: Optional[str],
-    vector_similarity: float = 0.0,
+    vector_similarity: Optional[float] = None,
     weights: dict = None
 ) -> float:
     """
     Calculate a mixability score (0.0 - 1.0) between two tracks.
     """
-    w = weights or {"bpm": 0.35, "key": 0.25, "vector": 0.4}
+    w = DEFAULT_MIXABILITY_WEIGHTS if weights is None else weights
     
     # 1. BPM Score
     # Log ratios make A -> B and B -> A equally compatible.
@@ -131,8 +138,11 @@ def calculate_mixability_score(
     else:
         key_score = 0.5
         
-    # 3. Vector Score
-    vec_score = max(0.0, min(1.0, vector_similarity))
-    
-    final_score = (bpm_score * w["bpm"]) + (key_score * w["key"]) + (vec_score * w["vector"])
-    return final_score
+    # Missing or incompatible embeddings carry no evidence. Keep a measured
+    # zero similarity, but exclude unavailable components and normalize again.
+    components = {"bpm": bpm_score, "key": key_score}
+    if vector_similarity is not None and math.isfinite(vector_similarity):
+        components["vector"] = max(0.0, min(1.0, vector_similarity))
+    available = sum(w.get(name, 0.0) for name in components)
+    return (sum(value * w.get(name, 0.0) for name, value in components.items()) / available
+            if available > 0 else 0.0)

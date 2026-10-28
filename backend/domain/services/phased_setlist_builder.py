@@ -16,7 +16,9 @@ import unicodedata
 from typing import Any, Optional
 
 from domain.services.setlist_builder import APPROVED_WORDPLAY_BONUS
-from utils.audio_math import bpm_distance, calculate_mixability_score, normalize_key, CAMELOT_ADJACENCY
+from utils.audio_math import (
+    bpm_distance, calculate_mixability_score, normalize_key, CAMELOT_ADJACENCY, SET_TRANSITION_WEIGHTS,
+)
 from utils.embedding import cosine_similarity
 
 # Weights are relative to calculate_mixability_score, which is 0..1.
@@ -29,7 +31,7 @@ SOURCE_BONUS = {"anchor": 0.0, "track": 0.12, "playlist": 0.12, "artist": 0.12,
 # A phase switch is where a set usually breaks, so transition quality counts more.
 PHASE_SWITCH_MIX_WEIGHT = 1.5
 SAME_ARTIST_PENALTY = (0.35, 0.15)  # previous track, the one before it
-TRANSITION_WEIGHTS = {"bpm": 0.4, "key": 0.3, "vector": 0.3}
+TRANSITION_WEIGHTS = SET_TRANSITION_WEIGHTS
 
 
 @dataclass

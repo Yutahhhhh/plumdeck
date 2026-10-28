@@ -4,7 +4,7 @@ from domain.models.track import Track, TrackEmbedding
 from domain.models.lyrics import Lyrics
 from utils.embedding import LEGACY_MODELS, embedding_space
 from domain.constants import EMBEDDING_DIM
-from utils.audio_math import CAMELOT_ADJACENCY, KEY_TO_CAMELOT, normalize_key
+from utils.audio_math import DEFAULT_MIXABILITY_WEIGHTS
 import numpy as np
 import json
 import math
@@ -309,37 +309,6 @@ class RecommendationRepository:
                     f"COALESCE(ABS(t.{feature} - :order_{feature}), 1.0)"
                 )
 
-        target_camelot = normalize_key(target_track.key)
-        compatible = CAMELOT_ADJACENCY.get(target_camelot, []) if target_camelot else []
-        if target_camelot:
-            params["target_camelot"] = target_camelot
-            params["compatible_camelot"] = tuple(compatible)
-            raw_key = "trim(replace(replace(t.key, '♯', '#'), '♭', 'b'))"
-            pattern = r"(?i)^([a-g])([#b]?)\s*(major|minor|maj|min|m)?$"
-            suffix = f"regexp_extract({raw_key}, '{pattern}', 3)"
-            canonical = (
-                f"upper(regexp_extract({raw_key}, '{pattern}', 1)) || "
-                f"lower(regexp_extract({raw_key}, '{pattern}', 2)) || ' ' || "
-                f"CASE WHEN lower({suffix}) IN ('minor','min','m') AND {suffix} <> 'M' "
-                "THEN 'Minor' ELSE 'Major' END"
-            )
-            mapping = " ".join(
-                f"WHEN '{key}' THEN '{camelot}'" for key, camelot in KEY_TO_CAMELOT.items()
-            )
-            camelot_values = ",".join(f"'{value}'" for value in CAMELOT_ADJACENCY)
-            normalized_key = f"""CASE
-                WHEN upper({raw_key}) IN ({camelot_values}) THEN upper({raw_key})
-                WHEN regexp_full_match({raw_key}, '{pattern}') THEN
-                    CASE {canonical} {mapping} ELSE NULL END
-                ELSE NULL END"""
-            key_score = f"""CASE
-                WHEN ({normalized_key}) = :target_camelot THEN 1.0
-                WHEN ({normalized_key}) IN :compatible_camelot THEN 0.9
-                WHEN ({normalized_key}) IS NOT NULL THEN 0.1
-                ELSE 0.5 END"""
-        else:
-            key_score = "0.5"
-
         target_embedding = self.session.get(TrackEmbedding, target_track.id)
         target_vector = self._parse_embedding(target_embedding.embedding_json) if target_embedding else None
         if (target_embedding and target_vector is not None
@@ -352,16 +321,25 @@ class RecommendationRepository:
                 model_filter = "te.model_name = :target_model"
                 params["target_model"] = target_embedding.model_name
             candidate_vector = f"TRY_CAST(te.embedding_json AS FLOAT[{EMBEDDING_DIM}])"
-            vector_score = f"""CASE WHEN {model_filter} THEN GREATEST(0.0, LEAST(1.0,
-                COALESCE(TRY(array_cosine_similarity(
-                    {candidate_vector},
-                    CAST(:target_vec AS FLOAT[{EMBEDDING_DIM}])
-                )), 0.0))) ELSE 0.0 END"""
+            target_array = f"CAST(:target_vec AS FLOAT[{EMBEDDING_DIM}])"
+            candidate_norm = f"TRY(array_inner_product({candidate_vector}, {candidate_vector}))"
+            target_norm = f"TRY(array_inner_product({target_array}, {target_array}))"
+            # DuckDB returns -1 for a zero/NaN vector, so validate norms before
+            # treating its cosine result as measured dissimilarity.
+            similarity = f"""CASE WHEN {model_filter}
+                AND isfinite({candidate_norm}) AND ({candidate_norm}) > 0
+                AND isfinite({target_norm}) AND ({target_norm}) > 0
+                THEN TRY(array_cosine_similarity({candidate_vector}, {target_array})) ELSE NULL END"""
+            vector_score = f"""CASE WHEN isfinite({similarity})
+                THEN GREATEST(0.0, LEAST(1.0, {similarity})) ELSE NULL END"""
         else:
-            vector_score = "0.0"
+            vector_score = "NULL"
 
+        params["bpm_weight"] = DEFAULT_MIXABILITY_WEIGHTS["bpm"]
+        params["vector_weight"] = DEFAULT_MIXABILITY_WEIGHTS["vector"]
         score = f"""(
-            ({bpm_score}) * 0.35 + ({key_score}) * 0.25 + ({vector_score}) * 0.4 +
+            (({bpm_score}) * :bpm_weight + COALESCE(({vector_score}), 0.0) * :vector_weight)
+            / (:bpm_weight + CASE WHEN ({vector_score}) IS NOT NULL THEN :vector_weight ELSE 0 END) +
             CASE WHEN EXISTS (
                 SELECT 1 FROM wordplay_pairs wp
                 WHERE wp.from_track_id=:track_id AND wp.to_track_id=t.id AND wp.status='approved'
