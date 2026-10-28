@@ -499,6 +499,39 @@ class PresetService:
         return {**definition, "revision": int(saved[0])}
 
 
+def _tempo_markers(grid: Any) -> list[tuple[float, float, int, int]]:
+    """Rekordbox TEMPO markers (start ms, BPM, beat in bar, beats per bar) for a saved BeatGrid.
+
+    A constant grid is one marker at its first non-negative beat. A per-beat
+    grid gets one marker per beat with the local tempo to the next beat.
+    """
+    if not isinstance(grid, dict):
+        return []
+    try:
+        bpm, first = float(grid["bpm"]), float(grid["first_beat_ms"])
+        bar = int(grid.get("beats_per_bar") or 4)
+    except (KeyError, TypeError, ValueError):
+        return []
+    if not (math.isfinite(bpm) and bpm > 0 and math.isfinite(first) and 1 <= bar <= 16):
+        return []
+    times = grid.get("beat_times_ms") or []
+    numbers = grid.get("beat_numbers") or []
+    if len(times) < 2:
+        number = int(numbers[0]) if numbers else 1
+        period = 60_000 / bpm
+        skipped = max(0, math.ceil(-first / period))
+        return [(first + skipped * period, bpm, (number - 1 + skipped) % bar + 1, bar)]
+    markers = []
+    for index, time_ms in enumerate(times[:100_000]):
+        if time_ms < 0:
+            continue
+        following = times[index + 1] if index + 1 < len(times) else None
+        interval = following - time_ms if following is not None else time_ms - times[index - 1]
+        number = int(numbers[index]) if index < len(numbers) else index % bar + 1
+        markers.append((float(time_ms), 60_000 / interval if interval > 0 else bpm, number, bar))
+    return markers
+
+
 class UsbHandoffService:
     def __init__(self, session: Session):
         self.session = session
@@ -579,14 +612,11 @@ class UsbHandoffService:
                     continue
                 ET.SubElement(track, "POSITION_MARK", Name=str(loop.get("label") or "Memory Loop"), Type="4",
                               Start=f"{float(start) / 1000:.6f}", End=f"{float(end) / 1000:.6f}", Num="-1")
-            grid = json.loads(row.get("beat_grid_json") or "null")
-            beats = grid.get("beats") if isinstance(grid, dict) else None
-            if beats:
-                for beat in beats[:100_000]:
-                    time_ms = beat.get("position_ms") if isinstance(beat, dict) else beat
-                    number = beat.get("beat", 1) if isinstance(beat, dict) else 1
-                    if time_ms is not None and float(time_ms) >= 0:
-                        ET.SubElement(track, "TEMPO", Inizio=f"{float(time_ms) / 1000:.6f}", Bpm=attrs.get("AverageBpm", "0"), Metro="4/4", Battito=str(number))
+            markers = _tempo_markers(json.loads(row.get("beat_grid_json") or "null"))
+            if markers:
+                for time_ms, bpm, number, bar in markers:
+                    ET.SubElement(track, "TEMPO", Inizio=f"{time_ms / 1000:.6f}", Bpm=f"{bpm:.2f}",
+                                  Metro=f"{bar}/4", Battito=str(number))
             elif row.get("bpm"):
                 ET.SubElement(track, "TEMPO", Inizio="0.000000", Bpm=f"{float(row['bpm']):.2f}", Metro="4/4", Battito="1")
         playlists = ET.SubElement(root, "PLAYLISTS")

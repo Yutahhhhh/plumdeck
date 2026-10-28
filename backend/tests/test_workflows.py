@@ -276,3 +276,28 @@ def test_play_import_is_idempotent_and_preserves_source(client: TestClient, sess
     count = session.exec(__import__("sqlalchemy").text(
         "SELECT count(*) FROM setlist_tracks WHERE setlist_id=:id"), params={"id": playlist.id}).one()[0]
     assert count == 1
+
+
+def test_rekordbox_xml_writes_the_saved_beat_grid(tmp_path: Path):
+    from xml.etree import ElementTree as ET
+    from app.services.workflow_service import UsbHandoffService, _tempo_markers
+
+    def entry(track_id, grid):
+        return {"track_id": track_id, "title": f"T{track_id}", "artist": "A", "filepath": str(tmp_path / f"{track_id}.wav"),
+                "bpm": 126.0, "duration": 300, "beat_grid_json": json.dumps(grid) if grid else None}
+
+    constant = {"bpm": 128.0, "first_beat_ms": 250.0, "source": "analysis"}
+    rekordbox = {"bpm": 120.0, "first_beat_ms": 100.0, "beat_times_ms": [100.0, 600.0, 1100.0],
+                 "beat_numbers": [3, 4, 1], "source": "rekordbox"}
+    xml, _ = UsbHandoffService(None)._xml({"setlist": {"name": "Grid"}, "entries": [
+        entry(1, constant), entry(2, rekordbox), entry(3, None)]})
+    tracks = {t.get("Name"): t.findall("TEMPO") for t in ET.fromstring(xml).find("COLLECTION")}
+
+    assert [(t.get("Inizio"), t.get("Bpm"), t.get("Battito")) for t in tracks["T1"]] == [("0.250000", "128.00", "1")]
+    assert [(t.get("Inizio"), t.get("Bpm"), t.get("Battito")) for t in tracks["T2"]] == [
+        ("0.100000", "120.00", "3"), ("0.600000", "120.00", "4"), ("1.100000", "120.00", "1")]
+    # Without a saved grid the track BPM is still handed over.
+    assert [(t.get("Inizio"), t.get("Bpm")) for t in tracks["T3"]] == [("0.000000", "126.00")]
+    # A constant grid that starts before 0 moves to its first audible beat.
+    assert _tempo_markers({"bpm": 120.0, "first_beat_ms": -100.0}) == [(400.0, 120.0, 2, 4)]
+    assert _tempo_markers({"bpm": "x", "first_beat_ms": 0}) == []
