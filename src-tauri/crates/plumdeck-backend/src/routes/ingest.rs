@@ -745,8 +745,8 @@ fn process_batch(state: &AppState, batch_id: &str) -> Result<(), String> {
     if current["cancel_requested"].as_bool().unwrap_or(false) || current["paused"].as_bool().unwrap_or(false) {
         return Ok(());
     }
-    let now = || state.clock.now_naive();
-    state.db.write(|c| c.execute("UPDATE import_batches SET state='processing',updated_at=? WHERE id=?", params_from_iter([ts(now()), Db::Text(batch_id.into())])).map(|_| ()).map_err(Into::into)).map_err(db)?;
+    let clock_time = || state.clock.now_naive();
+    state.db.write(|c| c.execute("UPDATE import_batches SET state='processing',updated_at=? WHERE id=?", params_from_iter([ts(clock_time()), Db::Text(batch_id.into())])).map(|_| ()).map_err(Into::into)).map_err(db)?;
     for item in current["items"].as_array().cloned().unwrap_or_default() {
         let flags: Option<(bool, bool)> = state.db.lease().map_err(db)?.query_row("SELECT paused,cancel_requested FROM import_batches WHERE id=?", [batch_id], |r| Ok((r.get(0)?, r.get(1)?))).optional().map_err(|e| e.to_string())?;
         if flags.is_none_or(|(paused, cancel)| paused || cancel) {
@@ -803,11 +803,11 @@ fn process_batch(state: &AppState, batch_id: &str) -> Result<(), String> {
                 if after.len() != metadata.len() || after.modified().ok() != metadata.modified().ok() || analysis::sha256_file(FsPath::new(&path)).as_deref() != Some(identity.as_str()) {
                     return Err("解析中に音源が変更されました。再試行してください".into());
                 }
-                let at = now();
+                let at = clock_time();
                 track = Some(state.db.write(|c| save_track(c, &result, at)).map_err(db)?.0);
             }
             let track_id = track.ok_or("曲を保存できませんでした")?;
-            let at = now();
+            let at = clock_time();
             state
                 .db
                 .write(|c| {
@@ -860,7 +860,7 @@ fn process_batch(state: &AppState, batch_id: &str) -> Result<(), String> {
     let status = if unfinished > 0 { "paused" } else if failed > 0 { "completed_with_errors" } else { "completed" };
     state
         .db
-        .write(|c| c.execute("UPDATE import_batches SET state=?,updated_at=? WHERE id=? AND NOT cancel_requested AND NOT paused", params_from_iter([Db::Text(status.into()), ts(now()), Db::Text(batch_id.into())])).map(|_| ()).map_err(Into::into))
+        .write(|c| c.execute("UPDATE import_batches SET state=?,updated_at=? WHERE id=? AND NOT cancel_requested AND NOT paused", params_from_iter([Db::Text(status.into()), ts(clock_time()), Db::Text(batch_id.into())])).map(|_| ()).map_err(Into::into))
         .map_err(db)?;
     Ok(())
 }

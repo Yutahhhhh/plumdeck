@@ -137,16 +137,20 @@
 | S1 DB 層と起動・停止 | 完了（起動時の compaction は判定と `features_extra_clean` の印まで。再構築は未移植。解析ジョブキューは起動時に開いて回復するが、待機中ジョブの起動と埋め込みのバックフィルは S11） | `src-tauri/crates/plumdeck-db`（DuckDB 1.5.5 固定、ハンドルとゲート、スキーマ初期化、新しい版の DB の拒否、restore の回復、SQLite ジョブキュー、BLOB コーデック）、`plumdeck-backend/src/startup.rs` |
 | S2 settings / dashboard / ミドルウェア | 完了（save / reveal の Tauri 置換は S13 で） | `plumdeck-backend/src/routes`、`middleware.rs`、`contracts/parity/scenarios/s2-*.yaml` |
 | S3 ライブラリの中核 | 完了（tracks / page / count / ids、info / genre の編集、歌詞の取得と検索、`PUT /api/tracks/{id}/lyrics` の復活（D-02）、genres の一覧・未判定・表記揺れ・一括更新・解析結果の適用、`/api/stream`、`/api/metadata`。`/api/fs/list` は移植しない（D-15）） | `plumdeck-domain`（キー表記、ジャンル規則、LRC）、`plumdeck-media`（lofty のタグ読み、Content-Type 表、NFC/NFD 解決）、`plumdeck-db/src/repos/{tracks,lyrics,genres}.rs`、`plumdeck-backend/src/{lax,query,models}.rs` と `routes/{tracks,lyrics,genres,media}.rs`、`contracts/parity/scenarios/s3-*.yaml` |
+| S4〜S10、S12 バックエンドの主要スライス | 実装済み（セットリストはパリティ 0 差分。推薦・wordplay・ジャンル提案、S5〜S10 のシナリオは未作成。D-17〜D-23） | `plumdeck-backend/src/routes/{setlists,recommendations,performance,assist,set_planner,play,waveform_detail,mcp,workflows,junction,metadata_jobs,file_tags,csv_io}.rs`、`tasks.rs`、`plumdeck-domain/src/assist.rs` |
+| W1-08 / S11 解析 | 実装済み（`plumdeck-analysis`：テンポ・拍・キー・音色・波形の v1 と `--analysis-worker` の V1 プロトコル。ingest、grid-jobs、選択解析、Play 取り込み、WS 2 本、MCP の analysis。埋め込みは未対応で待機のまま。D-24 / D-25） | `src-tauri/crates/plumdeck-analysis`、`plumdeck-backend/src/analysis.rs`、`routes/ingest.rs` |
+| S13 Tauri 統合 | 実装済み・未検証（`--features rust-backend` で同梱。ここでは GTK / WebKit が無く Tauri をビルドできない） | `plumdeck-backend/src/embed.rs`、`src-tauri/src/{lib,main}.rs` |
+| RB-03〜RB-06 キー表示 | 実装済み（表記の設定、Traffic Light、MASTER 基準の色、推薦のキー相性フィルタ。D-26） | `src/lib/key-display.ts`、各ビュー、`routes/mcp.rs` の `camelot` |
 | `plumdeck-rekordbox` | RB-10（master.db）と RB-11（ANLZ）完了 | `src-tauri/crates/plumdeck-rekordbox`（DuckDB 非依存） |
 | `plumdeck-decode` | W1-04 / W1-05 相当完了（HE-AAC と Opus は型付きの Unsupported） | `src-tauri/crates/plumdeck-decode`（`spec.rs` にクリーンルーム仕様） |
-| 差分台帳 | D-01、D-02、D-06、D-10、D-12〜D-16 を記録済み | `contracts/parity/deviations.yaml` |
+| 差分台帳 | D-01、D-02、D-06、D-10、D-12〜D-26 を記録済み | `contracts/parity/deviations.yaml` |
 | CI | `pr-checks.yml` の `backend-port` ジョブ（Linux）、Windows で `plumdeck-core` | `.github/workflows/pr-checks.yml` |
 
 ### 3.3 未着手（主なもの）
 
-- バックエンド：S4〜S14 すべて。
-- rekordbox 同等化：RB-01 の残り（HOT CUE マーカーの色の食い違いは要確認。Setlist 自動生成のキー変換の部分一致バグは修正済み）、RB-03 以降すべて（キー表記の設定、Traffic Light、推薦のキー相性フィルタ、フレーズ、PDW3 波形、MEMORY CUE の DB 化など）。
-- 解析：A5（Windows の整理。Rust 移行に畳み込む）、A6（Rust の MusiCNN）、A7（Rust 解析ワーカー、Essentia 撤去）、自前検出 v1（RB-30〜RB-36）。
+- バックエンド：S14（S13 のオーナー smoke の後）。S4〜S11 のうち未作成のパリティシナリオ。
+- rekordbox 同等化：RB-01 の残り（HOT CUE マーカーの色の食い違いは要確認。Setlist 自動生成のキー変換の部分一致バグは修正済み）、RB-13（3 層モデル）、RB-20（PDW3）、RB-21（フレーズ表示）、RB-40、MEMORY CUE の DB 化など。
+- 解析：A6（Rust の MusiCNN。埋め込みは未対応）、Essentia 撤去（S14）、評価ハーネス RB-30 と精度の評価、フレーズ検出。
 - エンジンと Junction：W2-01 以降すべて、切替 W3-01〜W3-04。
 - 取り込み UX：Explorer 撤去、ドラッグ＆ドロップ、「曲を追加」、Dashboard の要対応と rekordbox コレクション取り込み。
 - ジャンル分類器、アプリ内 AI キー、STEMS の調査。
@@ -178,22 +182,21 @@
 
 - **S5**（実装済み。演奏メタデータ、キュー一覧、rekordbox のキュー取り込みと PQTZ グリッド。オンデマンド解析は S11、D-19）。
 - **S4**（実装済み。セットリストはパリティ 0 差分。推薦・wordplay・ジャンル提案のシナリオは最後にまとめて追加。D-17 / D-18 を記録）／ **S5**（rekordbox crate を使う performance metadata とグリッド候補）／ **S8**（BackgroundTask、メタデータジョブ、タグ書込み、CSV）。依存はすべて S3。
-- **S6**（Assist と set planner。S4・S5 の後）／ **S7**（Play、録音、詳細波形。S4 の後）。
-- **S9**（MCP。S4・S6・S8 の後）→ **S10**（workflows。S4・S5・S7 の後）→ **S12**（Junction の MCP ツールを in-process に。S9 の後）。
+- ~~**S6** / **S7** / **S8** / **S9** / **S10** / **S12**~~（実装済み。パリティシナリオは未作成。D-20〜D-23）。
 
 ### 段 3：解析の Rust 化（S11 の前提）
 
 - **W1-02 / W1-03**：時間軸の仕様と計測（Mixxx の計測は Mac / Win のランナーか実機）。
 - **RB-30** 評価ハーネス（参照データの抽出はオーナーのローカルでのみ）。
 - **RB-31〜RB-34**（波形、テンポ・拍・小節頭、キー、フレーズ）、**W1-24**（音色 4 種）、**W1-27 / W1-28**（MusiCNN の ONNX 化と tract）。
-- **W1-08** `plumdeck-worker`（V1 プロトコル）。
-- **S11**（ingest、grid-jobs、選択解析、Play 取り込み、WS 2 本、MCP の analysis）。Analyzer は Rust ワーカーが合格していればそれを、まだなら暫定で既存の Python 解析ワーカーを V1 で呼ぶ。
+- ~~**W1-08**~~ 解析ワーカー（実装済み。`plumdeck-analysis` と `plumdeck-backend --analysis-worker`）。
+- ~~**S11**~~（実装済み。ingest、grid-jobs、選択解析、Play 取り込み、WS 2 本、MCP の analysis）。Analyzer は Rust ワーカーが合格していればそれを、まだなら暫定で既存の Python 解析ワーカーを V1 で呼ぶ。
 
 ### 段 4：切替とその後
 
-- **S13** Tauri への統合と本番切替（Mac / Win の smoke、Assist の再生一致、手動チェックリスト、初回起動前の自動バックアップ）。
+- **S13** Tauri への統合と本番切替（実装済み・未検証。§6 #11）（Mac / Win の smoke、Assist の再生一致、手動チェックリスト、初回起動前の自動バックアップ）。
 - **S14** Python 撤去、台帳の差分の修正、フロントのデッドコード削除。
-- **RB-13**（3 層のデータモデルと解決器）、**RB-40**（自前パイプラインを既定に）、取り込み UX、キー表示系（RB-03〜RB-06）、フレーズ表示（RB-21）、PDW3（RB-20）。
+- **RB-13**（3 層のデータモデルと解決器）、**RB-40**（自前パイプラインを既定に）、取り込み UX、~~キー表示系（RB-03〜RB-06）~~（実装済み）、フレーズ表示（RB-21）、PDW3（RB-20）。
 
 ### 段 5：エンジンと Junction（段 1 以降と並行）
 
@@ -274,6 +277,10 @@
 | 8 | Junction の B2B（Rust⇄Rust、Rust⇄C++、スマホの Lite、フェーダースタート、2 時間の運用） | W2-47 | Mac / Win |
 | 9 | 実ライブラリで `/api/metadata` のタグ（title / artist / album / artwork）を Python（TinyTag 2.x）と Rust（lofty）で比べる。手順：DB コピーで両方を起動し、全曲の `GET /api/metadata?track_id=` を流して差分 0（合成音源では一致を確認済み。ID3 の複数値、APE、WAV の INFO、AIFF は未確認） | S3 | Mac |
 | 10 | `/api/stream` の Content-Type（D-16）。Mac の旧アプリと Rust 版で mp3 / m4a / flac / wav / aiff の値が一致すること、Windows で再生に支障がないこと | S3 | Mac / Win |
+| 11 | `cargo tauri build --features rust-backend` が通り、同梱アプリが Python なしで起動・終了すること（`backend://startup` の段階表示、終了時の CHECKPOINT）。合格後に S14 へ進む | S13 | Mac / Win |
+| 12 | Rust 解析（`rust-attacks-v1` / `rust-chroma-v1` / `rust-timbre-v1`）の BPM・キー・拍の精度を、手持ちの曲で Python 版の結果や rekordbox と比べる（合成音源では 124 BPM を 123.99 と検出） | W1-08 / S11 | Mac |
+| 13 | キー表記の切替、Traffic Light（レベル 2 を含む）、MASTER デッキ基準の色、推薦のキー相性フィルタの見た目と挙動（D-26） | RB-03〜06 | Mac |
+| 14 | MCP クライアント（Claude Desktop など）から Rust 版の `/mcp` に接続し、主要ツール（推薦、ルート、解析、Junction）が動くこと | S9 / S12 | Mac |
 
 ---
 
