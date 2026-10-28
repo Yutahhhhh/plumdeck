@@ -218,7 +218,7 @@ MCP：常に固定エラーを返す Junction の 5 ツール（`junction_reques
 | S0 | 基盤：workspace、compat、契約の抽出、パリティハーネス、ヘッドレス bin | – | – | 済 |
 | S1 | DB 層、起動・停止、SQLite キュー | S0 | – | 済（compaction 未移植） |
 | S2 | settings、dashboard、`GET /`、ミドルウェア（save / reveal の Tauri 置換は S13） | S1 | S3 | 済 |
-| S3 | ライブラリの中核（tracks、lyrics、genres、stream、タグ読み） | S1 | – | |
+| S3 | ライブラリの中核（tracks、lyrics、genres、stream、タグ読み） | S1 | – | 済 |
 | S4 | セットリスト、推薦、wordplay、ジャンル提案 | S3 | S5、S8 | |
 | S5 | rekordbox、performance metadata、グリッド候補（解析なし） | S3 | S4、S8 | |
 | S6 | Assist と set planner | S4, S5 | S7 | |
@@ -315,8 +315,8 @@ MCP：常に固定エラーを返す Junction の 5 ツール（`junction_reques
 
 | ID | 内容 | 状態 |
 |---|---|---|
-| D-01 | genres/unknown と unknown-ids に ORDER BY id | 案 |
-| D-02 | `PUT /api/tracks/{id}/lyrics` を復活 | 案 |
+| D-01 | genres/unknown と unknown-ids に ORDER BY id | 実装済み（proposed） |
+| D-02 | `PUT /api/tracks/{id}/lyrics` を復活 | 実装済み（proposed） |
 | D-03 | MCP で ToolError 以外の例外の理由も表示（Junction の秘密は出さない） | 案（オーナー判断） |
 | D-04 | 録音の書き出しは WAV / FLAC のみ | 案（オーナー判断） |
 | D-05 | 詳細波形はデコーダが変わるので許容誤差で比較し、キャッシュを v2 に | 案 |
@@ -329,7 +329,8 @@ MCP：常に固定エラーを返す Junction の 5 ツール（`junction_reques
 | D-12 | 一致しないリクエストに FastAPI 形式の JSON 404 / 405 | 実装済み（proposed） |
 | D-13 | FastAPI 組み込みの文書ルート（/openapi.json、/docs、/redoc）を移植しない | proposed |
 | D-14 | 新しいアプリが書いたスキーマ版の DB を、触る前に拒否 | 実装済み（approved） |
-| （新規） | Explorer の `/api/fs/list` と待ち方を移植しない | オーナー決定済み。台帳に追加すること |
+| D-15 | Explorer の `/api/fs/list` と待ち方を移植しない | オーナー決定済み（proposed で記録） |
+| D-16 | `/api/stream` の Content-Type を固定表に（Python 3.12 の既定 ＋ macOS の Apache mime.types の音声型） | 実装済み（proposed） |
 
 「案」は計画上の案で、まだ yaml には載っていません。該当するスライスで実装するときに `proposed` として追加してください。
 

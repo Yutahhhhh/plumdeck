@@ -136,14 +136,15 @@
 | S0 基盤 | 完了 | `src-tauri/Cargo.toml`（workspace）、`src-tauri/crates/plumdeck-core`（Python 互換部品）、`contracts/`（schema / http / mcp / compat-vectors）、`tools/parity/`（Python オラクルと補助）、`src-tauri/crates/tools/plumdeck-parity`、ヘッドレス bin `plumdeck-backend` |
 | S1 DB 層と起動・停止 | 完了（起動時の compaction は判定と `features_extra_clean` の印まで。再構築は未移植。解析ジョブキューは起動時に開いて回復するが、待機中ジョブの起動と埋め込みのバックフィルは S11） | `src-tauri/crates/plumdeck-db`（DuckDB 1.5.5 固定、ハンドルとゲート、スキーマ初期化、新しい版の DB の拒否、restore の回復、SQLite ジョブキュー、BLOB コーデック）、`plumdeck-backend/src/startup.rs` |
 | S2 settings / dashboard / ミドルウェア | 完了（save / reveal の Tauri 置換は S13 で） | `plumdeck-backend/src/routes`、`middleware.rs`、`contracts/parity/scenarios/s2-*.yaml` |
+| S3 ライブラリの中核 | 完了（tracks / page / count / ids、info / genre の編集、歌詞の取得と検索、`PUT /api/tracks/{id}/lyrics` の復活（D-02）、genres の一覧・未判定・表記揺れ・一括更新・解析結果の適用、`/api/stream`、`/api/metadata`。`/api/fs/list` は移植しない（D-15）） | `plumdeck-domain`（キー表記、ジャンル規則、LRC）、`plumdeck-media`（lofty のタグ読み、Content-Type 表、NFC/NFD 解決）、`plumdeck-db/src/repos/{tracks,lyrics,genres}.rs`、`plumdeck-backend/src/{lax,query,models}.rs` と `routes/{tracks,lyrics,genres,media}.rs`、`contracts/parity/scenarios/s3-*.yaml` |
 | `plumdeck-rekordbox` | RB-10（master.db）と RB-11（ANLZ）完了 | `src-tauri/crates/plumdeck-rekordbox`（DuckDB 非依存） |
 | `plumdeck-decode` | W1-04 / W1-05 相当完了（HE-AAC と Opus は型付きの Unsupported） | `src-tauri/crates/plumdeck-decode`（`spec.rs` にクリーンルーム仕様） |
-| 差分台帳 | D-06、D-10、D-12、D-13、D-14 を記録済み | `contracts/parity/deviations.yaml` |
+| 差分台帳 | D-01、D-02、D-06、D-10、D-12〜D-16 を記録済み | `contracts/parity/deviations.yaml` |
 | CI | `pr-checks.yml` の `backend-port` ジョブ（Linux）、Windows で `plumdeck-core` | `.github/workflows/pr-checks.yml` |
 
 ### 3.3 未着手（主なもの）
 
-- バックエンド：S3〜S14 すべて。
+- バックエンド：S4〜S14 すべて。
 - rekordbox 同等化：RB-01 の残り（Setlist 自動生成のキー変換の部分一致バグ、HOT CUE マーカーの色の食い違いは要確認）、RB-02 以降すべて（キー表記の設定、Traffic Light、推薦のキー相性フィルタ、フレーズ、PDW3 波形、MEMORY CUE の DB 化など）。
 - 解析：A5（Windows の整理。Rust 移行に畳み込む）、A6（Rust の MusiCNN）、A7（Rust 解析ワーカー、Essentia 撤去）、自前検出 v1（RB-30〜RB-36）。
 - エンジンと Junction：W2-01 以降すべて、切替 W3-01〜W3-04。
@@ -167,7 +168,7 @@
 ### 段 1：DuckDB に依存しない基盤（並行可）
 
 - **RB-02** `plumdeck-key`（KeyId 0〜23、Classic / Alphanumeric / Open Key / タグのまま、入力の正規化、関係の分類、実効キー）と `contracts/key/keys.json` の生成。
-- **S3** ライブラリの中核（`/api/fs/list` は Explorer 廃止に伴い DROP として台帳に記録）。
+- ~~**S3** ライブラリの中核~~（完了。`/api/fs/list` は D-15 として DROP を記録）。
 - **W1-06 / Opus**：`plumdeck-decode` の OS フォールバック（HE-AAC）と Opus（Mac / Win のランナーが要る）。
 - **W1-07** `plumdeck-dsp`（リサンプラ、STFT、biquad など）。
 - **W2-01** エンジン契約 v1 の機械可読化、**W2-30** Junction の仕様ベースライン（どちらも C++ / TS からの抽出なので Linux で可）。
@@ -213,7 +214,7 @@
 
 - Linux、オーナーの Mac にはアクセスできない前提。オーナーの音源・DB・rekordbox データは**クラウドに一切置かない**。
 - Rust は stable（`rust-version = "1.91"` 以上）。DuckDB と SQLCipher は C/C++ からビルドされるので、初回ビルドは重い。
-- パリティのオラクルには Python 3.12 の venv が要る（`backend/requirements-pr.txt` を基準に、`contracts/oracle.json` に記録された版に合わせる）。`PLUMDECK_ORACLE_PYTHON` でその python を指定する。
+- パリティのオラクルには Python 3.12 の venv が要る（`backend/requirements-pr.txt` を基準に、`contracts/oracle.json` に記録された版に合わせる。パッチ版まで合わせること：3.12.3 と 3.12.13 では float の divmod のベクタが変わる。`uv python install 3.12.13` で入る）。`PLUMDECK_ORACLE_PYTHON` でその python を指定する。`backend/main.py` が aiohttp を import するので venv に入れる。互換ベクタ（`contracts/compat-vectors`）は darwin（arm64）で作ったもので、x86 で作り直すと NaN の符号だけが変わる。作り直さない。
 
 ### 5.2 ブランチと PR
 
@@ -227,7 +228,7 @@
 
   ```sh
   cd src-tauri
-  cargo test -p plumdeck-core -p plumdeck-db -p plumdeck-backend -p plumdeck-parity
+  cargo test -p plumdeck-core -p plumdeck-db -p plumdeck-domain -p plumdeck-media -p plumdeck-backend -p plumdeck-parity
   ```
 
   別々に回すと build-dependency の feature が分かれ、bundled DuckDB を何度もビルドし直すことになる。新しく DuckDB を使う crate を足したら、このリストと CI の `backend-port` ジョブに加える。
@@ -269,6 +270,8 @@
 | 6 | 自前解析の評価レポート（rekordbox データを参照、ローカルのみ）と、見た目の比較（フレーズ色、3 バンド波形、キー表記、Traffic Light） | RB-30〜RB-34 | Mac |
 | 7 | BlackHole 適合スイートを Rust エンジンで実行し、Mixxx のベースラインと比較。keylock と FX の ABX、DDJ の手触り | W2-26 | Mac |
 | 8 | Junction の B2B（Rust⇄Rust、Rust⇄C++、スマホの Lite、フェーダースタート、2 時間の運用） | W2-47 | Mac / Win |
+| 9 | 実ライブラリで `/api/metadata` のタグ（title / artist / album / artwork）を Python（TinyTag 2.x）と Rust（lofty）で比べる。手順：DB コピーで両方を起動し、全曲の `GET /api/metadata?track_id=` を流して差分 0（合成音源では一致を確認済み。ID3 の複数値、APE、WAV の INFO、AIFF は未確認） | S3 | Mac |
+| 10 | `/api/stream` の Content-Type（D-16）。Mac の旧アプリと Rust 版で mp3 / m4a / flac / wav / aiff の値が一致すること、Windows で再生に支障がないこと | S3 | Mac / Win |
 
 ---
 
