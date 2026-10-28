@@ -494,7 +494,7 @@ public:
         generations_[index] = generation;
         if (keylockBeforeShift_[index]) keyReset(index);
         ++slipGenerations_[index]; slipWanted_[index] = false;
-        ++phaseGenerations_[index];
+        ++phaseGenerations_[index]; armPhaseOnStart(index, false);
         ControlObject::set(ConfigKey(groups[index], "file_key"), 0);
         for (const auto& control : {"slip_enabled","reverse","reverseroll","pitch_adjust"}) ControlObject::set(ConfigKey(groups[index],control),0);
         tracks_[index] = Track::newTemporary(path);
@@ -506,7 +506,7 @@ public:
         disableFx(index);
         if (keylockBeforeShift_[index]) keyReset(index);
         ++slipGenerations_[index]; slipWanted_[index] = false;
-        ++phaseGenerations_[index];
+        ++phaseGenerations_[index]; armPhaseOnStart(index, false);
         ++generations_[index]; tracks_[index].reset();
         ControlObject::set(ConfigKey(groups[index], "play"), 0);
         decks_[index]->getEngineBuffer()->ejectTrack();
@@ -537,14 +537,19 @@ public:
     QString samplerCommand(const QString& op, const QJsonObject& params) override { return samplers_ ? samplers_->command(op, params) : "Sampler unavailable"; }
     void play(int index, bool enabled) override {
         const bool starting = enabled && !playing(index);
+        // Phase-align a synced start before its first audible block (H-3):
+        // decide (and build the grid telemetry) before play, then the audio
+        // callback that first sees play queues the phase seek ahead of
+        // rendering. SLIP needs no handling here: it is engaged only during a
+        // gesture (see beginSlipGesture), so a pause between gestures never seeks.
+        if (starting) { ++phaseGenerations_[index]; armPhaseOnStart(index, phaseSyncWanted(index)); }
+        else if (!enabled) { ++phaseGenerations_[index]; armPhaseOnStart(index, false); }
         ControlObject::set(ConfigKey(groups[index], "play"), enabled ? 1 : 0);
-        // Phase-align a synced start before its first audible block (H-3).
-        // SLIP needs no handling here: it is engaged only during a gesture
-        // (see beginSlipGesture), so a pause between gestures never seeks.
-        if (starting) alignPhaseNow(index); else if (!enabled) ++phaseGenerations_[index];
+        // A refused start (no track) must not leave the request armed.
+        if (starting && !playing(index)) armPhaseOnStart(index, false);
     }
     void seek(int index, double ms) override {
-        ++phaseGenerations_[index];
+        ++phaseGenerations_[index]; armPhaseOnStart(index, false);
         if (tracks_[index] && tracks_[index]->getDuration() > 0) ControlObject::set(ConfigKey(groups[index], "playposition"), ms / (1000.0 * tracks_[index]->getDuration()));
     }
     // ネイティブ演奏入力 (inputSequence>0) と RPC のポインタ操作 (inputSequence==0) は
@@ -682,7 +687,7 @@ public:
     }
     void sync(int index, bool enabled) override {
         ControlObject::set(ConfigKey(groups[index], "sync_enabled"), enabled ? 1 : 0);
-        if (enabled) requestPhaseSync(index); else ++phaseGenerations_[index];
+        if (enabled) requestPhaseSync(index); else { ++phaseGenerations_[index]; armPhaseOnStart(index, false); }
     }
     void setSyncLeader(int index) override {
         ControlObject::set(ConfigKey(groups[index], "sync_leader"), 1);
@@ -696,16 +701,12 @@ public:
             triggerPhaseSync(index);
         });
     }
-    // On a synced start, play=1 and the phase request land in the same Qt
-    // turn: EngineBuffer::processSeek() applies SEEK_PHASE in the first
-    // callback that sees play, before that callback renders any audio.
-    // (A delayed request let ~25 ms play unaligned before jumping.)
-    void alignPhaseNow(int index) {
-        ++phaseGenerations_[index];
-        triggerPhaseSync(index);
+    void armPhaseOnStart(int index, bool armed) { if (decks_[index]) decks_[index]->armPhaseOnStart(armed); }
+    bool phaseSyncWanted(int index) {
+        return syncLeader() != index && ControlObject::get(ConfigKey(groups[index], "sync_enabled")) > 0 && !beatgridState(index).isEmpty();
     }
     void triggerPhaseSync(int index) {
-        if (!playing(index) || syncLeader() == index || ControlObject::get(ConfigKey(groups[index], "sync_enabled")) <= 0 || beatgridState(index).isEmpty()) return;
+        if (!playing(index) || !phaseSyncWanted(index)) return;
         // Explicit one-shot phase requests work with native quantize off.
         // Do not enable quantize, which also changes cue and seek behavior.
         trigger(index, "beatsync_phase");
