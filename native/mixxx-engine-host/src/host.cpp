@@ -195,9 +195,11 @@ QJsonObject Host::emptyDeck() {
 }
 QJsonObject Host::info() const {
     QJsonArray capabilities;
-    if (backend_->available()) capabilities = {"sampler", "mixer.beatfx", "mixer.colorfx", "deck.key", "deck.slip", "deck.reverse", "deck.load.async", "deck.transport", "deck.scratch", "deck.pitchbend", "deck.tempo", "deck.keylock", "deck.sync", "deck.beatgrid", "deck.hotcue", "deck.loop", "deck.beatjump", "deck.quantize", "mixer.eq", "mixer.filter", "mixer.trim", "mixer.fx", "mixer.gain", "mixer.crossfader", "recording", "audio.microphone", "audio.microphone.ducking"};
-    if (backend_->audio()["pflApplied"].toBool()) capabilities.append("mixer.pfl");
-    if (backend_->available()) { capabilities.append("mixer.beatfx.release"); capabilities.append("deck.clock.v2"); capabilities.append("performance.midi.v2"); capabilities.append("waveform.tiles.v2"); }
+    if (backend_->available()) capabilities = {"sampler", "mixer.beatfx", "mixer.colorfx", "deck.key", "deck.key.sync", "deck.sync.leader.v2", "deck.loop.range.v2", "mixer.crossfader.curve", "meters", "deck.slip", "deck.reverse", "deck.load.async", "deck.transport", "deck.scratch", "deck.pitchbend", "deck.tempo", "deck.keylock", "deck.sync", "deck.beatgrid", "deck.hotcue", "deck.loop", "deck.beatjump", "deck.quantize", "mixer.eq", "mixer.filter", "mixer.trim", "mixer.fx", "mixer.fx.beats", "mixer.gain", "mixer.crossfader", "recording", "audio.microphone", "audio.microphone.ducking"};
+    if (backend_->audio()["pflApplied"].toBool()) {
+        capabilities.append("mixer.pfl"); capabilities.append("mixer.headphone");
+    }
+    if (backend_->available()) { capabilities.append("mixer.beatfx.release"); capabilities.append("mixer.beatfx.range.v2"); capabilities.append("deck.clock.v2"); capabilities.append("performance.midi.v2"); capabilities.append("waveform.tiles.v2"); }
     return {{"name", backend_->implementation() == "mixxx" ? "plumdeck-mixxx-engine-host" : "plumdeck-mixxx-host-unavailable"}, {"version", "0.3.0"}, {"implementation", backend_->implementation()}, {"simulated", false}, {"deterministic", false}, {"audioAvailable", backend_->available()}, {"audioProblem", backend_->problem()}, {"decks", QJsonArray{"A", "B", "C", "D"}}, {"capabilities", capabilities}, {"upstreamCommit", "3ebac449e7e5fe2a0186596657696e87ce8b0e56"}};
 }
 QJsonObject Host::envelope(const QString& kind) const {
@@ -473,13 +475,22 @@ void Host::line(const QByteArray& bytes) {
             const int channel = deckIndex(params["deck"].toString().toUpper());
             if (channel < 0) { error(cmd, "deck_not_found", "Expected deck A, B, C or D"); return; }
             if (params.contains("trackId") && params["trackId"] != slots_[channel].state["track"].toObject()["trackId"]) { error(cmd, "invalid_params", "The loaded track changed"); return; }
-            const auto effect = params["effect"].toString();
+            auto effect = params["effect"].toString();
+            if (effect.startsWith("org.plumdeck.effects.")) effect.remove(0, QString("org.plumdeck.effects.").size());
             const auto mix = params["mix"];
             // 掛かりの強さ。省略時は従来どおりの中央値。
             const auto depthValue = params.contains("depth") ? params["depth"] : QJsonValue(0.5);
             if (!depthValue.isDouble() || !std::isfinite(depthValue.toDouble()) || depthValue.toDouble() < 0 || depthValue.toDouble() > 1) { error(cmd, "invalid_params", "depth must be 0..1"); return; }
             if (!padEffects.contains(effect) || !params["enabled"].isBool() || !mix.isDouble() || !std::isfinite(mix.toDouble()) || mix.toDouble() < 0 || mix.toDouble() > 1) { error(cmd, "invalid_params", "Expected a supported pad effect, boolean enabled, mix 0..1"); return; }
-            if (!backend_->fx(channel, effect, params["enabled"].toBool(), mix.toDouble(), depthValue.toDouble())) { error(cmd, "unsupported_operation", "Native effect processor is unavailable"); return; }
+            std::optional<double> beats;
+            if (params.contains("beats")) {
+                const auto value = params["beats"];
+                if (!value.isDouble() || !std::isfinite(value.toDouble()) || value.toDouble() < 1.0 / 16 || value.toDouble() > 16) { error(cmd, "invalid_params", "PAD FX beats must be 1/16..16"); return; }
+                beats = value.toDouble();
+            }
+            if (params.contains("params") && !params["params"].isObject()) { error(cmd, "invalid_params", "Expected an object of native effect parameters"); return; }
+            const auto failure = backend_->padFx(channel, effect, params["enabled"].toBool(), mix.toDouble(), depthValue.toDouble(), beats, params["params"].toObject());
+            if (!failure.isEmpty()) { error(cmd, "invalid_params", failure); return; }
             ++rev_; const auto state = backend_->mixer(); result(cmd, state); event("mixer.state", state); return;
         }
         if (op == "mixer.channel.eq" || op == "mixer.eq.set" || op == "mixer.filter.set" || op == "mixer.trim.set") {

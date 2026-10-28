@@ -168,14 +168,16 @@ test('four decks use native cues, variable-grid jumps/loops, EQ/filter/trim and 
         const state = await command('mixer.fx.set', { deck, effect, enabled: true, mix: 0.25 });
         assert.equal(state.channels[deck].fx.effect, effect);
         assert.equal(state.channels[deck].fx.enabled, true);
-        assert.equal(state.channels[deck].fx.mix, 0.25);
+        // Insert effects replace the dry signal, so the host runs them fully wet.
+        const insert = ['filter', 'bitcrusher', 'distortion', 'autopan', 'tremolo', 'moogladder4filter'].includes(effect);
+        assert.equal(state.channels[deck].fx.mix, insert ? 1 : 0.25);
         await command('mixer.fx.set', { deck, effect, enabled: false, mix: 0.25 });
       }
     }
     for (const [op, params] of [
       ['deck.hotcue.set', { index: 16 }], ['deck.hotcue.set', { index: 0, positionMs: 24000 }],
       ['deck.loop.set', { startMs: 2000, endMs: 1000 }], ['deck.beatjump', { beats: 0 }],
-      ['deck.loop.beats', { beats: 0.1 }], ['mixer.filter.set', { value: 2 }],
+      ['deck.loop.beats', { beats: 0.01 }], ['mixer.filter.set', { value: 2 }],
       ['mixer.trim.set', { gain: 3 }], ['mixer.channel.eq', { band: 'x', gain: 1 }],
       ['mixer.fx.set', { effect: 'echo', enabled: true, mix: 1.6 }],
       ['mixer.fx.set', { effect: 'nosucheffect', enabled: true, mix: 0.25 }],

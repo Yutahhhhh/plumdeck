@@ -472,7 +472,9 @@ public:
             channel["trim"] = ControlObject::get(ConfigKey(groups[index], "pregain"));
             channel["filter"] = effects_->getQuickEffectChain(groups[index])->getSuperParameter() * 2.0 - 1.0;
             const auto fxGroup = StandardEffectChain::formatEffectChainGroup(index);
-            channel["fx"] = QJsonObject{{"effect", fxEffects_[index]}, {"enabled", ControlObject::get(ConfigKey(fxGroup, "enabled")) > 0}, {"mix", ControlObject::get(ConfigKey(fxGroup, "mix"))},{"depth",fxDepths_[index]},{"parameters",effectParameters(effects_->getStandardEffectChain(index)->getEffectSlot(0))}};
+            channel["fx"] = QJsonObject{{"effect", fxEffects_[index]}, {"enabled", fxHeld_[index]}, {"tail", fxTails_[index]},
+                {"nativeEnabled", ControlObject::get(ConfigKey(fxGroup, "enabled")) > 0}, {"mix", ControlObject::get(ConfigKey(fxGroup, "mix"))},
+                {"depth", fxDepths_[index]}, {"beats", fxBeats_[index]}, {"parameters", effectParameters(effects_->getStandardEffectChain(index)->getEffectSlot(0))}};
             channels[names[index]] = channel;
         }
         value["channels"] = channels;
@@ -840,43 +842,94 @@ public:
 
     /** 掛かりを落とし、次回に必ず載せ直させる。曲の入れ替え時に使う。 */
     void disableFx(int index) {
+        ++fxGenerations_[index]; fxHeld_[index] = false; fxTails_[index] = false;
         ControlObject::set(ConfigKey(StandardEffectChain::formatEffectChainGroup(index), "enabled"), 0);
         fxLoaded_[index] = false;
     }
 
     bool fx(int index, const QString& effect, bool enabled, double mix, double depth) override {
+        return padFx(index, effect, enabled, mix, depth, std::nullopt, {}).isEmpty();
+    }
+    QString padFx(int index, const QString& effect, bool enabled, double mix, double depth, std::optional<double> beats, const QJsonObject& params) override {
         const auto chain = effects_->getStandardEffectChain(index);
-        // The pad chain gates on the chain switch below, so its one slot is
-        // always on. Publish that through the static setter and before any load:
-        // EffectSlot only forwards its enable state to the audio thread from its
-        // own valueChanged handler and from the tail of loadEffectInner(), and
-        // EffectSlot::setEnabled() writes through the slot's own ControlObject,
-        // which suppresses valueChanged for its own writes. Until now this held
-        // only because loading a track forces the reload below.
+        // Prefer the host's timed processors; keep Mixxx-only inserts available.
+        auto manifest = effects_->getBackendManager()->getManifest("org.plumdeck.effects." + effect, EffectBackendType::BuiltIn);
+        if (!manifest) manifest = builtinEffect(effect);
+        if (!manifest) return "Native effect processor is unavailable";
+        const auto parameterManifest = [&](const QString& id) -> EffectManifestParameterPointer {
+            for (const auto& entry : manifest->parameters()) if (entry->id() == id) return entry;
+            return {};
+        };
+        for (auto it = params.begin(); it != params.end(); ++it) {
+            const auto parameter = parameterManifest(it.key());
+            if (!parameter || !it.value().isDouble() || !std::isfinite(it.value().toDouble()) || it.value().toDouble() < parameter->getMinimum() || it.value().toDouble() > parameter->getMaximum())
+                return "Invalid PAD FX parameter: " + it.key();
+        }
+        QString beatParameter;
+        double beatValue = 0;
+        if (beats) {
+            for (const auto* id : {"beats", "delay_time", "lfo_period", "speed", "period", "rate"}) {
+                const auto parameter = parameterManifest(id);
+                if (!parameter) continue;
+                beatParameter = id; beatValue = beatParameter == "rate" ? 1.0 / *beats : *beats;
+                if (beatValue < parameter->getMinimum() || beatValue > parameter->getMaximum()) return "Beat length is outside this effect's supported range";
+                if (params.contains(beatParameter)) return "Specify beat length once, using beats";
+                break;
+            }
+            if (beatParameter.isEmpty()) return "This effect has no beat-length parameter";
+        }
+        // A delayed pointer-up from a previous pad cannot stop its replacement.
+        if (!enabled && (!fxLoaded_[index] || fxEffects_[index] != effect)) return {};
+        const auto generation = ++fxGenerations_[index];
+        const auto setParameter = [&](const QString& id, double value) {
+            bool found = false;
+            for (const auto& map : {chain->getEffectSlot(0)->getLoadedParameters(), chain->getEffectSlot(0)->getHiddenParameters()})
+                for (const auto& parameters : map) for (const auto& parameter : parameters) if (parameter->manifest()->id() == id) {
+                    parameter->setValue(value); parameter->updateEngineState(); found = true;
+                }
+            return found;
+        };
+        fxHeld_[index] = enabled;
+        if (!enabled) {
+            // Stop feeding a send effect, while its already-captured signal
+            // decays. A fresh press/load/session invalidates this delayed stop.
+            const bool tail = parameterManifest("send_amount") && setParameter("send_amount", 0);
+            fxTails_[index] = tail;
+            if (tail) {
+                const double bpm = effectiveBpm(index) > 0 ? effectiveBpm(index) : 120;
+                const double length = effect == "reverb" ? 8 : std::max(1.0, fxBeats_[index] * 8);
+                const int duration = int(std::min(384000.0, 60000 * length / bpm));
+                QTimer::singleShot(duration, this, [this,index,generation] {
+                    if (fxGenerations_[index] != generation) return;
+                    ControlObject::set(ConfigKey(StandardEffectChain::formatEffectChainGroup(index), "enabled"), 0);
+                    fxTails_[index] = false;
+                });
+            } else ControlObject::set(ConfigKey(chain->group(), "enabled"), 0);
+            return {};
+        }
+        fxTails_[index] = false;
         ControlObject::set(ConfigKey(StandardEffectChain::formatEffectSlotGroup(index, 0), "enabled"), 1);
         if (!fxLoaded_[index] || fxEffects_[index] != effect) {
-            const auto manifest = builtinEffect(effect);
-            if (!manifest) return false;
-            // Loading the manifest the slot already holds is a no-op, which
-            // leaves the metaknob unlinked and the effect silent. Whichever pad
-            // matched the slot's current effect stayed dead. Pass through a
-            // different manifest first so the load is always a real transition.
-            if (const auto other = builtinEffect(effect == QLatin1String("reverb") ? "echo" : "reverb")) {
-                chain->getEffectSlot(0)->loadEffectWithDefaults(other);
-            }
+            // Force a manifest transition even if the rack was preseeded with
+            // the same name: it rebinds the macro and clears the old track tail.
+            if (const auto other = builtinEffect(effect == "reverb" ? "echo" : "reverb")) chain->getEffectSlot(0)->loadEffectWithDefaults(other);
             chain->getEffectSlot(0)->loadEffectWithDefaults(manifest);
-            fxEffects_[index] = effect;
-            fxLoaded_[index] = true;
+            fxEffects_[index] = effect; fxLoaded_[index] = true;
         }
-        // Apply on every call, not only when the effect name changes. The rack
-        // is pre-seeded with "echo", so a first press of that pad used to skip
-        // this block entirely and stayed silent. Empty racks also start with a
-        // zero metaknob, which mutes Echo's send and Flanger's mix.
         chain->getEffectSlot(0)->setMetaParameter(metaParameterFor(effect, depth), true);
-        ControlObject::set(ConfigKey(chain->group(), "mix"), mix);
-        ControlObject::set(ConfigKey(chain->group(), "enabled"), enabled ? 1 : 0);
-        fxDepths_[index]=depth;
-        return true;
+        if (!beatParameter.isEmpty()) setParameter(beatParameter, beatValue);
+        if (parameterManifest("depth")) setParameter("depth", depth);
+        // Unlinked sends on owned delay processors stay at zero after release.
+        if (parameterManifest("send_amount")) setParameter("send_amount", effect == "echo" || effect == "reverb" ? depth : 1);
+        if (effect == "tremolo") setParameter("waveform", .005); // TRANS: beat-synchronous gate.
+        if (effect == "pitchshift") setParameter("range", 1); // macro spans -1..+1 octave
+        for (auto it = params.begin(); it != params.end(); ++it) setParameter(it.key(), it.value().toDouble());
+        const bool insert = effect == "filter" || effect == "moogladder4filter" || effect == "bitcrusher" || effect == "distortion" || effect == "autopan" || effect == "tremolo" || effect == "roll" || effect == "sliproll" || effect == "pitchshift";
+        ControlObject::set(ConfigKey(chain->group(), "mix"), insert ? 1 : mix);
+        ControlObject::set(ConfigKey(chain->group(), "enabled"), 1);
+        fxDepths_[index] = depth;
+        if (beats) fxBeats_[index] = *beats;
+        return {};
     }
 
     /**
@@ -887,7 +940,7 @@ public:
     static double metaParameterFor(const QString& effect, double depth) {
         // Filters are neutral at the centre and cut towards either end.
         if (effect == QLatin1String("filter") || effect == QLatin1String("moogladder4filter")) {
-            return 0.5 - depth * 0.5;
+            return depth;
         }
         // Auto Pan's metaknob is its LFO rate: at the top the pan is too fast to
         // hear as movement, so keep full depth inside the range that reads.
@@ -901,6 +954,7 @@ public:
         if (!effects_) return false;
         bool changed = false;
         for (int index = 0; index < 4; ++index) {
+            ++fxGenerations_[index]; fxHeld_[index] = false; fxTails_[index] = false;
             const auto key = ConfigKey(StandardEffectChain::formatEffectChainGroup(index), "enabled");
             if (ControlObject::get(key) > 0) {
                 ControlObject::set(key, 0);
