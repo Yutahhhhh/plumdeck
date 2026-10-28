@@ -158,3 +158,18 @@ mod tests {
         assert_eq!(put_lyrics(&conn, BigInt(9), "x", None, at(4)).unwrap(), None);
     }
 }
+
+/// The lyrics job's write: create the row (with `created_at`) or replace its
+/// content, `source = 'lrclib'`, `updated_at` now (keyword cache untouched).
+pub fn store_fetched_lyrics(conn: &Connection, track_id: i64, content: &str, now: NaiveDateTime) -> Result<(), DbError> {
+    let exists = get_lyrics(conn, BigInt(track_id.into()))?.is_some();
+    if exists {
+        conn.execute("UPDATE lyrics SET content=?, source='lrclib', updated_at=? WHERE lyrics.track_id = ?", params![content, now, track_id])?;
+    } else {
+        conn.execute(
+            "INSERT INTO lyrics (track_id, content, source, language, created_at, updated_at) VALUES (?, ?, 'lrclib', NULL, ?, ?)",
+            params![track_id, content, now, now],
+        )?;
+    }
+    Ok(())
+}

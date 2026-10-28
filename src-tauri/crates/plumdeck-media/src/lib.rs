@@ -10,4 +10,5 @@
 pub mod mime;
 pub mod paths;
 pub mod tags;
+pub mod tag_write;
 pub mod timing;

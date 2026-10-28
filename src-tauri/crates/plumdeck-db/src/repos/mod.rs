@@ -3,6 +3,7 @@
 //! genres (S3), setlists, recommendations and wordplay pairs (S4).
 
 pub mod analyzed;
+pub mod csv_io;
 pub mod dashboard;
 pub mod genres;
 pub mod imports;

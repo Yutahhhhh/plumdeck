@@ -22,6 +22,7 @@ pub mod response;
 pub mod routes;
 pub mod sandbox;
 pub mod startup;
+pub mod tasks;
 
 use std::future::Future;
 use std::io;
@@ -82,11 +83,14 @@ pub struct AppState {
     pub db: DbHandle,
     pub cors: Arc<CorsPolicy>,
     pub clock: Arc<dyn Clock>,
+    /// The release-date / lyrics job (S8).
+    pub metadata: routes::metadata_jobs::MetadataJobs,
 }
 
 impl AppState {
     pub fn new(db: DbHandle, cors: CorsPolicy) -> Self {
-        Self { db, cors: Arc::new(cors), clock: Arc::new(SystemClock) }
+        let library_dir = db.path().parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+        Self { db, cors: Arc::new(cors), clock: Arc::new(SystemClock), metadata: routes::metadata_jobs::MetadataJobs::new(library_dir) }
     }
 
     /// Run blocking work (DuckDB) off the async workers; a panic in it is a

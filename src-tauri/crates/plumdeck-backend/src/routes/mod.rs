@@ -2,10 +2,13 @@
 //! the recommendation routes; suggestions.py is the recommendation service's
 //! genre suggestions).
 
+pub mod csv_io;
 pub mod dashboard;
+pub mod file_tags;
 pub mod genres;
 pub mod lyrics;
 pub mod media;
+pub mod metadata_jobs;
 pub mod performance;
 pub mod settings;
 pub mod setlists;
@@ -40,6 +43,19 @@ pub fn api() -> Router<AppState> {
         .route("/api/genres/apply-analyses", post(genres::apply_genre_analyses))
         .route("/api/genres/cleanup-execute", post(genres::cleanup_execute))
         .route("/api/stream", get(media::stream))
+        .route("/api/genres/apply-to-files", post(file_tags::apply_to_files))
+        .route("/api/metadata/update", post(metadata_jobs::start_update).patch(file_tags::update_content))
+        .route("/api/metadata/fetch-artwork-info", post(file_tags::fetch_artwork_info))
+        .route("/api/metadata/fetch-lyrics-single", post(metadata_jobs::fetch_lyrics_single))
+        .route("/api/metadata/cancel", post(metadata_jobs::cancel_update))
+        .route("/api/metadata/clear-cache", post(metadata_jobs::clear_cache))
+        .route("/ws/metadata", get(metadata_jobs::ws_metadata))
+        .route("/api/settings/export/csv", get(csv_io::export_csv))
+        .route("/api/settings/import/analyze", post(csv_io::analyze_import))
+        .route("/api/settings/import/execute", post(csv_io::execute_import))
+        .route("/api/settings/metadata/export", get(csv_io::export_metadata))
+        .route("/api/settings/metadata/import/analyze", post(csv_io::analyze_metadata))
+        .route("/api/settings/metadata/import/execute", post(csv_io::execute_metadata))
         .route("/api/metadata", get(media::track_metadata))
         .route("/api/setlists", get(setlists::get_setlists).post(setlists::post_setlist))
         .route("/api/setlists/{setlist_id}", put(setlists::put_setlist).delete(setlists::remove_setlist))

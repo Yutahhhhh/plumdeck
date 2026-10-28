@@ -12,7 +12,11 @@ path = "src/bin/plumdeck-backend.rs"
 
 [dependencies]
 anyhow.workspace = true
-axum.workspace = true
+axum = { workspace = true, features = ["ws", "multipart"] }
+base64.workspace = true
+encoding_rs = "=0.8.35"
+regex.workspace = true
+reqwest = { workspace = true, features = ["rustls-tls"] }
 chrono.workspace = true
 clap.workspace = true
 md-5.workspace = true

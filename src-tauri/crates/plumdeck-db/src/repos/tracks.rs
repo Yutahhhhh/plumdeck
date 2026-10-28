@@ -720,3 +720,55 @@ mod tests {
         }
     }
 }
+
+/// The metadata job's track list (`_run_update`): optionally only `ids`,
+/// without the skip cache's ids, and unless `overwrite` only tracks missing
+/// the year (`release_date`) or lyrics (`lyrics`).
+pub fn metadata_job_tracks(
+    conn: &Connection,
+    kind: &str,
+    overwrite: bool,
+    ids: Option<&[i128]>,
+    skip: &[i64],
+) -> Result<Vec<TrackRow>, DbError> {
+    let mut sql = Sql::default();
+    sql.push(&format!("SELECT {TRACK_COLUMNS} FROM tracks"));
+    if !overwrite && kind == "lyrics" {
+        sql.push(" LEFT OUTER JOIN lyrics ON tracks.id = lyrics.track_id");
+    }
+    sql.push(" WHERE 1=1");
+    if let Some(ids) = ids {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        sql.push(" AND tracks.id IN ");
+        sql.placeholders(ids.iter().map(|id| BigInt(*id).value()));
+    }
+    if !overwrite {
+        if !skip.is_empty() {
+            sql.push(" AND tracks.id NOT IN ");
+            sql.placeholders(skip.iter().map(|id| Value::BigInt(*id)));
+        }
+        match kind {
+            "release_date" => sql.push(" AND (tracks.year IS NULL OR tracks.year = 0)"),
+            "lyrics" => sql.push(" AND (lyrics.track_id IS NULL OR length(trim(lyrics.content)) = 0)"),
+            _ => {}
+        }
+    }
+    let mut statement = conn.prepare(&sql.text)?;
+    let rows = statement.query_map(params_from_iter(sql.params), |row| TrackRow::from_row(row, 0))?.collect::<Result<_, _>>()?;
+    Ok(rows)
+}
+
+/// Set one track's year.
+pub fn set_year(conn: &Connection, track_id: i64, year: i64) -> Result<(), DbError> {
+    conn.execute("UPDATE tracks SET year=? WHERE tracks.id = ?", params![year, track_id])?;
+    Ok(())
+}
+
+/// `find_all(limit=...)`: the first tracks in table order.
+pub fn first_tracks(conn: &Connection, limit: i64) -> Result<Vec<TrackRow>, DbError> {
+    let mut statement = conn.prepare(&format!("SELECT {TRACK_COLUMNS} FROM tracks LIMIT ? OFFSET 0"))?;
+    let rows = statement.query_map([limit], |row| TrackRow::from_row(row, 0))?.collect::<Result<_, _>>()?;
+    Ok(rows)
+}
