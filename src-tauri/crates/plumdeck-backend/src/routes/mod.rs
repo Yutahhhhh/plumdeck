@@ -7,6 +7,7 @@ pub mod csv_io;
 pub mod dashboard;
 pub mod file_tags;
 pub mod genres;
+pub mod ingest;
 pub mod junction;
 pub mod lyrics;
 pub mod mcp;
@@ -106,6 +107,18 @@ pub fn api() -> Router<AppState> {
         .route("/api/workflows/recordings/{recording_id}/timeline/engine", post(workflows::upsert_recording_engine_timeline))
         .route("/api/workflows/recordings/{recording_id}/tracklist.txt", get(workflows::recording_tracklist))
         .route("/api/workflows/recordings/external", post(workflows::register_external_recording))
+        .route("/api/ingest", post(ingest::ingest))
+        .route("/api/ingest/status", get(ingest::ingest_status))
+        .route("/api/ingest/cancel", post(ingest::cancel_ingest))
+        .route("/ws/ingest", get(ingest::ws_ingest))
+        .route("/ws/play-imports", get(ingest::ws_play_imports))
+        .route("/api/grid-jobs/plan", post(ingest::plan_grid_job))
+        .route("/api/grid-jobs", get(ingest::grid_job_status).post(ingest::start_grid_job))
+        .route("/api/grid-jobs/{job_id}/{action}", post(ingest::control_grid_job))
+        .route("/api/tracks/{track_id}/grid-analysis", post(ingest::grid_analysis))
+        .route("/api/workflows/play/imports", get(ingest::list_play_imports).post(ingest::create_play_import))
+        .route("/api/workflows/play/imports/{batch_id}", get(ingest::get_play_import))
+        .route("/api/workflows/play/imports/{batch_id}/{action}", post(ingest::control_play_import))
         .route("/api/mcp/info", get(mcp::info))
         .route("/mcp", post(mcp::post).get(mcp::get_stream).delete(mcp::delete_session))
         .route("/api/assist/library-status", get(assist::library_status))

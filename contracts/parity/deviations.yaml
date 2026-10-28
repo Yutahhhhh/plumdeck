@@ -201,3 +201,17 @@ deviations:
       so stored rows say which implementation produced them. Embeddings
       are not computed yet (W1-27/W1-28) and answer an error.
     current: analysis-quality gates (RB-30) and the owner's replay check decide when it becomes the default.
+  - id: D-25
+    status: proposed
+    source: backend/app/services/ingestion_app_service.py, analysis_job_service.py, play_import_service.py
+    summary: >
+      Import, analysis jobs and Play imports run the Rust analyzer in
+      `--analysis-worker` subprocesses. The analysis profile is always the
+      single full pipeline (auto/light/full are accepted and recorded but
+      no light fallback exists). `.lrc` lyrics are stored but no longer
+      written into the audio file's tags during import, and the
+      filename-based metadata guess is not ported. Embedding jobs are not
+      queued until the Rust MusiCNN lands (W1-28); rows keep "pending".
+      Component versions of Python's analyzers count as current, so nothing
+      is re-analysed by only_outdated after the switch.
+    current: proposed; the embedding part is temporary.

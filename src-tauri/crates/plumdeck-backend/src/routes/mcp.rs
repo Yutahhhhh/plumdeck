@@ -5,8 +5,8 @@
 //! The tools and prompts are the contract in contracts/mcp/. Each tool runs
 //! the same service code as the HTTP routes, mostly by calling the ported
 //! route in-process and reshaping its answer the way the Python tool did.
-//! Analysis tools come with S11; until then they answer a tool error
-//! (deviation D-22). Junction tools go through [`crate::routes::junction`].
+//! Analysis tools run the job service of S11; Junction tools go through
+//! [`crate::routes::junction`].
 
 use axum::body::{Body, Bytes};
 use axum::extract::State;
@@ -791,7 +791,10 @@ async fn run(state: &AppState, name: &str, a: &Value) -> ToolResult {
         }
         // ---- Junction (through the desktop port)
         name if name.starts_with("junction_") => crate::routes::junction::call(state.junction.as_ref(), name, a).await.map_err(Some),
-        // ---- analysis (S11)
+        // ---- analysis jobs
+        "plan_track_analysis" | "start_track_analysis" | "get_track_analysis_status" | "pause_track_analysis" | "resume_track_analysis" => {
+            crate::routes::ingest::mcp_tool(state, name, a).await.map_err(Some)
+        }
         _ => Err(Some("この機能はまだ Rust バックエンドに移植されていません".into())),
     }
 }

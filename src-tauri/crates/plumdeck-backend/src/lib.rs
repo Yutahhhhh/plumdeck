@@ -22,6 +22,7 @@ pub mod response;
 pub mod routes;
 pub mod sandbox;
 pub mod startup;
+pub mod analysis;
 pub mod tasks;
 
 use std::future::Future;
@@ -89,12 +90,15 @@ pub struct AppState {
     pub assist: routes::assist::AssistBridge,
     /// Where the MCP Junction tools send their actions (S12).
     pub junction: Arc<dyn routes::junction::JunctionPort>,
+    /// Import, analysis jobs and Play imports (S11).
+    pub analysis: routes::ingest::AnalysisState,
 }
 
 impl AppState {
     pub fn new(db: DbHandle, cors: CorsPolicy) -> Self {
+        let analysis = routes::ingest::AnalysisState::new(db.clone(), Arc::new(SystemClock));
         let library_dir = db.path().parent().map(std::path::Path::to_path_buf).unwrap_or_default();
-        Self { db, cors: Arc::new(cors), clock: Arc::new(SystemClock), metadata: routes::metadata_jobs::MetadataJobs::new(library_dir), assist: Default::default(), junction: routes::junction::default_port() }
+        Self { db, cors: Arc::new(cors), clock: Arc::new(SystemClock), metadata: routes::metadata_jobs::MetadataJobs::new(library_dir), assist: Default::default(), junction: routes::junction::default_port(), analysis }
     }
 
     /// Run blocking work (DuckDB) off the async workers; a panic in it is a

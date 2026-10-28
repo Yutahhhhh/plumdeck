@@ -173,13 +173,63 @@ impl AnalysisJobQueue {
 
     /// Insert a paused job and its items; returns the new uuid4 hex id.
     pub fn create(&self, config: &Value, tracks: &[QueueItem]) -> Result<String, DbError> {
+        self.create_with_status(config, tracks, "paused")
+    }
+
+    /// (id, background) of the jobs, oldest first (optionally one status);
+    /// none without a queue file.
+    pub fn ids(&self, status: Option<&str>) -> Result<Vec<(String, bool)>, DbError> {
+        if !self.path.exists() {
+            return Ok(Vec::new());
+        }
+        let opened = self.connect()?;
+        let rows: Vec<(String, Option<String>)> = match status {
+            Some(status) => opened.conn.prepare("SELECT id,config FROM jobs WHERE status=? ORDER BY created")?.query_map(params![status], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?,
+            None => opened.conn.prepare("SELECT id,config FROM jobs ORDER BY created")?.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?,
+        };
+        rows.into_iter().map(|(id, config)| Ok((id, is_background(config.as_deref()).unwrap_or(false)))).collect()
+    }
+
+    /// `next_queued`: the oldest queued job, user jobs before automatic ones.
+    pub fn next_queued(&self, background: Option<bool>) -> Result<Option<String>, DbError> {
+        let mut rows: Vec<(String, bool)> = self.ids(Some("queued"))?.into_iter().filter(|(_, bg)| background.is_none_or(|b| b == *bg)).collect();
+        rows.sort_by_key(|(_, bg)| *bg);
+        Ok(rows.into_iter().next().map(|(id, _)| id))
+    }
+
+    /// `latest_id`.
+    pub fn latest_id(&self, background: Option<bool>) -> Result<Option<String>, DbError> {
+        Ok(self.ids(None)?.into_iter().filter(|(_, bg)| background.is_none_or(|b| b == *bg)).map(|(id, _)| id).last())
+    }
+
+    /// (track_id, filepath) of pending or running items of active automatic
+    /// embedding jobs.
+    pub fn outstanding_embeddings(&self) -> Result<Vec<(i64, Option<String>)>, DbError> {
+        if !self.path.exists() {
+            return Ok(Vec::new());
+        }
+        let opened = self.connect()?;
+        let rows: Vec<(i64, Option<String>, Option<String>)> = opened
+            .conn
+            .prepare("SELECT i.track_id, i.filepath, j.config FROM items i JOIN jobs j ON j.id = i.job_id WHERE j.status IN ('queued', 'running', 'pausing') AND i.status IN ('pending', 'running')")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<Result<_, _>>()?;
+        Ok(rows
+            .into_iter()
+            .filter(|(_, _, config)| config.as_deref().and_then(|c| serde_json::from_str::<Value>(c).ok()).is_some_and(|c| c["background"].as_bool().unwrap_or(false) && c["features"].as_array().is_some_and(|f| f.iter().any(|x| x == "embedding"))))
+            .map(|(id, path, _)| (id, path))
+            .collect())
+    }
+
+    /// [`Self::create`] with an initial status.
+    pub fn create_with_status(&self, config: &Value, tracks: &[QueueItem], status: &str) -> Result<String, DbError> {
         let job_id = uuid::Uuid::new_v4().simple().to_string();
         let now = self.clock.epoch_seconds();
         let config = py_dumps(config)?;
         self.write(|conn| {
             conn.execute(
                 "INSERT INTO jobs (id,status,config,created,updated) VALUES (?,?,?,?,?)",
-                params![job_id, "paused", config, now, now],
+                params![job_id, status, config, now, now],
             )?;
             let mut insert = conn.prepare("INSERT INTO items (job_id,track_id,filepath) VALUES (?,?,?)")?;
             for track in tracks {
