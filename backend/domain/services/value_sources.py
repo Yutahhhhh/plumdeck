@@ -23,6 +23,8 @@ FIELDS = ("bpm", "key")
 
 # Owner decision: rekordbox replaces plumdeck's own key detection only after a
 # replay evaluation shows no regression. The settings row overrides this default.
+# The replay over 600 HISTORY transitions (BPM synced in both arms) was mixed:
+# bright MRR .083 -> .087 but emotional .053 -> .050, so the default stays off.
 KEY_SOURCE_SETTING = "rekordbox_key_source"
 KEY_SOURCE_DEFAULT = False
 
