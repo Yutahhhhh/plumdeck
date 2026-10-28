@@ -47,7 +47,11 @@ function Preview() {
       progress={fixture(step, error)}
       seconds={seconds}
       connectionError={connectionError}
-      onRetry={() => console.info("[startup preview] retry requested")}
+      onRetry={() => {
+        // Like useStartupProgress, a retry restarts the hook's own elapsed counter.
+        console.info("[startup preview] retry requested");
+        setSeconds(0);
+      }}
     />
   );
 }
