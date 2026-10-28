@@ -18,6 +18,7 @@ import { barNumbers, lowerBeat } from "./beat-grid-math";
 import { availablePadModes, PerformancePads, UNBACKED_PAD_MODES, type PadMode } from "./PerformancePads";
 import type { PadFxSlot } from "@/services/midi/pad-presets";
 import { padFxCaption } from "@/services/midi/pad-fx-send";
+import { beatJumpPages, KEY_SHIFT_PAGES } from "@/services/midi/pad-presets";
 import { PadModeSelect } from "./PadModeSelect";
 import { AutoBeatLoop, type LoopMode } from "./AutoBeatLoop";
 import { beatLoopPress, clampBeats, loopBeats, LOOP_BEATS_RANGE, LOOP_BEATS_RANGE_EXTENDED, resizeLoop, stepBeats } from "./loop-math";
@@ -94,7 +95,8 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
   const memoryPoints = useMemo(() => memoryTrack ? memoryCues(memoryTrack, deck?.track?.durationMs) : [], [memoryTrack, deck?.track?.durationMs, memoryRevision]);
   const memorySelected = selectedMemoryCue(id, memoryTrack);
   const displayedPage = padMode==="sampler"?samplerState.bank:extraMode?extraPage:padPage;
-  const lastPage = padMode==="sampler"?3:padMode==="memorycue"?Math.min(7,Math.max(1,Math.ceil(memoryPoints.length/8)-1)):1;
+  const lastPage = padMode==="sampler"?3:padMode==="memorycue"?Math.min(7,Math.max(1,Math.ceil(memoryPoints.length/8)-1))
+    :padMode==="beatjump"?beatJumpPages(capabilities).length-1:padMode==="keyshift"||padMode==="keyboard"?KEY_SHIFT_PAGES-1:1;
   const movePage = (delta:number) => {
     if(padMode==="sampler") void sampler.command("bank",{bank:Math.max(0,Math.min(3,samplerState.bank+delta))}).catch(error=>setPadError(String(error)));
     else if(extraMode) setExtraPage(page=>Math.max(0,Math.min(lastPage,page+delta)));
@@ -143,6 +145,8 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
   const keyShift = Math.round(deck?.keyShift ?? 0);
   const key = currentKey(trackKey, keyShift, rate, Boolean(deck?.keylock), keyNotation);
   const originalKey = formatLibraryKey(trackKey, keyNotation);
+  // KEY ‹ › transposes by semitones and stays usable without a known
+  // original key (shown as ± only); KEY SYNC alone needs the key.
   const keyReason = unavailable("deck.key", "KEY", Boolean(onKeyShift));
   const keySyncReason = keyReason ?? (!capabilities.includes(DJ_ENGINE_CAPABILITIES.deckKeySync) ? "KEY SYNC：この音声エンジンは曲のキーを検出できないため使えません"
     : !parseKey(trackKey) ? "KEY SYNC：この曲のキーが不明です" : !onKeySync ? "KEY SYNC コントローラー未接続" : undefined);

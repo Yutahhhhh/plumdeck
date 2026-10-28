@@ -1,4 +1,4 @@
-import { padPreset, BEAT_LOOP_PAGES, BEAT_JUMP_PAGES, keyPad, PAD_FX_EXTENDED, type PadFxSlot } from "@/services/midi/pad-presets";
+import { padPreset, BEAT_LOOP_PAGES, beatJumpPages, keyPad, PAD_FX_EXTENDED, type PadFxSlot } from "@/services/midi/pad-presets";
 import { padFxGroup, type PadFxGroup } from "@/services/midi/pad-fx-send";
 import { emptyPadFxStack, pressPad, releaseAll, releasePad, pressFx, releaseFx, releaseAllFx, enqueuePadFx, type PadFxCommand, type PadFxStack, type PadFxActiveState } from "./pad-fx-stack";
 import { padColor } from "@/services/midi/pad-colors";
@@ -182,10 +182,11 @@ export function PerformancePads(props: Props) {
     aria-pressed={sameBeats(props.selectedLoopBeats, beats)}
     title={props.beatLoopDisabledReason ?? (sameBeats(props.selectedLoopBeats, beats) ? "ループを抜けます" : props.selectedLoopBeats ? `開始点を保ったまま ${fraction(beats)} 拍に変更` : `${fraction(beats)} 拍のループを現在位置から張ります`)} onClick={() => props.onBeatLoop?.(beats)}><b>{fraction(beats)}</b></button>)}</PadGrid>;
 
-  if (props.mode === "beatjump") return <PadGrid label="Beat jumps">{BEAT_JUMP_PAGES[props.page??0].map((beats,index)=><button key={index}
+  const jumpPages = beatJumpPages(capabilities);
+  if (props.mode === "beatjump") return <PadGrid label="Beat jumps">{jumpPages[Math.min(props.page ?? 0, jumpPages.length - 1)].map((beats,index)=><button key={index}
     className="dj-performance-pad dj-performance-pad--value" disabled={Boolean(props.beatJumpDisabledReason)}
     style={{"--pad-color":padColor(2,index)} as CSSProperties}
-    aria-label={`${Math.abs(beats)}拍${beats<0?"戻る":"進む"}`} onClick={()=>props.onBeatJump?.(beats)}><b>{beats<0?"◀ ":""}{Math.abs(beats)}{beats>0?" ▶":""}</b></button>)}</PadGrid>;
+    aria-label={`${fraction(Math.abs(beats))}拍${beats<0?"戻る":"進む"}`} onClick={()=>props.onBeatJump?.(beats)}><b>{beats<0?"◀ ":""}{fraction(Math.abs(beats))}{beats>0?" ▶":""}</b></button>)}</PadGrid>;
 
   if (props.mode === "padfx" || props.mode === "padfx2") {
     const bank = props.mode === "padfx2" ? 5 : 1;

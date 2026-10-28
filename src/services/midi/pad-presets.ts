@@ -138,7 +138,15 @@ export function padFxParams(preset: BeatPadSlot, extendedHost: boolean): { mix: 
 
 export const BEAT_LOOP_PAGES = [[.125,.25,.5,1,2,4,8,16],[.125,.25,.5,1,8,16,32,64]];
 export const BEAT_JUMP_PAGES = [[-1,1,-2,2,-4,4,-8,8],[-8,8,-16,16,-32,32,-64,64]];
+/** Hosts with deck.loop.range.v2 (jumps 1/64..128) add a FINE page and 128. */
+export const BEAT_JUMP_FINE_PAGE = [-1/8,1/8,-1/4,1/4,-1/2,1/2,-128,128];
+export function beatJumpPages(capabilities: readonly string[] = []): number[][] {
+  return capabilities.includes("deck.loop.range.v2") ? [...BEAT_JUMP_PAGES, BEAT_JUMP_FINE_PAGE] : BEAT_JUMP_PAGES;
+}
+/** KEY SHIFT / KEYBOARD pages: −8..−1, 0..+7, +8..+12, −12..−9 (the header ‹ › also spans ±12). */
+export const KEY_SHIFT_PAGES = 4;
 export function keyPad(page: number, pad: number): number | null {
-  const value = [-8,0][page] + (pad & 7);
-  return Number.isFinite(value) && value <= 12 ? value : null;
+  const index = pad & 7;
+  const value = page === 3 ? (index < 4 ? -12 + index : NaN) : [-8, 0, 8][page] + index;
+  return Number.isFinite(value) && Math.abs(value) <= 12 ? value : null;
 }
