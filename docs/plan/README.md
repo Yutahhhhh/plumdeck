@@ -171,7 +171,8 @@
 - ~~**S3** ライブラリの中核~~（完了。`/api/fs/list` は D-15 として DROP を記録）。
 - **W1-06 / Opus**：`plumdeck-decode` の OS フォールバック（HE-AAC）と Opus（Mac / Win のランナーが要る）。
 - ~~**W1-07** `plumdeck-dsp`~~（完了。ポリフェーズと可変比のリサンプラ、Hann / Kaiser、STFT、RBJ biquad、RMS / peak。通過域 ±0.0001 dB 未満、阻止域 −93 dB 以下、処理中の割り当て 0 をテストで確認）。
-- **W2-01** エンジン契約 v1 の機械可読化（op・イベント・capability・エラー・定数とドリフト検査は済。params の Schema は W2-09 で）、**W2-30** Junction の仕様ベースライン（どちらも C++ / TS からの抽出なので Linux で可）。
+- **W2-01** エンジン契約 v1 の機械可読化（op・イベント・capability・エラー・定数とドリフト検査は済。params の Schema は W2-09 で）。
+- ~~**W2-30** Junction の仕様ベースライン~~（完了。`native/junction-spec/`：テスト 213 件、コマンド 51、制御メッセージ 9、定数 37。`tools/junction-spec/baseline.mjs` の検査を CI で実行）。
 
 ### 段 2：バックエンドの主要スライス
 

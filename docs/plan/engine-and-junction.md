@@ -182,7 +182,7 @@ release-integration で、UI の修正と Mixxx ホストで小さく直せる�
 
 | ID | 内容 | 受け入れ基準の要点 |
 |---|---|---|
-| W2-30 | 仕様ベースラインと追跡台帳（`native/junction-spec/`：SPEC.md、TESTMAP.json、OPMAP.json、CONSTANTS.json、BASELINE.json、PORTING-LEDGER.md）と検査スクリプト | 既存のテストと op をすべて見つけ、追加・変更・不一致を検出 |
+| W2-30 | 仕様ベースラインと追跡台帳（`native/junction-spec/`：SPEC.md、TESTMAP.json、OPMAP.json、CONSTANTS.json、BASELINE.json、PORTING-LEDGER.md）と検査スクリプト | 既存のテストと op をすべて見つけ、追加・変更・不一致を検出。**済**：C++ の JTEST、ネイティブの Node、フロント、シグナリング、MCP のテスト 213 件、`junction.*` コマンド 51、制御メッセージ 9、定数 37 を抽出。ソース・テスト・コマンド・定数の変更、SPEC.md に無いコマンド、台帳の移植先が存在しない場合を CI（`tools/junction-spec/baseline.mjs`）で検出。不一致 2 件（`private.stop` が JunctionOp に無い、C++ のスイート名の揺れ）は OPMAP.json に記録 |
 | W2-31 | C++ 参照実装の Linux ビルド、ベクタの生成、参照ピア（macOS ランナーでも生成し、Qt の版による JSON 書式の差を検査） | ctest が通る、ベクタが決定的、参照ピア同士の接続 |
 | W2-32 | `junction.*` の記録（音声の要らないシナリオの要求・応答・スナップショット） | op 群の正常系と異常系が記録されている |
 | W2-33 | junction-core①：ids、Qt 互換の JSON 正準化、manual_exchange（P-256 の ECDSA、W5 と W6 の decode）、session_protocol、authority、turn_state、program_mixer、ice_servers、network_settings。C++ のテストを同じ名前で移植 | 正準バイト列の sha が全件一致、署名の相互検証、Qt 非依存 |
