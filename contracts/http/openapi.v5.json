@@ -9342,6 +9342,28 @@
             ],
             "title": "Year"
           },
+          "bpm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bpm"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
           "is_genre_verified": {
             "anyOf": [
               {
@@ -9703,6 +9725,11 @@
               }
             ],
             "title": "Grid Warning"
+          },
+          "grid_pending": {
+            "type": "boolean",
+            "title": "Grid Pending",
+            "default": false
           }
         },
         "type": "object",
@@ -10349,6 +10376,17 @@
               }
             ],
             "title": "Bpm"
+          },
+          "is_analyzed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Analyzed"
           },
           "analysis_level": {
             "anyOf": [

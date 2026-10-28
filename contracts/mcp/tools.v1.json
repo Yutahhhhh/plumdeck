@@ -769,7 +769,7 @@
   },
   {
     "name": "recommend_next_track",
-    "description": "指定した曲の次に繋ぐのに適した楽曲を、BPM/キー/音響類似度からスコアリングして提案する。\n    ユーザーの自然言語の方向性はMCPクライアント側で target_* 値へ解釈する。\n    target未指定なら純粋にベクトル/BPM/キーのみで評価する。\n    year_min/year_max は候補曲のリリース年の範囲（両端を含む）。指定時は年不明の曲を除く。\n    ",
+    "description": "指定した曲の次に繋ぐのに適した楽曲を、BPMと音色の類似度（埋め込み）からスコアリングして提案する。\n    キーは採点に使わない（重み0）。埋め込みが計算待ちの曲は類似度を除き、残りの重みで採点する。\n    ユーザーの自然言語の方向性はMCPクライアント側で target_* 値へ解釈する。\n    target未指定なら BPM と音色の類似度だけで評価する。\n    year_min/year_max は候補曲のリリース年の範囲（両端を含む）。指定時は年不明の曲を除く。\n    ",
     "inputSchema": {
       "properties": {
         "track_id": {
@@ -2352,7 +2352,7 @@
   },
   {
     "name": "start_track_analysis",
-    "description": "選択した音響項目だけをDBへ再解析する永続ジョブを開始し、すぐにjob idを返す。\n    features: embedding（既定）, rhythm, key, timbre, waveform。メタデータ・ジャンル・歌詞・音源ファイルは変更しない。\n    only_outdated=Trueで処理済みをスキップ。workersは1〜4（既定2）。MCP切断後もアプリ内で継続する。\n    アプリ終了後はresume_track_analysisで再開する。進捗はget_track_analysis_statusで確認。\n    ",
+    "description": "選択した音響項目だけをDBへ再解析する永続ジョブを開始し、すぐにjob idを返す。\n    features: embedding（既定）, rhythm, key, timbre, waveform。メタデータ・ジャンル・歌詞・音源ファイルは変更しない。\n    BPMは 手動（CSV）> rekordbox > 解析結果 の順で保存する（キーも、設定 rekordbox_key_source がオンなら同じ）。\n    rhythmだけのジョブはグリッドの更新で、rekordboxのグリッドがある曲を除外し、既存のBPMは変えない。\n    only_outdated=Trueで処理済みをスキップ。workersは1〜4（既定2）。MCP切断後もアプリ内で継続する。\n    アプリ終了後はresume_track_analysisで再開する。進捗はget_track_analysis_statusで確認。\n    ",
     "inputSchema": {
       "properties": {
         "track_ids": {
@@ -5044,7 +5044,7 @@
   },
   {
     "name": "plan_phased_setlist",
-    "description": "展開（フェーズ）ごとの候補プールから、繋ぎと流れを考慮してセット全体を組む。\n    フェーズは指定順に並び、各フェーズ内は BPM/キー/音響類似度の繋ぎやすさ、\n    エネルギー/BPM の推移目標、承認済みワードプレイで順序を決める。\n    フェーズの切り替わり（最初の1曲）は前フェーズ最後の曲との繋ぎを特に重視する。\n\n    phases の各要素（label と count は必須、候補ソースは1つ以上推奨）:\n      label: 展開名（例: 'ウォームアップ', 'HIPHOP ピーク', 'Latin で切り替え'）\n      count: そのフェーズの曲数 (1..60)\n      rekordbox_playlists: rekordbox のプレイリスト/フォルダの ID かパスのリスト（フォルダは配下全部）\n      track_ids: 候補に入れる曲 id\n      anchor_track_ids: 必ず入れる曲 id（DJ が明示した曲）\n      artists: 好きなアーティスト名（部分一致）。その曲を候補に入れる\n      similar_to_track_ids: この曲たちに音響的に似た曲を候補に足す\n      expand_similar: true ならこのフェーズの候補全曲を種に類似曲を足す（最大12曲分）\n      similar_per_seed: 種1曲あたりの類似曲数 (1..30, 既定8)\n      genres / subgenres / year_min / year_max: 拡張候補（artists/類似/ワードプレイ/条件検索）の絞り込み。\n        プレイリスト・track_ids・anchor は DJ が選んだ曲としてそのまま使う\n      energy_start / energy_end: フェーズ内のエネルギー推移目標 (0..1)\n      bpm_start / bpm_end: フェーズ内の BPM 推移目標\n      keep_order: true ならプレイリスト等の並び順をそのまま使う\n    候補ソースが1つもないフェーズは genres/年代/エネルギー/BPM でライブラリ全体から探す。\n\n    exclude_artists は部分一致で除外する（anchor/track_ids で明示した曲は除外しない）。\n    opening_track_id は直前にかかっている曲（結果には含めず、最初の繋ぎの起点にする）。\n    include_wordplay_targets=true なら候補曲から承認済みワードプレイで繋がる曲も\n    その直後専用の候補として加える（pending のペアは使わない）。\n    wordplay_bonus (0..1, 既定0.25) は承認済みワードプレイで繋がる遷移への加点。\n    DJ がワードプレイを多めに入れたいときは 0.5〜0.8 に上げる（繋ぎやすさより優先される）。\n    保存しない場合は結果の track_data を set_setlist_tracks に渡すとワードプレイ注釈ごと保存できる。\n    save_as_setlist_name を渡すとその名前で新しいセットリストを作成して保存する。",
+    "description": "展開（フェーズ）ごとの候補プールから、繋ぎと流れを考慮してセット全体を組む。\n    フェーズは指定順に並び、各フェーズ内は BPM と音色の類似度の繋ぎやすさ（キーは採点しない）、\n    エネルギー/BPM の推移目標、承認済みワードプレイで順序を決める。\n    フェーズの切り替わり（最初の1曲）は前フェーズ最後の曲との繋ぎを特に重視する。\n\n    phases の各要素（label と count は必須、候補ソースは1つ以上推奨）:\n      label: 展開名（例: 'ウォームアップ', 'HIPHOP ピーク', 'Latin で切り替え'）\n      count: そのフェーズの曲数 (1..60)\n      rekordbox_playlists: rekordbox のプレイリスト/フォルダの ID かパスのリスト（フォルダは配下全部）\n      track_ids: 候補に入れる曲 id\n      anchor_track_ids: 必ず入れる曲 id（DJ が明示した曲）\n      artists: 好きなアーティスト名（部分一致）。その曲を候補に入れる\n      similar_to_track_ids: この曲たちに音響的に似た曲を候補に足す\n      expand_similar: true ならこのフェーズの候補全曲を種に類似曲を足す（最大12曲分）\n      similar_per_seed: 種1曲あたりの類似曲数 (1..30, 既定8)\n      genres / subgenres / year_min / year_max: 拡張候補（artists/類似/ワードプレイ/条件検索）の絞り込み。\n        プレイリスト・track_ids・anchor は DJ が選んだ曲としてそのまま使う\n      energy_start / energy_end: フェーズ内のエネルギー推移目標 (0..1)\n      bpm_start / bpm_end: フェーズ内の BPM 推移目標\n      keep_order: true ならプレイリスト等の並び順をそのまま使う\n    候補ソースが1つもないフェーズは genres/年代/エネルギー/BPM でライブラリ全体から探す。\n\n    exclude_artists は部分一致で除外する（anchor/track_ids で明示した曲は除外しない）。\n    opening_track_id は直前にかかっている曲（結果には含めず、最初の繋ぎの起点にする）。\n    include_wordplay_targets=true なら候補曲から承認済みワードプレイで繋がる曲も\n    その直後専用の候補として加える（pending のペアは使わない）。\n    wordplay_bonus (0..1, 既定0.25) は承認済みワードプレイで繋がる遷移への加点。\n    DJ がワードプレイを多めに入れたいときは 0.5〜0.8 に上げる（繋ぎやすさより優先される）。\n    保存しない場合は結果の track_data を set_setlist_tracks に渡すとワードプレイ注釈ごと保存できる。\n    save_as_setlist_name を渡すとその名前で新しいセットリストを作成して保存する。",
     "inputSchema": {
       "properties": {
         "phases": {
