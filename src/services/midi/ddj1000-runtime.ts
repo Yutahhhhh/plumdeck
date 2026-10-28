@@ -93,6 +93,8 @@ export class Ddj1000Runtime {
       const next = junctionLeaseKey();
       if (next === this.junctionKey) return;
       this.junctionKey = next; this.epoch++; this.pickup.clear();
+      // COLOR FX is channel state: a held color pad gives the knob back.
+      for (const deck of this.heldFx.keys()) void this.padFx.abandon(deck).catch(() => undefined);
       this.releaseFxHeld = false; this.fxMixLatest = null; this.nativeFxMixLatest = null;
       this.padPresses.clear(); this.cuePreview.clear(); this.heldReverse.clear(); this.heldFx.clear();
       for (const jog of this.jogs.values()) if (jog.releaseTimer) clearTimeout(jog.releaseTimer);
@@ -110,6 +112,8 @@ export class Ddj1000Runtime {
           const held=this.heldFx.get(deck);
           if(!held) return;
           if(this.valid(deck,held.session,held.track)) await this.releasePadFx(deck,held);
+          else if(this.client.getSessionId()===held.session) await this.padFx.abandon(deck);
+          else this.padFx.forget(deck);
           this.heldFx.delete(deck);
         }).catch(e=>this.actions().error(String(e)));
         this.queues.set(deck,next);
@@ -561,11 +565,12 @@ export class Ddj1000Runtime {
         case "beatLoopPad": await this.client.beatLoop(deck, BEAT_LOOP_PAGES[(action.slot! >> 3) & 1][action.slot! & 7]); break;
         case "padFx": {
           // Same slot values as the on-screen pads (one preset table).
-          const preset = padPreset(action.mode, action.slot, this.client.getState().snapshot?.engine.capabilities);
+          const preset = padPreset(action.mode, action.slot, this.client.getState().snapshot?.engine?.capabilities);
           let held = this.held(this.heldFx, deck);
           if (!held) {
-            // Nothing of ours sounds on this deck: a knob value captured for an older track is stale.
-            this.padFx.forget(deck);
+            // Nothing of ours sounds on this track any more. A COLOR pad held
+            // across a load still borrows the channel's knob: give it back.
+            await this.padFx.abandon(deck);
             held = { chain: { pads: [], sounding: null }, color: { pads: [], sounding: null }, session, track };
           }
           this.heldFx.set(deck, held);

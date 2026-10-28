@@ -162,3 +162,77 @@ test("MIDI mode change releases the acknowledged effect after a failed switch", 
     assert.deepEqual(f.calls, [["echo", true], ["flanger", true], ["echo", true], ["echo", false]]);
   } finally { f.runtime.dispose(); await f.wait(); }
 });
+
+const { createPadFxSender, padFxSounding, padFxCaption } = await import("../../services/midi/pad-fx-send.ts");
+const { padPreset } = await import("../../services/midi/pad-presets.ts");
+
+function colorClient(knob = { effect: "filter", amount: 0.3 }) {
+  const calls = [];
+  const channel = { colorFx: { ...knob }, filter: 0 };
+  const client = {
+    getState: () => ({ snapshot: { engine: { capabilities: ["mixer.colorfx", "mixer.filter"] }, mixer: { channels: { A: channel } } } }),
+    setFx: async () => {},
+    setColorFx: async (deck, effect, amount) => { calls.push([deck, effect, amount]); channel.colorFx = { effect, amount }; },
+    setFilter: async () => {},
+  };
+  return { client, calls };
+}
+const LPF = { kind: "color", effect: "filter", label: "FILTER", amount: -0.8, hold: false };
+const NOISE = { kind: "color", effect: "whitenoise", label: "NOISE", amount: 0.5, hold: false };
+
+test("a COLOR pad held across a load still gives the knob back", async () => {
+  const { client, calls } = colorClient();
+  const sender = createPadFxSender(client);
+  await sender.send("A", LPF, true);
+  // Load: the release can no longer reach the old track, but COLOR FX is channel state.
+  await sender.abandon("A");
+  assert.deepEqual(calls, [["A", "filter", -0.8], ["A", "filter", 0.3]]);
+  // Nothing left to give back.
+  await sender.abandon("A");
+  assert.equal(calls.length, 2);
+});
+
+test("overlapping COLOR pads from two sources restore the knob in either release order", async () => {
+  for (const firstRelease of ["mouse", "midi"]) {
+    const { client, calls } = colorClient();
+    const sources = { mouse: createPadFxSender(client), midi: createPadFxSender(client) };
+    await sources.mouse.send("A", LPF, true);
+    await sources.midi.send("A", NOISE, true);
+    const other = firstRelease === "mouse" ? "midi" : "mouse";
+    await sources[firstRelease].send("A", firstRelease === "mouse" ? LPF : NOISE, false);
+    await sources[other].send("A", other === "mouse" ? LPF : NOISE, false);
+    const remaining = firstRelease === "mouse" ? ["A", "whitenoise", 0.5] : ["A", "filter", -0.8];
+    assert.deepEqual(calls, [["A", "filter", -0.8], ["A", "whitenoise", 0.5], remaining, ["A", "filter", 0.3]], firstRelease);
+  }
+});
+
+test("MIDI COLOR pad released after a load gives the knob back", async () => {
+  selectPads("A", 1);
+  const { client: color, calls } = colorClient();
+  let generation = 1;
+  const decks = Object.fromEntries(["A", "B", "C", "D"].map(id => [id, { track: { trackId: id }, status: "paused" }]));
+  const state = color.getState().snapshot;
+  const client = { ...color, getState: () => ({ snapshot: { ...state, decks } }), getSessionId: () => "session", getDeckGeneration: () => generation, refreshSnapshot: async () => {} };
+  const actions = { activate() {}, library() {}, hotcue: async () => {}, cuePoints: { A: 0, B: 0, C: 0, D: 0 }, error: () => {} };
+  const runtime = new Ddj1000Runtime(client, () => actions);
+  try {
+    // Bank 1 pad 2 is the COLOR low-pass on hosts with a filter.
+    assert.equal(padPreset(1, 1, ["mixer.filter"]).kind, "color");
+    runtime.dispatch({ deck: "A", control: "padFx", mode: 1, slot: 1, value: 1, pressed: true }); await runtime.queues.get("A");
+    generation = 2;
+    runtime.dispatch({ deck: "A", control: "padFx", mode: 1, slot: 1, value: 0, pressed: false }); await runtime.queues.get("A");
+    assert.deepEqual(calls, [["A", "filter", -0.8], ["A", "filter", 0.3]]);
+  } finally { runtime.dispose(); await runtime.queues.get("A"); }
+});
+
+test("PAD FX lamps and caption name only the pad that sounds", () => {
+  const capabilities = ["mixer.fx.beats"];
+  const echo = beats => ({ fx: { effect: "echo", enabled: true, mix: 0.5, depth: 0.55, beats } });
+  // Bank 1: pad 5 is ECHO 1/4, pad 6 ECHO 1/2.
+  assert.equal(padFxSounding(padPreset(1, 4, capabilities), echo(1 / 4), capabilities), true);
+  assert.equal(padFxSounding(padPreset(1, 5, capabilities), echo(1 / 4), capabilities), false);
+  assert.equal(padFxCaption(1, echo(1 / 4), capabilities), "ECHO 1/4");
+  assert.equal(padFxCaption(1, { fx: { effect: "sliproll", enabled: true, mix: 1, depth: 1, beats: 3 } }, capabilities), "SLIP ROLL");
+  assert.equal(padFxCaption(1, { colorFx: { effect: "filter", amount: -0.8 } }, ["mixer.filter"]), "FILTER LPF");
+  assert.equal(padFxCaption(1, { fx: { effect: "echo", enabled: false, mix: 0.5 } }, capabilities), null);
+});

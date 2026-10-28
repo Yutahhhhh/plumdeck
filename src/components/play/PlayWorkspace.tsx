@@ -871,8 +871,10 @@ export function PlayWorkspace() {
     onQuantize={(enabled) => void run(() => client.setQuantize(id, enabled))}
     fxContext={`${fxSession}:${fxGeneration}:${fxLease}`}
     onPadFx={(slot, enabled) => {
-      // A release after a load or reconnect has nothing left to stop.
-      if (client.getSessionId() !== fxSession || client.getDeckGeneration(id) !== fxGeneration || junctionLeaseKey() !== fxLease) { padFx.forget(id); return Promise.resolve(); }
+      // A release after a load or reconnect has no chain FX left to stop, but
+      // COLOR FX is channel state: a COLOR pad still gives the knob back.
+      if (client.getSessionId() !== fxSession) { padFx.forget(id); return Promise.resolve(); }
+      if (client.getDeckGeneration(id) !== fxGeneration || junctionLeaseKey() !== fxLease) return enabled ? Promise.resolve() : padFx.abandon(id);
       return padFx.send(id, slot, enabled);
     }}
     onFxError={(e) => setCommandError(e instanceof Error ? e.message : String(e))}

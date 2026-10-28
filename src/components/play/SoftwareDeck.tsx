@@ -17,6 +17,7 @@ import { artworkUrl, useTrackVisuals } from "./useTrackVisuals";
 import { barNumbers, lowerBeat } from "./beat-grid-math";
 import { availablePadModes, PerformancePads, UNBACKED_PAD_MODES, type PadMode } from "./PerformancePads";
 import type { PadFxSlot } from "@/services/midi/pad-presets";
+import { padFxCaption } from "@/services/midi/pad-fx-send";
 import { PadModeSelect } from "./PadModeSelect";
 import { AutoBeatLoop, type LoopMode } from "./AutoBeatLoop";
 import { beatLoopPress, clampBeats, loopBeats, LOOP_BEATS_RANGE, LOOP_BEATS_RANGE_EXTENDED, resizeLoop, stepBeats } from "./loop-math";
@@ -82,6 +83,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
   // selection would drop back to its mode.
   const [extraPage, setExtraPage] = useState(0);
   const padMode = extraMode ?? PAD_MODE_NAMES[selection.mode];
+  const fxCaption = padMode === "padfx" || padMode === "padfx2" ? padFxCaption(padMode === "padfx2" ? 5 : 1, channel, capabilities) : null;
   const [memoryRevision, setMemoryRevision] = useState(0);
   useEffect(() => {
     const changed = () => setMemoryRevision((value) => value + 1);
@@ -278,7 +280,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
           </>}
           <div className="dj-perf-caption">
             <span>{bar === null ? "BAR —" : `BAR ${bar} · ${beatInBar ?? "—"}/${beatsPerBar}`}</span>
-            <span>{gridEditor ? "GRID編集中 · 再生操作は利用可" : UNBACKED_PAD_MODES[padMode] ? "この音声エンジン未対応" : padMode === "hotcue" ? (hotCueReason ?? "SHIFT: CLEAR") : padMode === "padfx" || padMode === "padfx2" ? (fxReason ?? (channel?.fx?.enabled ? `FX ON · ${channel.fx.effect.toUpperCase()}` : "押している間だけ有効")) : padMode === "memorycue" ? (memoryReason ?? `MEMORY ${memoryPoints.length}`) : (padMode === "beatloop" ? loopReason : jumpReason) ?? "READY"}</span>
+            <span>{gridEditor ? "GRID編集中 · 再生操作は利用可" : UNBACKED_PAD_MODES[padMode] ? "この音声エンジン未対応" : padMode === "hotcue" ? (hotCueReason ?? "SHIFT: CLEAR") : padMode === "padfx" || padMode === "padfx2" ? (fxReason ?? fxCaption ?? "押している間だけ有効") : padMode === "memorycue" ? (memoryReason ?? `MEMORY ${memoryPoints.length}`) : (padMode === "beatloop" ? loopReason : jumpReason) ?? "READY"}</span>
           </div>
         </div>
       </div>
