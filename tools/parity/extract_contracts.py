@@ -3,27 +3,42 @@
     python tools/parity/extract_contracts.py [--out contracts] [--keep-db DIR]
 
 Writes:
+  oracle.json                            interpreter, Unicode and package versions
   schema/v5.sql, schema/v5.columns.json  catalog of a fresh DB made by init_db()
+  schema/v5.columns.migrated.json        column order of an upgraded library
   http/openapi.v5.json                   main.app.openapi()
+  http/routes.v5.json                    every route: serializer per operation,
+                                         WebSockets with their first message,
+                                         routes outside the OpenAPI document
   mcp/tools.v1.json                      tools/list as sent on the wire
   mcp/prompts.v1.json                    prompts/list as sent on the wire
   mcp/instructions.txt                   server instructions, verbatim
 
-The backend is imported, never edited. DB_PATH and USER_DATA_DIR point into a
+The backend is imported, never edited. Every backend location points into a
 fresh temporary directory before any backend module is imported.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib.metadata
 import json
 import os
+import platform
+import re
 import shutil
 import sys
 import tempfile
+import unicodedata
 from pathlib import Path
 
 import parity_env
+
+# Packages whose behaviour reaches the wire or the DB file. backend/requirements.txt
+# leaves fastapi and pydantic unpinned, so the oracle records what it ran.
+ORACLE_PACKAGES = ("fastapi", "starlette", "pydantic", "pydantic-core", "pydantic-settings",
+                   "mcp", "uvicorn", "duckdb", "duckdb-engine", "sqlmodel", "sqlalchemy",
+                   "platformdirs")
 
 
 def dump_json(path: Path, value) -> None:
@@ -90,6 +105,9 @@ def schema_contract(db_path: Path, table_order: list[str]) -> tuple[str, dict]:
     contract: dict = {
         "duckdb_version": version,
         "schema_version": 5,
+        # Ordinals are a fresh file's; upgraded libraries append ALTER-added
+        # columns (v5.columns.migrated.json), so match real DBs by name.
+        "layout": "fresh",
         "sequences": [
             {"name": name, "start_value": start, "min_value": lo, "max_value": hi,
              "increment_by": inc, "cycle": cycle}
@@ -113,6 +131,163 @@ def schema_contract(db_path: Path, table_order: list[str]) -> tuple[str, dict]:
     return sql_text, contract
 
 
+def migrated_layout(fresh_db: Path, work: Path, fresh: dict) -> dict:
+    """Column order of a library created before the ALTER-added columns
+    existed, then upgraded by the backend's own init_raw_db.
+
+    ALTER TABLE ADD COLUMN appends, while a fresh CREATE TABLE has those
+    columns in the middle, so real libraries differ from v5.columns.json in
+    physical order (and in `SELECT *` row and key order). Match by name.
+    """
+    import duckdb
+    from infra.database import schema
+    from infra.database.connection import create_library_engine
+
+    statements = list(schema.COMPATIBILITY_STATEMENTS)
+    for version in sorted(schema.MIGRATIONS):
+        statements += schema.MIGRATIONS[version]
+    added: list[tuple[str, str, str]] = []
+    for statement in statements:
+        match = re.match(r"ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS (\w+)", statement)
+        if match:
+            added.append((match.group(1), match.group(2), statement))
+
+    legacy = work / "migrated.duckdb"
+    shutil.copy2(fresh_db, legacy)
+    con = duckdb.connect(str(legacy))
+    try:
+        for table, column, _statement in added:
+            con.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+        # Version 1 replays every MIGRATIONS entry, as an old library would.
+        con.execute("UPDATE schema_info SET value = '1' WHERE key = 'version'")
+        con.execute("CHECKPOINT")
+    finally:
+        con.close()
+    engine = create_library_engine(f"duckdb:///{legacy}")
+    try:
+        schema.init_raw_db(engine)
+    finally:
+        engine.dispose()
+    con = duckdb.connect(str(legacy), read_only=True)
+    try:
+        rows = con.execute(
+            """SELECT table_name, column_name, data_type FROM duckdb_columns()
+               WHERE database_name = current_database() AND schema_name = 'main'
+               ORDER BY table_name, column_index""").fetchall()
+    finally:
+        con.close()
+
+    layout: dict[str, list[str]] = {}
+    for table, column, data_type in rows:
+        layout.setdefault(table, []).append(column)
+        want = next(c for c in fresh["tables"][table]["columns"] if c["name"] == column)
+        assert want["type"] == data_type, (table, column, data_type)
+    tables = {}
+    for table, columns in layout.items():
+        fresh_order = [c["name"] for c in fresh["tables"][table]["columns"]]
+        assert sorted(columns) == sorted(fresh_order), table
+        if columns != fresh_order:
+            tables[table] = columns
+    return {
+        "note": "Physical column order after init_db upgrades a library created before the "
+                "ALTER-added columns existed. Libraries created in between have other orders; "
+                "read rows by column name. Only tables whose order differs from "
+                "v5.columns.json are listed.",
+        "alter_statements": [statement for _t, _c, statement in added],
+        "tables": tables,
+    }
+
+
+def route_contract(app) -> dict:
+    """Every route of the app, including what app.openapi() leaves out."""
+    from fastapi.datastructures import DefaultPlaceholder
+    from fastapi.routing import APIRoute, APIWebSocketRoute
+    from starlette.routing import Mount, Route, WebSocketRoute
+
+    try:
+        # FastAPI >= 0.140 keeps included routers as wrappers; this yields each
+        # effective route with its prefix and inherited settings applied.
+        from fastapi.routing import iter_route_contexts
+
+        routes = [(ctx.original_route, ctx) for ctx in iter_route_contexts(app.routes)]
+    except ImportError:
+        routes = [(route, route) for route in app.routes]
+
+    operations, websockets, outside = [], [], []
+    for original, route in routes:
+        if isinstance(original, APIRoute):
+            default_class = isinstance(route.response_class, DefaultPlaceholder)
+            response_class = route.response_class.value if default_class else route.response_class
+            # fastapi/routing.py: the dump_json fast path.
+            pydantic = route.response_field is not None and default_class
+            for method in sorted(route.methods):
+                operations.append({
+                    "method": method, "path": route.path, "in_openapi": route.include_in_schema,
+                    "response_class": response_class.__name__,
+                    "serializer": "pydantic-core" if pydantic else "json.dumps",
+                })
+        elif isinstance(original, (APIWebSocketRoute, WebSocketRoute)):
+            # Effective WebSocket contexts carry no path; prefixes would be in
+            # the starlette route FastAPI built for them.
+            starlette_route = getattr(getattr(route, "_route_context", None), "starlette_route", None)
+            websockets.append({"path": getattr(starlette_route, "path", None) or original.path,
+                               "name": original.name})
+        elif isinstance(original, Mount):
+            outside.append({"kind": "mount", "path": route.path or "/",
+                            "app": type(original.app).__name__})
+        elif isinstance(original, Route):
+            outside.append({"kind": "route", "path": route.path, "methods": sorted(route.methods),
+                            "name": route.name})
+        else:
+            outside.append({"kind": type(original).__name__, "path": getattr(route, "path", None)})
+    return {
+        "serializers": {
+            "pydantic-core": "Route with a response model and the default response class: "
+                             "pydantic-core writes the JSON. Floats use its own spelling "
+                             "(0.00001, 1e-7, 1e16) and NaN/Infinity become null.",
+            "json.dumps": "Starlette JSONResponse: json.dumps(ensure_ascii=False, "
+                          "allow_nan=False, separators=(',', ':')) after jsonable_encoder; "
+                          "NaN/Infinity raise (500). Endpoints that return a Response "
+                          "object bypass both.",
+            "parity": "HTTP JSON bodies are compared by value (N1/N2), not by float spelling.",
+        },
+        "operations": operations,
+        "websockets": websockets,
+        "outside_openapi": outside,
+        "unmatched": "The MCP app is mounted at '/', so any request no FastAPI route fully "
+                     "matches (unknown path, other method, HEAD, plain OPTIONS) gets "
+                     "Starlette's text/plain 404 'Not Found'.",
+    }
+
+
+def websocket_samples(app, paths: list[str]) -> dict:
+    """The first message each WebSocket sends on connect, on a fresh library."""
+    from fastapi.testclient import TestClient
+
+    samples = {}
+    with TestClient(app) as client:  # runs the lifespan against the sandbox DB
+        for path in paths:
+            with client.websocket_connect(path) as socket:
+                samples[path] = socket.receive_json()
+    return samples
+
+
+def oracle_contract() -> dict:
+    versions = {}
+    for name in ORACLE_PACKAGES:
+        try:
+            versions[name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            versions[name] = None
+    return {
+        "implementation": platform.python_implementation(),
+        "python": platform.python_version(),
+        "unicode": unicodedata.unidata_version,
+        "platform": sys.platform,
+        "packages": versions,
+    }
+
+
 async def mcp_contract():
     from mcp_server.server import mcp
 
@@ -131,13 +306,11 @@ def main() -> None:
     args = parser.parse_args()
 
     sandbox = Path(tempfile.mkdtemp(prefix="plumdeck-contracts-"))
-    user_data = sandbox / "ud"
-    os.environ["USER_DATA_DIR"] = str(user_data)
-    os.environ["DB_PATH"] = str(user_data / "plumdeck.duckdb")
-    os.environ["PLUMDECK_LOG_DIR"] = str(user_data / "logs")
+    parity_env.sandbox_env(sandbox)
     parity_env.require_sandbox_env()
     parity_env.use_backend()
     os.chdir(sandbox)  # config.py reads ./.env when not frozen
+    parity_env.require_sandbox_settings()
 
     try:
         import main as backend_main
@@ -156,8 +329,16 @@ def main() -> None:
         if args.keep_db:
             args.keep_db.mkdir(parents=True, exist_ok=True)
             shutil.copy2(db_path, args.keep_db / db_path.name)
+        dump_json(args.out / "schema" / "v5.columns.migrated.json",
+                  migrated_layout(db_path, sandbox, columns))
 
+        dump_json(args.out / "oracle.json", oracle_contract())
         dump_json(args.out / "http" / "openapi.v5.json", backend_main.app.openapi())
+        routes = route_contract(backend_main.app)
+        samples = websocket_samples(backend_main.app, [ws["path"] for ws in routes["websockets"]])
+        for ws in routes["websockets"]:
+            ws["first_message"] = samples[ws["path"]]
+        dump_json(args.out / "http" / "routes.v5.json", routes)
 
         tools, prompts, instructions = asyncio.run(mcp_contract())
         dump_json(args.out / "mcp" / "tools.v1.json", tools)
@@ -165,8 +346,9 @@ def main() -> None:
         (args.out / "mcp" / "instructions.txt").write_text(instructions, encoding="utf-8")
 
         print(f"tables={len(columns['tables'])} sequences={len(columns['sequences'])} "
-              f"paths={len(backend_main.app.openapi()['paths'])} tools={len(tools)} "
-              f"prompts={len(prompts)} duckdb={columns['duckdb_version']}")
+              f"paths={len(backend_main.app.openapi()['paths'])} "
+              f"operations={len(routes['operations'])} websockets={len(routes['websockets'])} "
+              f"tools={len(tools)} prompts={len(prompts)} duckdb={columns['duckdb_version']}")
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
 

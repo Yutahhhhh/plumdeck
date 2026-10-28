@@ -1,0 +1,20 @@
+{
+  "implementation": "CPython",
+  "python": "3.12.13",
+  "unicode": "15.0.0",
+  "platform": "darwin",
+  "packages": {
+    "fastapi": "0.141.1",
+    "starlette": "1.6.0",
+    "pydantic": "2.13.5",
+    "pydantic-core": "2.46.5",
+    "pydantic-settings": "2.15.0",
+    "mcp": "2.2.0",
+    "uvicorn": "0.53.0",
+    "duckdb": "1.5.5",
+    "duckdb-engine": "0.17.0",
+    "sqlmodel": "0.0.42",
+    "sqlalchemy": "2.0.54",
+    "platformdirs": "4.11.11"
+  }
+}

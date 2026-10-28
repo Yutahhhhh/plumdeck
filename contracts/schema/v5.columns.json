@@ -1,6 +1,7 @@
 {
   "duckdb_version": "v1.5.5",
   "schema_version": 5,
+  "layout": "fresh",
   "sequences": [
     {
       "name": "seq_play_history_id",

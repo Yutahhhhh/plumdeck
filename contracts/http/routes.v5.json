@@ -1,0 +1,1097 @@
+{
+  "serializers": {
+    "pydantic-core": "Route with a response model and the default response class: pydantic-core writes the JSON. Floats use its own spelling (0.00001, 1e-7, 1e16) and NaN/Infinity become null.",
+    "json.dumps": "Starlette JSONResponse: json.dumps(ensure_ascii=False, allow_nan=False, separators=(',', ':')) after jsonable_encoder; NaN/Infinity raise (500). Endpoints that return a Response object bypass both.",
+    "parity": "HTTP JSON bodies are compared by value (N1/N2), not by float spelling."
+  },
+  "operations": [
+    {
+      "method": "GET",
+      "path": "/",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/stream",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/metadata",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/fs/list",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/metadata/update",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/metadata/fetch-artwork-info",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/genres/list",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "GET",
+      "path": "/api/genres/subgenres",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "GET",
+      "path": "/api/genres/unknown",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "GET",
+      "path": "/api/genres/unknown-ids",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "GET",
+      "path": "/api/genres/grouped-suggestions",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "GET",
+      "path": "/api/genres/grouped-suggestions/{track_id}",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "POST",
+      "path": "/api/genres/batch-update",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "POST",
+      "path": "/api/genres/apply-analyses",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/genres/cleanup-suggestions",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "POST",
+      "path": "/api/genres/cleanup-execute",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/genres/apply-to-files",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ingest",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/ingest/status",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/ingest/cancel",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/setlists",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/setlists",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/setlists/{setlist_id}",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/setlists/{setlist_id}",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/setlists/{setlist_id}/tracks",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/setlists/{setlist_id}/duration",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/setlists/{setlist_id}/tracks",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/setlists/{setlist_id}/export/m3u8",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/setlists/{setlist_id}/export/validate",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/recommendations/next",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/recommendations/next/page",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/recommendations/auto",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/recommendations/path",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/setlist-tracks/{setlist_track_id}/wordplay",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/settings",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/settings/export/csv",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/import/analyze",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/import/execute",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/settings/metadata/export",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/metadata/import/analyze",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/metadata/import/execute",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/system/save-file",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/system/reveal-file",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/dashboard",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/tracks/{track_id}/info",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/tracks/{track_id}/genre",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tracks/{track_id}/suggest-genre",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tracks/{track_id}/similar",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tracks",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tracks/page",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tracks/count",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tracks/ids",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tracks/{track_id}/lyrics",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "GET",
+      "path": "/api/lyrics/search",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/metadata/fetch-lyrics-single",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/metadata/update",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/metadata/cancel",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/metadata/clear-cache",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/mcp/info",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "GET",
+      "path": "/api/wordplay-pairs",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "POST",
+      "path": "/api/wordplay-pairs",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "POST",
+      "path": "/api/wordplay-pairs/{pair_id}/approve",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/wordplay-pairs/{pair_id}",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/wordplay-pairs/{pair_id}",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "POST",
+      "path": "/api/grid-jobs/plan",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/grid-jobs",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/grid-jobs",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/grid-jobs/{job_id}/{action}",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/tracks/performance-metadata/cue-points",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "POST",
+      "path": "/api/tracks/cues-rekordbox/import",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tracks/{track_id}/performance-metadata",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "POST",
+      "path": "/api/tracks/{track_id}/grid-analysis",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "POST",
+      "path": "/api/tracks/{track_id}/grid-rekordbox",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "POST",
+      "path": "/api/tracks/{track_id}/cues-rekordbox",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/tracks/{track_id}/performance-metadata",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "pydantic-core"
+    },
+    {
+      "method": "GET",
+      "path": "/api/play/playlists",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/play/playlists",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/play/playlists/{playlist_id}",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/play/playlists/{playlist_id}",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/play/playlists/{playlist_id}/tracks",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/play/playlists/{playlist_id}/tracks",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/play/playlists/{playlist_id}/tracks/{entry_id}",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/play/rekordbox/import",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/play/rekordbox/sources",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/play/rekordbox/{source_id}/tree",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/play/rekordbox/{source_id}/tree/page",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/play/rekordbox/{source_id}/playlists/{playlist_id}/tracks",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/play/rekordbox/{source_id}/playlists/{playlist_id}/tracks/page",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/play/rekordbox/{source_id}/playlists/{playlist_id}/copy",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/play/sessions",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/play/sessions/{session_id}/end",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/play/history",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/play/history",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/play/recordings",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/play/recordings/formats",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/play/recordings/{recording_id}/audio",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/play/recordings/{recording_id}",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/play/recordings/{recording_id}",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/play/recordings",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/play/tracks/{track_id}/waveform-detail",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assist/library-status",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assist/decks/resolve",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assist/recommendations",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assist/routes",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assist/artists",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assist/search",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/assist/window",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assist/agent",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/assist/agent/list",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workflows/summary",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workflows/media/diagnose",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workflows/media/repairs/{plan_id}/apply",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workflows/media/repairs/{plan_id}/undo",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workflows/version-groups",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workflows/tracks/{track_id}/versions",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workflows/version-groups/{group_id}",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/workflows/setlist-entries/{entry_id}/version",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workflows/backups",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workflows/restore/inspect",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workflows/restore/apply",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workflows/audio-presets",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workflows/audio-presets",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/workflows/audio-presets/{preset_id}",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workflows/controller-profiles",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workflows/controller-profiles",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workflows/usb/handoffs",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workflows/usb/devices",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workflows/usb/devices/{device_id}/eject",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workflows/usb/handoffs",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workflows/usb/handoffs/{export_id}/duplicate",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workflows/usb/handoffs/{export_id}/verify",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workflows/play/imports",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workflows/play/imports",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workflows/play/imports/{batch_id}",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workflows/play/imports/{batch_id}/{action}",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workflows/recordings/{recording_id}/timeline",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/workflows/recordings/{recording_id}/timeline",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workflows/recordings/{recording_id}/timeline/engine",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "GET",
+      "path": "/api/workflows/recordings/{recording_id}/tracklist.txt",
+      "in_openapi": true,
+      "response_class": "PlainTextResponse",
+      "serializer": "json.dumps"
+    },
+    {
+      "method": "POST",
+      "path": "/api/workflows/recordings/external",
+      "in_openapi": true,
+      "response_class": "JSONResponse",
+      "serializer": "json.dumps"
+    }
+  ],
+  "websockets": [
+    {
+      "path": "/ws/play-imports",
+      "name": "websocket_play_imports",
+      "first_message": {
+        "type": "import_queue",
+        "batches": []
+      }
+    },
+    {
+      "path": "/ws/ingest",
+      "name": "websocket_ingest",
+      "first_message": {
+        "type": "idle",
+        "total": 0,
+        "current": 0,
+        "message": "",
+        "processed": 0,
+        "skipped": 0,
+        "errors": 0,
+        "start_time": 0,
+        "estimated_remaining": 0,
+        "run_id": null,
+        "revision": 0,
+        "details": {},
+        "file": ""
+      }
+    },
+    {
+      "path": "/ws/metadata",
+      "name": "websocket_metadata",
+      "first_message": {
+        "type": "idle",
+        "total": 0,
+        "current": 0,
+        "message": "",
+        "processed": 0,
+        "skipped": 0,
+        "errors": 0,
+        "start_time": 0,
+        "estimated_remaining": 0,
+        "run_id": null,
+        "revision": 0,
+        "details": {},
+        "updated": 0,
+        "current_track": "",
+        "update_type": null
+      }
+    }
+  ],
+  "outside_openapi": [
+    {
+      "kind": "route",
+      "path": "/openapi.json",
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
+      "name": "openapi"
+    },
+    {
+      "kind": "route",
+      "path": "/docs",
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
+      "name": "swagger_ui_html"
+    },
+    {
+      "kind": "route",
+      "path": "/docs/oauth2-redirect",
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
+      "name": "swagger_ui_redirect"
+    },
+    {
+      "kind": "route",
+      "path": "/redoc",
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
+      "name": "redoc_html"
+    },
+    {
+      "kind": "mount",
+      "path": "/",
+      "app": "MCPAppHolder"
+    }
+  ],
+  "unmatched": "The MCP app is mounted at '/', so any request no FastAPI route fully matches (unknown path, other method, HEAD, plain OPTIONS) gets Starlette's text/plain 404 'Not Found'."
+}

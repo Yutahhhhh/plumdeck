@@ -1,6 +1,10 @@
 //! The pinned engine is DuckDB 1.5.5, and contracts/schema/v5.sql recreates
 //! exactly the catalog recorded in v5.columns.json (both dumped from a DB the
 //! Python backend initialized).
+//!
+//! v5.columns.json ordinals describe a fresh file only. Libraries upgraded by
+//! init_db have ALTER-added columns appended (v5.columns.migrated.json), so
+//! code reading real files must address columns by name.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -9,9 +13,59 @@ use plumdeck_db::duckdb::Connection;
 use plumdeck_db::{create_schema_v5, engine_version, ensure_engine_version, open, EXPECTED_DUCKDB_VERSION};
 use serde_json::Value;
 
-fn contract() -> Value {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../contracts/schema/v5.columns.json");
+fn load(name: &str) -> Value {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../contracts/schema").join(name);
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+fn contract() -> Value {
+    load("v5.columns.json")
+}
+
+fn column_names(conn: &Connection) -> BTreeMap<String, Vec<String>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT table_name, column_name FROM duckdb_columns()
+             WHERE database_name = current_database() AND schema_name = 'main'
+             ORDER BY table_name, column_index",
+        )
+        .unwrap();
+    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for row in stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).unwrap() {
+        let (table, column) = row.unwrap();
+        out.entry(table).or_default().push(column);
+    }
+    out
+}
+
+#[test]
+fn upgraded_libraries_append_alter_added_columns() {
+    // Rebuild the oldest upgraded layout the way extract_contracts.py did:
+    // drop every ALTER-added column from a fresh file, then replay the ALTERs.
+    let migrated = load("v5.columns.migrated.json");
+    let conn = Connection::open_in_memory().unwrap();
+    create_schema_v5(&conn).unwrap();
+    let fresh = column_names(&conn);
+    let statements: Vec<&str> =
+        migrated["alter_statements"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+    for statement in &statements {
+        let words: Vec<&str> = statement.split_whitespace().collect();
+        // ALTER TABLE <table> ADD COLUMN IF NOT EXISTS <column> ...
+        conn.execute_batch(&format!("ALTER TABLE {} DROP COLUMN {}", words[2], words[8])).unwrap();
+    }
+    for statement in &statements {
+        conn.execute_batch(statement).unwrap();
+    }
+    let upgraded = column_names(&conn);
+    let listed = migrated["tables"].as_object().unwrap();
+    for (table, columns) in &upgraded {
+        let want: Vec<String> = match listed.get(table) {
+            Some(order) => order.as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_owned()).collect(),
+            None => fresh[table].clone(),
+        };
+        assert_eq!(columns, &want, "upgraded column order of {table}");
+    }
+    assert!(listed.keys().all(|table| fresh[table] != upgraded[table]), "listed tables differ from fresh");
 }
 
 #[test]
