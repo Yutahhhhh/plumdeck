@@ -87,7 +87,9 @@ impl Side {
     }
 }
 
-pub(crate) fn spawn(label: &'static str, root: &Path, programs: &Programs) -> Result<Side> {
+/// Start one side. `freeze_now` (a scenario's) reaches both sides as
+/// `PLUMDECK_PARITY_FREEZE_NOW`.
+pub(crate) fn spawn(label: &'static str, root: &Path, programs: &Programs, freeze_now: Option<&str>) -> Result<Side> {
     let port = free_port()?;
     let mut command = if label == "A" {
         let mut command = Command::new(&programs.python);
@@ -112,9 +114,13 @@ pub(crate) fn spawn(label: &'static str, root: &Path, programs: &Programs) -> Re
         .env("XDG_CACHE_HOME", root.join("cache"))
         // A missing file: no rekordbox library on either side.
         .env("PLUMDECK_REKORDBOX_DB", root.join("rb").join("master.db"))
+        .env_remove("PLUMDECK_PARITY_FREEZE_NOW")
         .stdin(Stdio::null())
         .stdout(std::fs::File::create(root.join("stdout.txt"))?)
         .stderr(std::fs::File::create(root.join("stderr.txt"))?);
+    if let Some(now) = freeze_now {
+        command.env("PLUMDECK_PARITY_FREEZE_NOW", now);
+    }
     let child = command.spawn().with_context(|| format!("start side {label}"))?;
     Ok(Side { label, root: root.to_owned(), port, child })
 }
@@ -254,7 +260,7 @@ fn newer_schema_case(work: &Path, master: &Path, programs: &Programs) -> Result<
     let root = work.join("b");
     fixture::copy_dir(master, &root.join("ud"))?;
     let before = std::fs::read(root.join("ud").join(DB_NAME))?;
-    let mut side = spawn("B", &root, programs)?;
+    let mut side = spawn("B", &root, programs, None)?;
     let ready = wait_ready(&mut side)?;
     let status = stop(&mut side)?;
     if ready || status.code() != Some(3) {
@@ -288,8 +294,8 @@ pub fn run(programs: &Programs, work: &Path, cases: &[Case]) -> Result<Vec<CaseR
         for side in ["a", "b"] {
             fixture::copy_dir(&master, &dir.join(side).join("ud"))?;
         }
-        let mut a = spawn("A", &dir.join("a"), programs)?;
-        let mut b = match spawn("B", &dir.join("b"), programs) {
+        let mut a = spawn("A", &dir.join("a"), programs, None)?;
+        let mut b = match spawn("B", &dir.join("b"), programs, None) {
             Ok(b) => b,
             Err(error) => {
                 let _ = stop(&mut a);

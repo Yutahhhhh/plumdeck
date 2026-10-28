@@ -68,8 +68,8 @@ fn run_one(
     for side in ["a", "b"] {
         fixture::copy_dir(&master, &dir.join(side).join("ud"))?;
     }
-    let mut a = spawn("A", &dir.join("a"), programs)?;
-    let mut b = match spawn("B", &dir.join("b"), programs) {
+    let mut a = spawn("A", &dir.join("a"), programs, loaded.freeze_now.as_deref())?;
+    let mut b = match spawn("B", &dir.join("b"), programs, loaded.freeze_now.as_deref()) {
         Ok(b) => b,
         Err(error) => {
             let _ = stop(&mut a);

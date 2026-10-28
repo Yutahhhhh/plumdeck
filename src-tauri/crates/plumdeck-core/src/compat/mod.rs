@@ -5,6 +5,7 @@ pub mod pathnorm;
 pub mod pyfmt;
 pub mod pyjson;
 pub mod pyjson_loads;
+pub mod pyobj;
 pub mod text;
 mod unicode_tables;
 

@@ -1,0 +1,161 @@
+# S4: the setlist routes (backend/api/routers/setlists.py) on the sets
+# fixture: list, create, PUT with untyped values (DuckDB casts them), the
+# entry list (duplicates, a missing file, overlaps), reordering with entry
+# ids, revisions and timing checks (409s with Python's messages), the m3u8
+# export and its validation, the wordplay JSON of one entry, delete, and
+# the 404/422 paths. Time is frozen so every `now` agrees; the suite
+# db-diffs both libraries afterwards.
+name: s4-setlists
+db: fixture
+fixture: sets
+freeze_now: "2026-05-01 12:34:56.789012"
+steps:
+  - name: list by last update
+    expect_status: 200
+    http: {method: GET, path: /api/setlists}
+  - name: entries with tracks, duplicates and lyrics flags
+    expect_status: 200
+    http: {method: GET, path: /api/setlists/1/tracks}
+  - name: an unknown setlist has no entries
+    expect_status: 200
+    http: {method: GET, path: /api/setlists/99/tracks}
+  - name: lax path id
+    expect_status: 200
+    http: {method: GET, path: /api/setlists/02/tracks}
+  - name: bad path id
+    expect_status: 422
+    http: {method: GET, path: /api/setlists/x/tracks}
+  - name: create
+    expect_status: 200
+    http: {method: POST, path: /api/setlists, body: {name: "新しいセット"}}
+  - name: create needs a name
+    expect_status: 422
+    http: {method: POST, path: /api/setlists, body: {}}
+  - name: create with a non-string name
+    expect_status: 422
+    http: {method: POST, path: /api/setlists, body: {name: 5}}
+  - name: create without a body
+    expect_status: 422
+    http: {method: POST, path: /api/setlists}
+  - name: rename and rate
+    expect_status: 200
+    http: {method: PUT, path: /api/setlists/1, body: {name: Warm-up 2, rating: 5, description: null}}
+  - name: values are cast by the database
+    expect_status: 200
+    http: {method: PUT, path: /api/setlists/2, body: {rating: "3", display_order: 2.0, name: 7, target_duration: "90.5", genre: true}}
+  - name: unknown keys are ignored
+    expect_status: 200
+    http: {method: PUT, path: /api/setlists/3, body: {bogus: 1, color: red}}
+  - name: created_at can be rewritten, updated_at cannot
+    expect_status: 200
+    http: {method: PUT, path: /api/setlists/3, body: {created_at: "2020-01-02T03:04:05", updated_at: "1999-01-01"}}
+  - name: an uncastable value fails
+    expect_status: 500
+    http: {method: PUT, path: /api/setlists/3, body: {rating: abc}}
+  - name: a model attribute fails
+    expect_status: 500
+    http: {method: PUT, path: /api/setlists/3, body: {model_dump: 1}}
+  - name: put on a missing setlist
+    expect_status: 404
+    http: {method: PUT, path: /api/setlists/99, body: {name: x}}
+  - name: put needs an object
+    expect_status: 422
+    http: {method: PUT, path: /api/setlists/1, body: [1, 2]}
+  - name: reorder by track ids keeps the Nth occurrence
+    expect_status: 200
+    http: {method: POST, path: /api/setlists/1/tracks, body: [3, 1, "1", 10]}
+  - name: entries after the reorder
+    expect_status: 200
+    http: {method: GET, path: /api/setlists/1/tracks}
+  - name: entry objects with ids, revisions and timing
+    expect_status: 200
+    http:
+      method: POST
+      path: /api/setlists/1/tracks
+      body:
+        - {entry_id: 2, track_id: 3, revision: 3, in_ms: 500, out_ms: "50000", overlap_next_ms: 1000}
+        - {setlist_track_id: 1, id: 1, playback_rate: 1.25}
+        - {track_id: 5, wordplay_json: '{"note": "new"}'}
+        - {track_id: null}
+  - name: entries after the edit
+    expect_status: 200
+    http: {method: GET, path: /api/setlists/1/tracks}
+  - name: a stale revision
+    expect_status: 409
+    http: {method: POST, path: /api/setlists/1/tracks, body: [{entry_id: 2, track_id: 3, revision: 1}]}
+  - name: an entry of another setlist
+    expect_status: 409
+    http: {method: POST, path: /api/setlists/1/tracks, body: [{entry_id: 5, track_id: 2}]}
+  - name: the same entry twice
+    expect_status: 409
+    http: {method: POST, path: /api/setlists/1/tracks, body: [{entry_id: 2, track_id: 3}, {entry_id: 2, track_id: 3}]}
+  - name: a missing track
+    expect_status: 409
+    http: {method: POST, path: /api/setlists/1/tracks, body: [404]}
+  - name: a track id that is not a number
+    expect_status: 409
+    http: {method: POST, path: /api/setlists/1/tracks, body: ["abc"]}
+  - name: OUT past the track
+    expect_status: 409
+    http: {method: POST, path: /api/setlists/2/tracks, body: [{track_id: 2, out_ms: 999999}]}
+  - name: a non-numeric IN
+    http: {method: POST, path: /api/setlists/2/tracks, body: [{track_id: 2, in_ms: soon}]}
+  - name: an overlap after a track of unknown length
+    http: {method: POST, path: /api/setlists/2/tracks, body: [{track_id: 2, overlap_next_ms: 50000}, {track_id: 7}]}
+  - name: a list as a track id
+    expect_status: 500
+    http: {method: POST, path: /api/setlists/2/tracks, body: [[1]]}
+  - name: entries of setlist 2 are untouched by the refusals
+    expect_status: 200
+    http: {method: GET, path: /api/setlists/2/tracks}
+  - name: tracks of a missing setlist
+    expect_status: 404
+    http: {method: POST, path: /api/setlists/99/tracks, body: [1]}
+  - name: tracks need a list
+    expect_status: 422
+    http: {method: POST, path: /api/setlists/2/tracks, body: {track_id: 1}}
+  - name: export validation lists the missing file
+    expect_status: 200
+    http: {method: GET, path: /api/setlists/1/export/validate}
+  - name: export validation of a missing setlist
+    expect_status: 404
+    http: {method: GET, path: /api/setlists/99/export/validate}
+  - name: m3u8 export
+    expect_status: 200
+    compare_headers: [content-type, content-disposition]
+    http: {method: GET, path: /api/setlists/1/export/m3u8}
+  - name: m3u8 export of a name with unsafe characters
+    expect_status: 200
+    compare_headers: [content-type, content-disposition]
+    http: {method: GET, path: /api/setlists/2/export/m3u8}
+  - name: m3u8 export of a missing setlist
+    expect_status: 404
+    http: {method: GET, path: /api/setlists/99/export/m3u8}
+  - name: set an entry's wordplay JSON
+    expect_status: 200
+    http: {method: PATCH, path: /api/setlist-tracks/1/wordplay, body: {wordplay_json: '{"pair_id": 2}'}}
+  - name: clear it
+    expect_status: 200
+    http: {method: PATCH, path: /api/setlist-tracks/1/wordplay, body: {wordplay_json: null}}
+  - name: no body clears it too
+    expect_status: 200
+    http: {method: PATCH, path: /api/setlist-tracks/2/wordplay}
+  - name: wordplay JSON must be a string
+    expect_status: 422
+    http: {method: PATCH, path: /api/setlist-tracks/1/wordplay, body: {wordplay_json: {pair_id: 2}}}
+  - name: wordplay of a missing entry
+    expect_status: 404
+    http: {method: PATCH, path: /api/setlist-tracks/999/wordplay, body: {wordplay_json: x}}
+  - name: delete
+    expect_status: 200
+    http: {method: DELETE, path: /api/setlists/2}
+  - name: delete again
+    expect_status: 404
+    http: {method: DELETE, path: /api/setlists/2}
+  - name: list after the edits (same updated_at ties)
+    expect_status: 200
+    ties: [{path: "$", by: updated_at}]
+    http: {method: GET, path: /api/setlists}
+  - name: the duration route is not ported
+    deviation: {id: D-17, b_status: 404}
+    http: {method: GET, path: /api/setlists/1/duration}

@@ -391,3 +391,45 @@ mod tests {
         assert_eq!(int_floordiv(i64::MIN, -1), Err(PyNumError::OutOfRange));
     }
 }
+
+/// `float(text)` for a `str`: surrounding whitespace (`str.strip()`) is
+/// ignored, underscores are allowed only between digits (PEP 515), and
+/// `inf`, `infinity` and `nan` are accepted in any case. `None` is the
+/// `ValueError`.
+pub fn py_float_from_str(text: &str) -> Option<f64> {
+    let trimmed = crate::compat::text::py_strip(text);
+    let chars: Vec<char> = trimmed.chars().collect();
+    let mut cleaned = String::with_capacity(trimmed.len());
+    for (index, &c) in chars.iter().enumerate() {
+        if c == '_' {
+            let digit = |at: Option<&char>| at.is_some_and(|c| c.is_ascii_digit());
+            if !(index > 0 && digit(chars.get(index - 1)) && digit(chars.get(index + 1))) {
+                return None;
+            }
+            continue;
+        }
+        if !c.is_ascii() {
+            return None;
+        }
+        cleaned.push(c);
+    }
+    cleaned.parse().ok()
+}
+
+#[cfg(test)]
+mod float_from_str_tests {
+    use super::py_float_from_str;
+
+    #[test]
+    fn follows_python_float() {
+        assert_eq!(py_float_from_str(" 1_000.5\n"), Some(1000.5));
+        assert_eq!(py_float_from_str("1__0"), None);
+        assert_eq!(py_float_from_str("_1"), None);
+        assert_eq!(py_float_from_str("-InFiNiTy"), Some(f64::NEG_INFINITY));
+        assert!(py_float_from_str("nan").unwrap().is_nan());
+        assert_eq!(py_float_from_str(".5e1"), Some(5.0));
+        assert_eq!(py_float_from_str("1e"), None);
+        assert_eq!(py_float_from_str(""), None);
+        assert_eq!(py_float_from_str("0x10"), None);
+    }
+}

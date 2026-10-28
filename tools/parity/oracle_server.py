@@ -48,6 +48,39 @@ def fixed_mimetypes() -> None:
     mimetypes.inited = True
 
 
+def freeze_now(text: str) -> None:
+    """`freeze_now`: every `datetime.now()` the backend makes answers `text`
+    (naive local time), like the Rust side's FixedClock. Covers the modules'
+    `from datetime import datetime` names and the SQLModel
+    `default_factory=datetime.now` fields; SQL CURRENT_TIMESTAMP and
+    time.time() are not frozen."""
+    import datetime as datetime_module
+
+    real = datetime_module.datetime
+    frozen_value = real.fromisoformat(text)
+
+    class FrozenDatetime(real):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen_value if tz is None else frozen_value.astimezone(tz)
+
+    def frozen_now(tz=None):
+        return FrozenDatetime.now(tz)
+
+    for module in list(sys.modules.values()):
+        if getattr(module, "datetime", None) is real and module is not datetime_module:
+            module.datetime = FrozenDatetime
+    from sqlmodel import SQLModel
+
+    pending = list(SQLModel.__subclasses__())
+    while pending:
+        model = pending.pop()
+        pending.extend(model.__subclasses__())
+        for field in getattr(model, "model_fields", {}).values():
+            if field.default_factory == real.now:
+                field.default_factory = frozen_now
+
+
 def install_patches(cache_dir: Path) -> None:
     """Determinism and sandbox hooks: the waveform cache moves into the
     sandbox and Content-Type guessing uses a fixed table."""
@@ -98,6 +131,8 @@ def main() -> None:
     from main import app
 
     install_patches(cache_dir)
+    if os.environ.get("PLUMDECK_PARITY_FREEZE_NOW"):
+        freeze_now(os.environ["PLUMDECK_PARITY_FREEZE_NOW"])
     print(f"parity oracle on 127.0.0.1:{args.port} DB_PATH={settings.DB_PATH} "
           f"cache={cache_dir} rekordbox={os.environ['PLUMDECK_REKORDBOX_DB']}", flush=True)
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port, reload=False,

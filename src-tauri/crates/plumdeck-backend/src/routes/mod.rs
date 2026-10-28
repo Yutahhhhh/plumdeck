@@ -1,13 +1,18 @@
-//! HTTP routes, one module per Python router.
+//! HTTP routes, one module per Python router (setlists.py also carries
+//! the recommendation routes; suggestions.py is the recommendation service's
+//! genre suggestions).
 
 pub mod dashboard;
 pub mod genres;
 pub mod lyrics;
 pub mod media;
 pub mod settings;
+pub mod setlists;
+pub mod suggestions;
 pub mod tracks;
+pub mod wordplay;
 
-use axum::routing::{get, patch, post};
+use axum::routing::{get, patch, post, put};
 use axum::Router;
 
 use crate::AppState;
@@ -35,4 +40,20 @@ pub fn api() -> Router<AppState> {
         .route("/api/genres/cleanup-execute", post(genres::cleanup_execute))
         .route("/api/stream", get(media::stream))
         .route("/api/metadata", get(media::track_metadata))
+        .route("/api/setlists", get(setlists::get_setlists).post(setlists::post_setlist))
+        .route("/api/setlists/{setlist_id}", put(setlists::put_setlist).delete(setlists::remove_setlist))
+        .route("/api/setlists/{setlist_id}/tracks", get(setlists::get_setlist_tracks).post(setlists::post_setlist_tracks))
+        .route("/api/setlists/{setlist_id}/export/m3u8", get(setlists::export_m3u8))
+        .route("/api/setlists/{setlist_id}/export/validate", get(setlists::validate_export))
+        .route("/api/recommendations/next", get(setlists::recommend_next))
+        .route("/api/recommendations/next/page", get(setlists::recommend_next_page))
+        .route("/api/recommendations/auto", post(setlists::auto_setlist))
+        .route("/api/recommendations/path", post(setlists::path_setlist))
+        .route("/api/setlist-tracks/{setlist_track_id}/wordplay", patch(setlists::patch_entry_wordplay))
+        .route("/api/wordplay-pairs", get(wordplay::list))
+        .route("/api/wordplay-pairs/{pair_id}/approve", post(wordplay::approve_route))
+        .route("/api/wordplay-pairs/{pair_id}", patch(wordplay::patch_route).delete(wordplay::delete_route))
+        .route("/api/tracks/{track_id}/suggest-genre", get(suggestions::suggest_genre))
+        .route("/api/genres/grouped-suggestions", get(suggestions::grouped_suggestions))
+        .route("/api/genres/grouped-suggestions/{track_id}", get(suggestions::suggestions_for_track))
 }

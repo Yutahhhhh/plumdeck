@@ -45,10 +45,16 @@ pub enum Case {
     /// tags. Every analyzed track has a valid embedding, so startup queues
     /// no backfill job.
     Library,
+    /// The S4 library: [`Case::Library`] with setlists (duplicates, a
+    /// missing file, overlaps), wordplay pairs (approved, tested, pending,
+    /// approvable or not) and distinct embeddings in three spaces whose
+    /// components are small integers, so every dot product and norm is
+    /// exact and numpy agrees with the port bit for bit.
+    Sets,
 }
 
 impl Case {
-    pub const ALL: [Case; 9] = [
+    pub const ALL: [Case; 10] = [
         Case::Fresh,
         Case::Populated,
         Case::UpgradedLayout,
@@ -58,6 +64,7 @@ impl Case {
         Case::NewerSchema,
         Case::Catalog,
         Case::Library,
+        Case::Sets,
     ];
 
     pub fn name(self) -> &'static str {
@@ -71,6 +78,7 @@ impl Case {
             Case::NewerSchema => "newer-schema",
             Case::Catalog => "catalog",
             Case::Library => "library",
+            Case::Sets => "sets",
         }
     }
 }
@@ -178,6 +186,71 @@ INSERT INTO lyrics (track_id, content, source, language, created_at, updated_at)
   (11, 'a_b 100% line', 'user', NULL, NULL, NULL);
 "#;
 
+/// Padding to 200 dimensions for a 4-component vector.
+const PAD: &str = "list_transform(range(196), x -> 0.0::DOUBLE)";
+
+/// The S4 rows over [`LIBRARY_ROWS`].
+fn sets_rows() -> String {
+    let vectors = [
+        (1, "[4,1,0,0]", "'msd-musicnn-1:musicnn-16khz-v1'"),
+        (2, "[3,2,0,1]", "'msd-musicnn-1:musicnn-16khz-v1'"),
+        (3, "[4,0,1,0]", "'msd-musicnn-1:musicnn-16khz-v1'"),
+        (4, "[0,1,4,2]", "'msd-musicnn-1:musicnn-16khz-v1'"),
+        (5, "[1,1,3,2]", "'msd-musicnn-1:musicnn-16khz-v1'"),
+        (6, "[0,0,0,0]", "'msd-musicnn-1:musicnn-16khz-v1'"),
+        (7, "[2,2,2,2]", "'msd-musicnn-1:musicnn-16khz-v1'"),
+        (8, "[2,3,1,0]", "'msd-musicnn-1:musicnn-16khz-v1'"),
+        (11, "[1,0,0,1]", "NULL"),
+        (12, "[1,1,0,1]", "'musicnn'"),
+        (13, "[0,0,1,1]", "''"),
+    ];
+    let mut sql = String::new();
+    for (id, components, model) in vectors {
+        sql.push_str(&format!(
+            "UPDATE track_embeddings SET model_name = {model}, \
+             embedding_json = list_concat({components}::DOUBLE[], {PAD})::VARCHAR WHERE track_id = {id};\n"
+        ));
+    }
+    sql.push_str(SETS_ROWS);
+    sql
+}
+
+const SETS_ROWS: &str = r#"
+-- Tracks whose vector startup would re-queue (S11) are left unanalyzed.
+DELETE FROM track_analyses WHERE track_id IN (6, 9, 11, 12);
+UPDATE track_embeddings SET embedding_json = 'not json' WHERE track_id = 9;
+UPDATE track_embeddings SET model_name = 'short-model', embedding_json = '[1, 2, 3]' WHERE track_id = 10;
+UPDATE tracks SET genre = 'R&B', subgenre = 'Contemporary R&B' WHERE id = 12;
+INSERT INTO setlists (name, description, display_order, genre, target_duration, rating, created_at, updated_at) VALUES
+  ('Warm-up', 'early', 0, 'House', 3600.5, 4, '2026-04-01 10:00:00', '2026-04-02 10:00:00'),
+  ('Peak/Time: "set"?', NULL, 1, NULL, 1234.56, NULL, '2026-04-01 11:00:00', '2026-04-03 10:00:00.5'),
+  ('空のセット', NULL, 2, NULL, NULL, NULL, '2026-04-01 12:00:00', '2026-04-01 12:00:00');
+INSERT INTO setlist_tracks (setlist_id, track_id, position, transition_note, wordplay_json, in_ms, out_ms, playback_rate,
+                            extra_duration_ms, overlap_next_ms, revision, created_at) VALUES
+  (1, 1, 0, NULL, NULL, 0, NULL, 1, 0, 5000, 1, '2026-04-02 10:00:00'),
+  (1, 3, 1, 'blend', '{"pair_id": 1}', 1000, 60000, 1.0, 0, 0, 2, '2026-04-02 10:00:00'),
+  (1, 10, 2, NULL, NULL, 0, NULL, 1.05, 2000, 0, 1, '2026-04-02 10:00:00'),
+  (1, 1, 3, NULL, NULL, 0, 90000, 1, 0, 0, 3, '2026-04-02 10:00:00'),
+  (2, 2, 0, NULL, NULL, 0, NULL, 1, 0, 0, 1, '2026-04-03 10:00:00'),
+  (2, 4, 1, NULL, NULL, 0, NULL, 1, 0, 0, 1, '2026-04-03 10:00:00');
+INSERT INTO wordplay_pairs (from_track_id, to_track_id, keyword, normalized_keyword, source_phrase, target_phrase,
+                            source_section_position, target_section_position, source_cue_mode, from_timestamp,
+                            source_cue_end_timestamp, to_timestamp, target_intro_timestamp, target_landing_timestamp,
+                            transition_notes, source_url, evidence_type, verification_status, status, created_at, updated_at) VALUES
+  (1, 3, 'Night', 'night', 'into the night', 'night moves', 'end', 'start', 'section_end', 10.0, NULL, 20.0, 5.0, NULL,
+   'tested at home', 'https://example.invalid/a', 'performance', 'tested', 'approved', '2026-04-05 00:00:00', '2026-04-05 00:00:00'),
+  (1, 3, 'Dance', 'dance', 'we dance', 'dance on', 'end', 'start', 'section_end', 12.0, NULL, 22.0, 6.0, 22.0,
+   '', '', 'hypothesis', 'unverified', 'approved', '2026-04-05 00:00:01', '2026-04-05 00:00:01'),
+  (11, 12, 'Soul', 'soul', 'soul line', 'soul again', 'end', 'start', 'section_end', 100.0, NULL, 30.0, 5.0, NULL,
+   '', '', 'hypothesis', 'unverified', 'pending', '2026-04-05 00:00:02', '2026-04-05 00:00:02'),
+  (3, 1, 'Moves', 'moves', 'night moves', 'into the night', 'end', 'start', 'section_end', 10.0, NULL, 20.0, 5.0, 20.0,
+   'tempo too far', 'http://example.invalid/b', 'edit_listing', 'unverified', 'pending', '2026-04-05 00:00:03', '2026-04-05 00:00:03'),
+  (4, 5, 'Bass', 'bass', 'bass drop', 'bass line', 'middle', 'middle', 'cue_drumming', 30.0, 40.0, 50.0, 45.0, 50.0,
+   '', '', 'hypothesis', 'unverified', 'pending', '2026-04-05 00:00:04', '2026-04-05 00:00:04'),
+  (2, 8, 'Yoru', 'yoru', '夜に駆ける', '夜のうた', 'unknown', 'unknown', 'section_end', NULL, NULL, NULL, NULL, NULL,
+   '', '', 'hypothesis', 'unverified', 'approved', '2026-04-05 00:00:05', '2026-04-05 00:00:05');
+"#;
+
 fn build_library(path: &Path, upgraded_layout: bool) -> Result<()> {
     let conn = Connection::open(path)?;
     plumdeck_db::create_schema_v5(&conn)?;
@@ -271,11 +344,14 @@ pub fn build(case: Case, dir: &Path, media: &Path) -> Result<()> {
             build_library(&db, false)?;
             Connection::open(&db)?.execute_batch("UPDATE schema_info SET value = '6'; CHECKPOINT")?;
         }
-        Case::Library => {
+        Case::Library | Case::Sets => {
             crate::media::write(media)?;
             let conn = Connection::open(&db)?;
             plumdeck_db::create_schema_v5(&conn)?;
             conn.execute_batch(&with_media(LIBRARY_ROWS, media)).context("library rows")?;
+            if case == Case::Sets {
+                conn.execute_batch(&sets_rows()).context("sets rows")?;
+            }
             conn.execute_batch("CHECKPOINT")?;
         }
     }
@@ -319,7 +395,7 @@ mod tests {
                 }
                 Case::PendingWal => assert!(dir.join(format!("{DB_NAME}.wal")).exists()),
                 Case::Unreadable => assert!(db.exists()),
-                Case::Catalog | Case::Library => assert!(db.exists() && !queue_of(&db).exists()),
+                Case::Catalog | Case::Library | Case::Sets => assert!(db.exists() && !queue_of(&db).exists()),
                 Case::Populated | Case::UpgradedLayout | Case::NewerSchema => {
                     let conn = plumdeck_db::open_read_only(&db).unwrap();
                     let version = plumdeck_db::schema::read_schema_version(&conn).unwrap();

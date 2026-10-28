@@ -25,7 +25,7 @@ use plumdeck_backend::middleware::CorsPolicy;
 use plumdeck_backend::{serve, shutdown_signal, stdin_shutdown_line, AppState, StartupStage, GRACEFUL_SHUTDOWN_SECS};
 use plumdeck_core::config::Config;
 use plumdeck_core::paths::{live_data_dirs, live_rekordbox_dirs};
-use plumdeck_core::time::SystemClock;
+use plumdeck_core::time::{FixedClock, SystemClock};
 use tokio::net::TcpListener;
 
 #[derive(Parser, Debug)]
@@ -37,6 +37,25 @@ struct Args {
     /// Parity side B: only run against sandbox copies (see module docs).
     #[arg(long)]
     parity: bool,
+}
+
+/// `--parity` with `PLUMDECK_PARITY_FREEZE_NOW` (a scenario's `freeze_now`,
+/// naive local time): every timestamp a route writes is that instant, as the
+/// oracle's patched `datetime.now()` is.
+fn frozen_clock(parity: bool) -> Option<FixedClock> {
+    if !parity {
+        return None;
+    }
+    let text = std::env::var("PLUMDECK_PARITY_FREEZE_NOW").ok()?;
+    let naive = ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f"]
+        .iter()
+        .find_map(|format| chrono::NaiveDateTime::parse_from_str(&text, format).ok())
+        .unwrap_or_else(|| panic!("PLUMDECK_PARITY_FREEZE_NOW is not a datetime: {text}"));
+    let epoch = naive
+        .and_local_timezone(chrono::Local)
+        .earliest()
+        .map_or(0.0, |local| local.timestamp_micros() as f64 / 1e6);
+    Some(FixedClock { naive, epoch })
 }
 
 fn main() -> ExitCode {
@@ -135,7 +154,10 @@ fn main() -> ExitCode {
             }
         };
         let (stop, mut stopped) = tokio::sync::watch::channel(false);
-        let state = AppState::new(library.db.clone(), cors);
+        let mut state = AppState::new(library.db.clone(), cors);
+        if let Some(clock) = frozen_clock(args.parity) {
+            state.clock = Arc::new(clock);
+        }
         let mut server = tokio::spawn(serve(listener, state, async move {
             let _ = stopped.wait_for(|stop| *stop).await;
         }));

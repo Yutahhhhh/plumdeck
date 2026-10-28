@@ -340,6 +340,72 @@ impl<'a> Fields<'a> {
         }
     }
 
+    /// The raw value of `name` (the last of duplicate keys).
+    pub fn value(&self, name: &str) -> Option<&'a PyValue> {
+        self.get(name)
+    }
+
+    /// The names present, in order (duplicates once, last wins).
+    pub fn names(&self) -> Vec<&'a str> {
+        let mut names: Vec<&str> = Vec::new();
+        for (key, _) in self.pairs {
+            if let PyValue::Str(key) = key {
+                names.retain(|name| name != key);
+                names.push(key);
+            }
+        }
+        names
+    }
+
+    /// Record a validation error on `name`.
+    pub fn reject(&self, name: &str, kind: &'static str, msg: &str) {
+        let input = self.get(name).cloned().unwrap_or(PyValue::None);
+        self.push(ValidationError::new(kind, self.loc(name), msg, input));
+    }
+
+    /// `int = default` (lax).
+    pub fn int_or(&self, name: &str, default: i128) -> i128 {
+        match self.get(name) {
+            None => default,
+            Some(value) => self.lax_int(value, self.loc(name)).unwrap_or(default),
+        }
+    }
+
+    /// `Optional[List[int]] = None` (lax items).
+    pub fn optional_int_list(&self, name: &str) -> Option<Vec<i128>> {
+        match self.get(name) {
+            None | Some(PyValue::None) => None,
+            Some(_) => self.int_list(name),
+        }
+    }
+
+    /// `Optional[List[str]] = None`.
+    pub fn optional_str_list(&self, name: &str) -> Option<Vec<String>> {
+        match self.get(name) {
+            None | Some(PyValue::None) => None,
+            Some(PyValue::List(items)) => {
+                let mut out = Vec::new();
+                let mut failed = false;
+                for (index, item) in items.iter().enumerate() {
+                    match item {
+                        PyValue::Str(text) => out.push(text.clone()),
+                        other => {
+                            failed = true;
+                            let mut loc = self.loc(name);
+                            loc.push(Loc::Index(index as i128));
+                            self.push(ValidationError::new("string_type", loc, "Input should be a valid string", other.clone()));
+                        }
+                    }
+                }
+                (!failed).then_some(out)
+            }
+            Some(other) => {
+                self.push(ValidationError::new("list_type", self.loc(name), "Input should be a valid list", other.clone()));
+                None
+            }
+        }
+    }
+
     /// The collected errors, or `value` when there are none.
     pub fn finish<T>(&self, value: impl FnOnce() -> Option<T>) -> Result<T, Vec<ValidationError>> {
         let errors = self.errors.take();
@@ -365,6 +431,20 @@ pub fn validate<T: BodyModel>(body: Option<&PyValue>) -> Result<T, Vec<Validatio
             other.clone(),
         )]),
     }
+}
+
+/// Validate embedded body parameters (`Body(embed=True)`, or several body
+/// parameters): no body at all is an empty object, so only required
+/// fields report `missing`.
+pub fn validate_embedded<T: BodyModel>(body: Option<&PyValue>) -> Result<T, Vec<ValidationError>> {
+    let empty = PyValue::Dict(Vec::new());
+    validate(Some(body.unwrap_or(&empty)))
+}
+
+/// [`read_body`] then [`validate_embedded`], answering FastAPI's errors.
+pub fn parse_embedded<T: BodyModel>(headers: &HeaderMap, bytes: &[u8]) -> Result<T, Response> {
+    let body = read_body(headers, bytes)?;
+    validate_embedded(body.as_ref()).map_err(|errors| validation_response(&errors))
 }
 
 /// [`read_body`] then [`validate`], answering FastAPI's errors.

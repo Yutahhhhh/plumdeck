@@ -119,7 +119,7 @@ pub struct TrackHit {
 pub struct BigInt(pub i128);
 
 impl BigInt {
-    fn value(self) -> Value {
+    pub(crate) fn value(self) -> Value {
         match i64::try_from(self.0) {
             Ok(small) => Value::BigInt(small),
             Err(_) => Value::HugeInt(self.0),
@@ -191,22 +191,22 @@ const SEARCH_FIELDS: [&str; 6] =
 
 /// SQL text plus its bound parameters, in order.
 #[derive(Default)]
-struct Sql {
-    text: String,
-    params: Vec<Value>,
+pub(crate) struct Sql {
+    pub(crate) text: String,
+    pub(crate) params: Vec<Value>,
 }
 
 impl Sql {
-    fn push(&mut self, text: &str) {
+    pub(crate) fn push(&mut self, text: &str) {
         self.text.push_str(text);
     }
 
-    fn bind(&mut self, value: Value) {
+    pub(crate) fn bind(&mut self, value: Value) {
         self.text.push('?');
         self.params.push(value);
     }
 
-    fn placeholders(&mut self, values: impl IntoIterator<Item = Value>) {
+    pub(crate) fn placeholders(&mut self, values: impl IntoIterator<Item = Value>) {
         self.text.push('(');
         for (index, value) in values.into_iter().enumerate() {
             if index > 0 {

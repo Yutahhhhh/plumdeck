@@ -144,6 +144,9 @@ pub struct Step {
     /// the scenario's `unordered`).
     #[serde(default)]
     pub unordered: Vec<String>,
+    /// N6 tie rules for this step only (added to the scenario's `ties`).
+    #[serde(default)]
+    pub ties: Vec<Ties>,
     #[serde(default)]
     pub deviation: Option<StepDeviation>,
     #[serde(default)]
@@ -259,8 +262,16 @@ pub fn load(path: &Path) -> Result<Scenario> {
         ),
         other => bail!("{}: db must be fixture or real, got {other:?}", path.display()),
     }
-    if scenario.freeze_now.is_some() || !scenario.side_effects.is_empty() {
-        bail!("{}: freeze_now and side_effects are not supported yet", path.display());
+    if !scenario.side_effects.is_empty() {
+        bail!("{}: side_effects are not supported yet", path.display());
+    }
+    if let Some(now) = &scenario.freeze_now {
+        let parsed = ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f"]
+            .iter()
+            .any(|format| chrono::NaiveDateTime::parse_from_str(now, format).is_ok());
+        if !parsed {
+            bail!("{}: freeze_now must be a naive local datetime, got {now:?}", path.display());
+        }
     }
     for (index, step) in scenario.steps.iter().enumerate() {
         let kinds = [step.http.is_some(), step.mcp.is_some(), step.ws.is_some(), step.wait.is_some()];
@@ -494,7 +505,8 @@ pub async fn run(
             Some(expected) => deviation_verdict(expected, &ra, &rb),
             None => {
                 let paths: Vec<String> = unordered.iter().chain(&step.unordered).cloned().collect();
-                let mut verdict = compare_responses_with(&ra, &rb, &comparer, ties, &paths);
+                let step_ties: Vec<Ties> = ties.iter().chain(&step.ties).cloned().collect();
+                let mut verdict = compare_responses_with(&ra, &rb, &comparer, &step_ties, &paths);
                 if !verdict.skipped {
                     // Each side echoes its own port (CORS origins): compare as `{port}`.
                     let (ha, hb) = (ra.with_port_placeholder(a.port), rb.with_port_placeholder(b.port));

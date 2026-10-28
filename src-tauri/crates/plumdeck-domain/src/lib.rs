@@ -8,8 +8,16 @@
 //!   spelling-variant grouping of `GET /api/genres/cleanup-suggestions`
 //!   (backend/app/services/genre_app_service.py).
 //! - [`lrc`]: LRC time tags in the lyrics search (backend/api/routers/lyrics.py).
+//! - [`mixability`], [`targets`], [`setlist_builder`], [`set_duration`],
+//!   [`wordplay`]: the recommenders, Setlist Auto and path builder, set
+//!   timing and wordplay rules (S4).
 
 pub mod audio_math;
 pub mod genre_rules;
 pub mod lrc;
+pub mod mixability;
 pub mod pychars;
+pub mod set_duration;
+pub mod setlist_builder;
+pub mod targets;
+pub mod wordplay;

@@ -80,6 +80,9 @@ pub enum DbError {
     /// A ValueError-style message shown to the user as is.
     #[error("{0}")]
     Invalid(String),
+    /// A value Python's DuckDB binding would refuse (a 500 there too).
+    #[error("cannot bind {0}")]
+    Unsupported(&'static str),
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
     #[error(transparent)]

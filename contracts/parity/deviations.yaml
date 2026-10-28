@@ -118,3 +118,23 @@ deviations:
       B implements it (unit tests in plumdeck-backend and plumdeck-db);
       s3-lyrics.yaml pins B's 404 and 422 where A answers 405 (steps that
       write would differ in the db-diff by design).
+  - id: D-17
+    status: proposed
+    source: plan §2.1 DROP (no caller); backend/api/routers/setlists.py, backend/api/routers/wordplay.py
+    summary: >
+      GET /api/setlists/{id}/duration and POST /api/wordplay-pairs are not
+      ported: nothing calls the duration route (set_duration stays for MCP),
+      and only tests posted wordplay pairs (the MCP tool proposes them
+      through the same service rules). B answers both with the
+      unmatched-request 404.
+    current: not ported; s4-setlists.yaml and s4-wordplay.yaml pin B's 404.
+  - id: D-18
+    status: proposed
+    source: backend/app/services/setlist_app_service.py update_setlist (hasattr/setattr)
+    summary: >
+      PUT /api/setlists/{id} ignores keys that name Python internals of the
+      model (names starting with "_", e.g. __doc__, _sa_instance_state).
+      Python set them on the ORM object, with effects from none to a broken
+      session. Public model attributes (dict, model_dump, ...) still answer
+      500 as setattr raised in Python; model fields are written as before.
+    current: B ignores them like unknown keys; no scenario sends one.
