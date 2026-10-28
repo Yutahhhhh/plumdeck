@@ -45,7 +45,7 @@ type Props = {
   syncLeader?: DeckId | null;
   onHotCue: (index: number, clear: boolean) => void; onLoop: (beats: number) => void;
   onBeatJump?: (beats: number) => void; onBeatLoop?: (beats: number) => void; onLoopEnable?: (enabled: boolean) => void;
-  onQuantize?: (enabled: boolean) => void; onFx?: (effect: FxEffect, enabled: boolean, mix: number, depth: number) => void; onSaveLoop?: () => void;
+  onQuantize?: (enabled: boolean) => void; onFx?: (effect: FxEffect, enabled: boolean, mix: number, depth: number, beats?: number) => void; onSaveLoop?: () => void;
   onLoopIn?: () => void; onLoopOut?: () => void; onReloop?: () => void;
   /** Set and enable a loop (resize keeping IN). */
   onLoopSet?: (startMs: number, endMs: number) => void;
@@ -111,7 +111,6 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
   }, [id]);
   const [loopMode, setLoopMode] = useState<LoopMode>("auto");
   const [tempoRange, setTempoRange] = useState<TempoRange>(() => { const saved = Number(localStorage.getItem(`plumdeck.tempoRange.${id}`)) as TempoRange; return TEMPO_RANGES.includes(saved) ? saved : TEMPO_RANGES[2]; });
-  const [fxMix, setFxMix] = useState(.8);
   const trackId = localTrackId(deck?.track);
   const { data } = useTrackVisuals(trackId);
   const duration = deck?.track?.durationMs ?? 0;
@@ -251,7 +250,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
               void (async () => { await djEngineClient.keyShift(id, semitones);
                 if (keyboard && generation === djEngineClient.getDeckGeneration(id)) { const cue = deck?.hotCues[keyboardCue]; if (cue == null) throw new Error("KEYBOARDにはホットキューを設定してください"); await djEngineClient.seek(id,cue); if(generation === djEngineClient.getDeckGeneration(id)) await djEngineClient.play(id); }
               })().catch(e=>setPadError(String(e)));
-            }} mode={padMode} hotCues={deck?.hotCues} formatTime={formatTime} describeCue={describeCue} selectedLoopBeats={activeBeats ?? undefined} fxMix={fxMix} activeFx={channel?.fx?.enabled ? channel.fx.effect : undefined}
+            }} mode={padMode} hotCues={deck?.hotCues} formatTime={formatTime} describeCue={describeCue} selectedLoopBeats={activeBeats ?? undefined} fxBeats={capabilities.includes(DJ_ENGINE_CAPABILITIES.mixerFxBeats)}
               hotCueDisabledReason={hotCueReason} beatLoopDisabledReason={loopReason} beatJumpDisabledReason={jumpReason} padFxDisabledReason={fxReason}
               onHotCue={onHotCue} onBeatLoop={pressBeatLoop} onBeatJump={onBeatJump} onFx={onFx}
               memoryCues={memoryPoints} selectedMemory={memorySelected} memoryDisabledReason={memoryReason} onMemoryCall={onMemoryCall} />}
@@ -268,17 +267,11 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
                 {Array.from({length:lastPage+1},(_,page)=><button key={page} type="button" aria-pressed={displayedPage===page} onClick={()=>movePage(page-displayedPage)}>{padMode==="sampler"?"BANK":"PAGE"} {page+1}</button>)}
               </div>
               <PadModeSelect deckId={id} value={padMode} modes={availablePadModes(capabilities, padMode)} onChange={(mode) => { if (gridEditor) onGridClose?.(); setPadMode(mode); }} />
-              {["padfx","padfx2"].includes(padMode) && <label className="dj-pad-fx-depth" title={fxReason ?? "PAD FX の掛かり具合"}>
-                <span>DEPTH</span>
-                <input type="range" min={0} max={1} step={.01} value={fxMix} disabled={Boolean(fxReason)}
-                  aria-label={`Deck ${id} PAD FX の深さ`} onChange={(event) => setFxMix(Number(event.target.value))} />
-                <b className="dj-num">{Math.round(fxMix * 100)}%</b>
-              </label>}
             </div>
           </>}
           <div className="dj-perf-caption">
             <span>{bar === null ? "BAR —" : `BAR ${bar} · ${beatInBar ?? "—"}/${beatsPerBar}`}</span>
-            <span>{gridEditor ? "GRID編集中 · 再生操作は利用可" : UNBACKED_PAD_MODES[padMode] ? "この音声エンジン未対応" : padMode === "hotcue" ? (hotCueReason ?? "SHIFT: CLEAR") : padMode === "padfx" || padMode === "padfx2" ? (fxReason ?? "押している間だけ有効") : padMode === "memorycue" ? (memoryReason ?? `MEMORY ${memoryPoints.length}`) : (padMode === "beatloop" ? loopReason : jumpReason) ?? "READY"}</span>
+            <span>{gridEditor ? "GRID編集中 · 再生操作は利用可" : UNBACKED_PAD_MODES[padMode] ? "この音声エンジン未対応" : padMode === "hotcue" ? (hotCueReason ?? "SHIFT: CLEAR") : padMode === "padfx" || padMode === "padfx2" ? (fxReason ?? (channel?.fx?.enabled ? `FX ON · ${channel.fx.effect.toUpperCase()}` : "押している間だけ有効")) : padMode === "memorycue" ? (memoryReason ?? `MEMORY ${memoryPoints.length}`) : (padMode === "beatloop" ? loopReason : jumpReason) ?? "READY"}</span>
           </div>
         </div>
       </div>

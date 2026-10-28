@@ -1,5 +1,5 @@
 import { junctionLeaseKey, junctionState } from '../junction/state.ts';
-import { padPreset, BEAT_LOOP_PAGES, BEAT_JUMP_PAGES, keyPad } from "./pad-presets.ts";
+import { padFxParams, padPreset, BEAT_LOOP_PAGES, BEAT_JUMP_PAGES, keyPad } from "./pad-presets.ts";
 import { getPadSelection, selectPads, subscribePads } from "./pad-state.ts";
 import { BEAT_FX, beatFxMaxBeats } from "./beat-fx.ts";
 import type { DjEngineClient } from "../dj-engine/client";
@@ -547,12 +547,14 @@ export class Ddj1000Runtime {
         case "beatJumpPad": await this.client.beatJump(deck, BEAT_JUMP_PAGES[(action.slot!>>3)&1][action.slot!&7]); break;
         case "beatLoopPad": await this.client.beatLoop(deck, BEAT_LOOP_PAGES[(action.slot! >> 3) & 1][action.slot! & 7]); break;
         case "padFx": {
+          // Same slot values as the on-screen pads (one preset table).
           const preset = padPreset(action.mode, action.slot);
           const effect = preset.effect;
+          const params = padFxParams(preset, Boolean(this.client.getState().snapshot?.engine.capabilities.includes("mixer.fx.beats")));
           if (pressed) this.heldFx.set(deck, { effect, session, track });
           else if (this.heldFx.get(deck)?.effect !== effect || !this.valid(deck, this.heldFx.get(deck)!.session, this.heldFx.get(deck)!.track)) break;
           else this.heldFx.delete(deck);
-          await this.client.setFx(deck, effect, Boolean(pressed), preset.mix, preset.depth); break;
+          await this.client.setFx(deck, effect, Boolean(pressed), params.mix, params.depth, params.beats); break;
         }
         case "cuePrevious": case "cueNext": {
           await this.actions().memory?.(deck, control === "cueNext" ? "next" : "previous"); break;

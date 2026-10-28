@@ -100,14 +100,12 @@
 .dj-workspace--compact .dj-knob-label { font-size: 8px; line-height: 10px; }
 .dj-workspace--compact .dj-knob { width: 21px; height: 21px; }
 .dj-performance-pad--fx { justify-content: center; }
-.dj-performance-pad--fx span { display: none; }
 .dj-workspace .dj-channel--mixer { position: relative; }
 .dj-workspace .dj-deck-controls:has(.dj-grid-editor) { grid-template-columns: minmax(0, 1fr) var(--d-btn); }
 @container (max-width: 240px) {
   .dj-pad-modes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dj-performance-pad span { display: none; }
   
-  .dj-performance-pad--fx b { font-size: 9px; }
 }
 .dj-workspace .dj-deck-pair .dj-deck .dj-deck-controls:has(.dj-grid-editor) { grid-template-columns: minmax(0, 1fr) var(--d-btn); grid-template-areas: 'perf transport'; }
 @media (min-width: 1680px) {
@@ -233,12 +231,6 @@
 /* LEVEL と TEMPO を横並びにして、チャンネル全体をデッキ行の高さに収める。 */
 .dj-mixer-tempo-reset { flex-shrink: 0; height: 11px; padding: 0 2px; border: 1px solid #2f333a; border-radius: 2px; background: #1b1d20; color: #a9aeb6; font-size: 6px; }
 .dj-mixer-tempo-reset:disabled { opacity: .32; }
-/* PAD FX の深さ。rekordbox もパッド側でエフェクト量を持つ。 */
-.dj-pad-fx-depth { display: flex; align-items: center; gap: 4px; min-width: 100px; flex: 1 1 100px; }
-.dj-pad-fx-depth span { color: #8f959d; font-size: 7px; font-weight: 700; letter-spacing: .06em; }
-.dj-pad-fx-depth input { flex: 1; width: 0; min-width: 30px; height: 12px; accent-color: #2f6fd0; }
-.dj-pad-fx-depth b { color: #c3c8cf; font-size: 7px; min-width: 22px; text-align: right; }
-.dj-pad-fx-depth:has(input:disabled) { opacity: .35; }
 
 /* rekordbox の実機と同じ縦 1 列：TRIM / HIGH / MID / LOW / FILTER、CUE、短いフェーダー。 */
 .dj-mixer-channel { width: 44px; min-height: 0; overflow: hidden; gap: 1px; }
@@ -358,3 +350,14 @@
 .dj-recording-panel dt { color: #9aa3ad; }
 .dj-recording-panel dd { min-width: 0; max-width: 320px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dj-recording-panel small { color: #f3a49d; }
+
+/* PAD FX: the sounding pad is filled with its colour, other held pads are
+   outlined. Beats are the large figure when the host applies them. */
+.dj-performance-pad--fx { flex-direction: column; justify-content: center; align-items: center; gap: 0; text-align: center; touch-action: none; }
+.dj-performance-pad--fx strong { display: block; max-width: 100%; overflow: hidden; color: var(--pad-color, #c4a8e4); font-weight: 800; line-height: 1.05; white-space: nowrap; text-overflow: ellipsis; }
+.dj-performance-pad--fx .dj-fx-pad-beats { font-size: 17px; }
+.dj-performance-pad--fx .dj-fx-pad-name { font-size: 12px; letter-spacing: .02em; }
+.dj-performance-pad--fx small { display: block; max-width: 100%; overflow: hidden; color: #c3c8cf; font-size: 10px; font-weight: 700; line-height: 1.1; white-space: nowrap; text-overflow: ellipsis; }
+.dj-workspace .dj-pad-grid .dj-performance-pad--fx.is-on { border-color: var(--pad-color); background: var(--pad-color); box-shadow: 0 0 8px color-mix(in srgb, var(--pad-color) 60%, transparent); }
+.dj-workspace .dj-pad-grid .dj-performance-pad--fx.is-on strong, .dj-workspace .dj-pad-grid .dj-performance-pad--fx.is-on small { color: #0b0c0e; }
+.dj-workspace .dj-pad-grid .dj-performance-pad--fx.is-held { box-shadow: inset 0 0 0 2px var(--pad-color); }

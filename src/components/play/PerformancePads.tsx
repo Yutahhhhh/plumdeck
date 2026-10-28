@@ -1,7 +1,8 @@
-import { padPreset, BEAT_LOOP_PAGES, BEAT_JUMP_PAGES, keyPad } from "@/services/midi/pad-presets";
+import { padFxParams, padPreset, BEAT_LOOP_PAGES, BEAT_JUMP_PAGES, keyPad } from "@/services/midi/pad-presets";
+import { emptyPadFxStack, pressPad, releaseAll, releasePad, type PadFxCommand, type PadFxStack } from "./pad-fx-stack";
 import { padColor } from "@/services/midi/pad-colors";
 export { CUE_COLORS } from "@/services/midi/pad-colors";
-import { useEffect, useRef, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { formatBeats, sameBeats } from "./loop-math";
 import type { PadEffect } from "@/types/dj-engine";
@@ -48,18 +49,6 @@ export const UNBACKED_PAD_MODES: Record<string, string> = {
   stems: "STEMS はこの音声エンジン未対応",
 };
 
-/** パッドと波形で同じ色を使う。ずれると現場で見間違える。 */
-/** エンジンの下限が 1/8 拍なので、rekordbox の 1/64〜 は出さずここから並べる。 */
-const FX: { effect: FxEffect; label: string; param: string }[] = [
-  { effect: "echo", label: "ECHO", param: "1/2" },
-  { effect: "reverb", label: "REVERB", param: "50" },
-  { effect: "flanger", label: "FLANGER", param: "16" },
-  { effect: "filter", label: "FILTER", param: "—" },
-  { effect: "phaser", label: "PHASER", param: "1/4" },
-  { effect: "autopan", label: "PAN", param: "1/2" },
-  { effect: "bitcrusher", label: "CRUSH", param: "—" },
-  { effect: "distortion", label: "DIST", param: "—" },
-];
 const SLICER_SLOTS = [1, 2, 3, 4, 5, 6, 7, 8] as const;
 const STEM_PADS = ["VOCAL", "INST", "BASS", "DRUMS", "FX VOCAL", "FX INST", "FX BASS", "FX DRUMS"] as const;
 const CENSR_PADS = ["REV ROLL", "TRANS", "ECHO", "V.BRAKE", "IN", "OUT", "CLEAR", "ON/OFF"] as const;
@@ -77,8 +66,6 @@ type Props = {
   describeCue?: (ms: number) => string | undefined;
   /** Length of the active loop in beats; highlights the matching pad. */
   selectedLoopBeats?: number;
-  fxMix: number;
-  activeFx?: FxEffect;
   hotCueDisabledReason?: string;
   beatLoopDisabledReason?: string;
   beatJumpDisabledReason?: string;
@@ -86,7 +73,9 @@ type Props = {
   onHotCue?: (index: number, clear: boolean) => void;
   onBeatLoop?: (beats: number) => void;
   onBeatJump?: (beats: number) => void;
-  onFx?: (effect: FxEffect, enabled: boolean, mix: number, depth: number) => void;
+  onFx?: (effect: FxEffect, enabled: boolean, mix: number, depth: number, beats?: number) => void;
+  /** The host takes per-pad beats (`mixer.fx.beats`): send and show them. */
+  fxBeats?: boolean;
   memoryCues?: readonly MemoryCue[];
   /** Position of the memory cue last called; DELETE removes it. */
   selectedMemory?: number | null;
@@ -105,46 +94,39 @@ function DeadPad({ text, reason, muted }: { text: string; reason: string; muted?
   </button>;
 }
 
+/** Held pads are keyed per bank so a release after a bank switch still targets the right effect. */
+const fxKey = (mode: 1 | 5, slot: number) => (mode === 5 ? 16 : 0) + (slot & 15);
+const fxSlot = (key: number) => padPreset(key >= 16 ? 5 : 1, key & 15);
+
 export function PerformancePads(props: Props) {
-  const activeFx = useRef(new Set<FxEffect>());
+  const fxStack = useRef<PadFxStack>(emptyPadFxStack);
+  const [fxHeld, setFxHeld] = useState<readonly number[]>([]);
   const onFxRef = useRef(props.onFx);
-  const fxMixRef = useRef(props.fxMix);
-  useEffect(() => { onFxRef.current = props.onFx; });
-  useEffect(() => {
-    fxMixRef.current = props.fxMix;
-    for (const effect of activeFx.current) onFxRef.current?.(effect, true, props.fxMix, props.fxMix);
-  }, [props.fxMix]);
-  const stopFx = (effect: FxEffect) => {
-    if (!activeFx.current.delete(effect)) return;
-    onFxRef.current?.(effect, false, fxMixRef.current, fxMixRef.current);
-  };
-  const startFx = (effect: FxEffect) => {
-    if (props.padFxDisabledReason || activeFx.current.has(effect)) return;
-    for (const active of activeFx.current) {
-      activeFx.current.delete(active);
-      onFxRef.current?.(active, false, fxMixRef.current, fxMixRef.current);
+  const fxBeatsRef = useRef(Boolean(props.fxBeats));
+  useEffect(() => { onFxRef.current = props.onFx; fxBeatsRef.current = Boolean(props.fxBeats); });
+  // One effect slot per deck on this host: the last pressed pad sounds and
+  // releasing it hands the slot back to a pad still held.
+  const applyFx = (step: { stack: PadFxStack; commands: PadFxCommand[] }) => {
+    fxStack.current = step.stack;
+    setFxHeld(step.stack.held);
+    for (const command of step.commands) {
+      const preset = fxSlot(command.slot);
+      const params = padFxParams(preset, fxBeatsRef.current);
+      onFxRef.current?.(preset.effect, command.enabled, params.mix, params.depth, params.beats);
     }
-    activeFx.current.add(effect);
-    onFxRef.current?.(effect, true, fxMixRef.current, fxMixRef.current);
   };
-  useEffect(() => () => {
-    for (const effect of activeFx.current) onFxRef.current?.(effect, false, fxMixRef.current, fxMixRef.current);
-    activeFx.current.clear();
-  }, []);
+  const startFx = (key: number) => { if (!props.padFxDisabledReason) applyFx(pressPad(fxStack.current, key)); };
+  const stopFx = (key: number) => applyFx(releasePad(fxStack.current, key));
+  const stopAllFx = useRef(() => {});
+  stopAllFx.current = () => applyFx(releaseAll(fxStack.current));
+  useEffect(() => () => stopAllFx.current(), []);
+  useEffect(() => { stopAllFx.current(); }, [props.mode, props.padFxDisabledReason]);
   useEffect(() => {
-    if (["padfx", "padfx2"].includes(props.mode) && !props.padFxDisabledReason) return;
-    for (const effect of activeFx.current) onFxRef.current?.(effect, false, fxMixRef.current, fxMixRef.current);
-    activeFx.current.clear();
-  }, [props.mode, props.padFxDisabledReason]);
-  useEffect(() => {
-    const releaseAll = () => {
-      for (const effect of activeFx.current) onFxRef.current?.(effect, false, fxMixRef.current, fxMixRef.current);
-      activeFx.current.clear();
-    };
-    const onVisibility = () => { if (document.hidden) releaseAll(); };
-    window.addEventListener("blur", releaseAll);
+    const releaseEverything = () => stopAllFx.current();
+    const onVisibility = () => { if (document.hidden) releaseEverything(); };
+    window.addEventListener("blur", releaseEverything);
     document.addEventListener("visibilitychange", onVisibility);
-    return () => { window.removeEventListener("blur", releaseAll); document.removeEventListener("visibilitychange", onVisibility); };
+    return () => { window.removeEventListener("blur", releaseEverything); document.removeEventListener("visibilitychange", onVisibility); };
   }, []);
 
   const unbacked = UNBACKED_PAD_MODES[props.mode];
@@ -179,19 +161,28 @@ export function PerformancePads(props: Props) {
     style={{"--pad-color":padColor(2,index)} as CSSProperties}
     aria-label={`${Math.abs(beats)}拍${beats<0?"戻る":"進む"}`} onClick={()=>props.onBeatJump?.(beats)}><b>{beats<0?"◀ ":""}{Math.abs(beats)}{beats>0?" ▶":""}</b></button>)}</PadGrid>;
 
-  if (props.mode === "padfx" || props.mode === "padfx2") return <PadGrid label="Momentary pad effects">{Array.from({ length: 8 }, (_, index) => {
-    const preset = padPreset(props.mode === "padfx2" ? 5 : 1,index+(props.page??0)*8);
-    const fx = FX.find(fx=>fx.effect===preset.effect) ?? {effect:preset.effect,label:preset.effect.toUpperCase(),param:String(preset.depth)};
-    if (!fx) return <DeadPad key={index} text="" reason="このスロットは未割り当て" muted />;
-    const disabledReason = props.padFxDisabledReason;
-    const pointerStart = (event: PointerEvent<HTMLButtonElement>) => { if (event.button === 0) { event.currentTarget.setPointerCapture(event.pointerId); startFx(fx.effect); } };
-    const keyStart = (event: KeyboardEvent<HTMLButtonElement>) => { if (!event.repeat && (event.key === " " || event.key === "Enter")) startFx(fx.effect); };
-    const keyStop = (event: KeyboardEvent<HTMLButtonElement>) => { if (event.key === " " || event.key === "Enter") stopFx(fx.effect); };
-    return <button key={`${props.page}:${index}`} style={{"--pad-color":padColor(props.mode==="padfx2"?5:1,index+(props.page??0)*8)} as CSSProperties} className={cn("dj-performance-pad dj-performance-pad--fx", props.activeFx === fx.effect && "is-on")} aria-pressed={props.activeFx === fx.effect} disabled={Boolean(disabledReason)} title={disabledReason ?? `${fx.label}（押している間だけ有効）`}
-      onPointerDown={pointerStart} onPointerUp={() => stopFx(fx.effect)} onPointerCancel={() => stopFx(fx.effect)} onLostPointerCapture={() => stopFx(fx.effect)} onBlur={() => stopFx(fx.effect)} onKeyDown={keyStart} onKeyUp={keyStop}>
-      <b>{fx.label}</b><span className="dj-num">{fx.param}</span>
-    </button>;
-  })}</PadGrid>;
+  if (props.mode === "padfx" || props.mode === "padfx2") {
+    const bank = props.mode === "padfx2" ? 5 : 1;
+    const sounding = fxHeld.length ? fxHeld[fxHeld.length - 1] : null;
+    return <PadGrid label="Momentary pad effects">{Array.from({ length: 8 }, (_, index) => {
+      const slot = index + (props.page ?? 0) * 8;
+      const key = fxKey(bank, slot);
+      const preset = padPreset(bank, slot);
+      const beats = props.fxBeats && preset.beats ? formatBeats(preset.beats) : null;
+      const disabledReason = props.padFxDisabledReason;
+      const pointerStart = (event: PointerEvent<HTMLButtonElement>) => { if (event.button === 0) { event.currentTarget.setPointerCapture(event.pointerId); startFx(key); } };
+      const keyStart = (event: KeyboardEvent<HTMLButtonElement>) => { if (!event.repeat && (event.key === " " || event.key === "Enter")) { event.preventDefault(); startFx(key); } };
+      const keyStop = (event: KeyboardEvent<HTMLButtonElement>) => { if (event.key === " " || event.key === "Enter") stopFx(key); };
+      const describe = `${preset.label}${preset.variant ? ` ${preset.variant}` : ""}${beats ? ` ${beats} 拍` : ""}`;
+      return <button key={`${bank}:${slot}`} type="button" style={{ "--pad-color": padColor(bank, slot) } as CSSProperties}
+        className={cn("dj-performance-pad dj-performance-pad--fx", sounding === key && "is-on", fxHeld.includes(key) && sounding !== key && "is-held")}
+        aria-pressed={fxHeld.includes(key)} disabled={Boolean(disabledReason)}
+        title={disabledReason ?? `${describe}（押している間だけ有効。同時に押すと最後に押したものが鳴り、離すと押したままのものに戻ります）`}
+        onPointerDown={pointerStart} onPointerUp={() => stopFx(key)} onPointerCancel={() => stopFx(key)} onLostPointerCapture={() => stopFx(key)} onBlur={() => stopFx(key)} onKeyDown={keyStart} onKeyUp={keyStop}>
+        {beats ? <><strong className="dj-fx-pad-beats dj-num">{beats}</strong><small>{preset.label}</small></> : <><strong className="dj-fx-pad-name">{preset.label}</strong>{preset.variant && <small>{preset.variant}</small>}</>}
+      </button>;
+    })}</PadGrid>;
+  }
 
   // 以下は rekordbox の見た目だけ再現し、対応する op が無いので押せない。
   if (props.mode === "keyshift" || props.mode === "keyboard") return <PadGrid label={props.mode === "keyboard" ? "Keyboard" : "Key shift"}>{Array.from({length:8}, (_, i) => keyPad(props.page ?? 1,i)).map((semitones,index) =>

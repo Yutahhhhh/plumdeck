@@ -807,7 +807,7 @@ export function PlayWorkspace() {
     onBeatLoop={(beats) => void run(() => client.beatLoop(id, beats))}
     onLoopEnable={(enabled) => void run(() => client.enableLoop(id, enabled))}
     onQuantize={(enabled) => void run(() => client.setQuantize(id, enabled))}
-    onFx={(effect, enabled, mix, depth) => void run(() => client.setFx(id, effect, enabled, mix, depth))}
+    onFx={(effect, enabled, mix, depth, beats) => void run(() => client.setFx(id, effect, enabled, mix, depth, beats))}
     onSaveLoop={() => void saveCurrentLoop(id)}
     savedLoops={trackMetadata[(localTrackId(snapshot?.decks[id]?.track) ?? -1)]?.loops}
     trackKey={trackKeys[(localTrackId(snapshot?.decks[id]?.track) ?? -1)]}
