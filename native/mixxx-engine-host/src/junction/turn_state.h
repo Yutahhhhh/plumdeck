@@ -149,8 +149,8 @@ private:
 /// THRU. Anything else is either a deliberate mix move (fader start) or a
 /// reason the receiver is not READY yet.
 inline bool junctionUnity(const QJsonObject& channel) {
-    const auto near=[&](const char* key){return std::abs(channel[key].toDouble(1)-1)<=.02;};
-    return channel["available"].toBool()&&near("volume")&&near("eqLow")&&near("eqMid")&&near("eqHigh")&&int(std::lround(channel["orientation"].toDouble(1)))==1;
+    const auto atUnity=[&](const char* key){return std::abs(channel[key].toDouble(1)-1)<=.02;};
+    return channel["available"].toBool()&&atUnity("volume")&&atUnity("eqLow")&&atUnity("eqMid")&&atUnity("eqHigh")&&int(std::lround(channel["orientation"].toDouble(1)))==1;
 }
 
 /// J path latency the next DJ adds before the venue: previous DJ -> next DJ
