@@ -1,0 +1,14 @@
+[package]
+name = "plumdeck-db"
+version = "0.1.0"
+description = "DuckDB access for the plumdeck backend"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+duckdb.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
