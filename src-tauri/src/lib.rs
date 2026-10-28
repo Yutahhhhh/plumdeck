@@ -25,6 +25,8 @@ fn junction_pending_invite(state: tauri::State<JunctionInvite>) -> Option<String
 use tauri_plugin_shell::process::{CommandEvent, CommandChild};
 #[derive(Default)]
 struct BackendChild(Mutex<Option<ManagedBackend>>);
+#[cfg(feature = "rust-backend")]
+struct EmbeddedBackend(Mutex<Option<plumdeck_backend::embed::Embedded>>);
 struct ManagedBackend {
     child: CommandChild,
     ended: std::sync::mpsc::Receiver<()>,
@@ -239,6 +241,36 @@ pub fn run() {
             #[cfg(not(debug_assertions))]
             let port = "48123"; // 競合しにくいポート番号
 
+            #[cfg(feature = "rust-backend")]
+            {
+                // Same environment contract as the sidecar: the embedded
+                // backend reads its port, managed flag and the Junction bridge
+                // from the process environment.
+                std::env::set_var("PLUMDECK_PORT", port);
+                std::env::set_var("PLUMDECK_MANAGED_SIDECAR", "1");
+                std::env::set_var("PLUMDECK_JUNCTION_BRIDGE_URL", &junction_bridge_url);
+                std::env::set_var("PLUMDECK_JUNCTION_BRIDGE_TOKEN", &junction_bridge_token);
+                let stage_handle = app.handle().clone();
+                let failure_handle = app.handle().clone();
+                let embedded = plumdeck_backend::embed::start(
+                    port.parse().unwrap_or(8001),
+                    move |stage| {
+                        if let Some(progress) = startup::parse(stage.line().as_bytes()) {
+                            startup::publish(&stage_handle, progress);
+                        }
+                    },
+                    move |error| startup::fail(&failure_handle, error),
+                );
+                match embedded {
+                    Ok(embedded) => {
+                        app.manage(EmbeddedBackend(Mutex::new(Some(embedded))));
+                    }
+                    Err(error) => startup::fail(app.handle(), format!("解析サービスを起動できません: {}", error)),
+                }
+                return Ok(());
+            }
+
+            #[allow(unreachable_code)]
             let sidecar = match app.shell().sidecar("plumdeck-server") {
                 Ok(command) => command,
                 Err(error) => {
@@ -293,6 +325,12 @@ pub fn run() {
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 let _ = app.state::<Arc<dj_engine::EngineSupervisor>>().stop();
+                #[cfg(feature = "rust-backend")]
+                if let Some(state) = app.try_state::<EmbeddedBackend>() {
+                    if let Some(embedded) = state.0.lock().ok().and_then(|mut slot| slot.take()) {
+                        embedded.shutdown();
+                    }
+                }
                 if let Ok(mut child) = app.state::<BackendChild>().0.lock() {
                     if let Some(child) = child.take() { stop_backend(child); }
                 }

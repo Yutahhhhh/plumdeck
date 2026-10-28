@@ -23,6 +23,7 @@ pub mod routes;
 pub mod sandbox;
 pub mod startup;
 pub mod analysis;
+pub mod embed;
 pub mod tasks;
 
 use std::future::Future;

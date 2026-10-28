@@ -4302,6 +4302,7 @@ dependencies = [
  "hidapi",
  "keyring",
  "midir",
+ "plumdeck-backend",
  "reqwest",
  "serde",
  "serde_json",
