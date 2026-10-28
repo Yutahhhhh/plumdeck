@@ -1,10 +1,11 @@
-import { localTrackId } from '@/services/junction/asset-resolver';
+import { assetIdentity, localTrackId } from '@/services/junction/asset-resolver';
 import { DeckPerformanceControls } from "./DeckPerformanceControls";
 import { SamplerPads } from "./SamplerPads";
 import { djEngineClient } from "@/services/dj-engine/client";
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import { getPadSelection, selectPads, subscribePads, PAD_MODE_NAMES } from "@/services/midi/pad-state";
 import { sampler } from "@/services/dj-engine/sampler";
+import { memoryCues, selectedMemoryCue } from "@/services/dj-engine/memory-cues";
 import { AlignJustify, Disc3, LayoutGrid, Pause, Play, Upload } from "lucide-react";
 import type { ChannelState, DeckId, DeckState } from "@/types/dj-engine";
 import type { PerformanceLoop } from "@/types/performance-metadata";
@@ -43,6 +44,7 @@ type Props = {
   onBeatJump?: (beats: number) => void; onBeatLoop?: (beats: number) => void; onLoopEnable?: (enabled: boolean) => void;
   onQuantize?: (enabled: boolean) => void; onFx?: (effect: FxEffect, enabled: boolean, mix: number, depth: number) => void; onSaveLoop?: () => void;
   onLoopIn?: () => void; onLoopOut?: () => void;
+  onMemory?: (action: "save" | "delete" | "previous" | "next") => void; onMemoryCall?: (index: number) => void;
   savedLoops?: readonly PerformanceLoop[]; onRecallLoop?: (id: string) => void;
   trackKey?: string | null;
   cueColors?: (string|null)[];
@@ -50,7 +52,7 @@ type Props = {
   onGridEdit: () => void; onGridClose?: () => void; gridEditor?: ReactNode;
 };
 
-export function SoftwareDeck({ id, deck, channel, active, connected, capability, capabilities, tailLock, onActivate, onToggle, onCue, onSeekAbsolute, onTempo, onKeylock, onSync, onMaster, onUnload, syncLeader, onHotCue, onLoop, onBeatJump, onBeatLoop, onLoopEnable, onQuantize, onFx, onSaveLoop, onLoopIn, onLoopOut, savedLoops, onRecallLoop, trackKey, cueColors, onGridEdit, onGridClose, gridEditor }: Props) {
+export function SoftwareDeck({ id, deck, channel, active, connected, capability, capabilities, tailLock, onActivate, onToggle, onCue, onSeekAbsolute, onTempo, onKeylock, onSync, onMaster, onUnload, syncLeader, onHotCue, onLoop, onBeatJump, onBeatLoop, onLoopEnable, onQuantize, onFx, onSaveLoop, onLoopIn, onLoopOut, onMemory, onMemoryCall, savedLoops, onRecallLoop, trackKey, cueColors, onGridEdit, onGridClose, gridEditor }: Props) {
   const deckDrop = usePlayDeckDrop(`play-deck-controls-${id}`, id);
   const left = id === "A" || id === "C";
   const [loopBeats, setLoopBeats] = useState(4);
@@ -62,16 +64,30 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
   const [keyboardCue, setKeyboardCue] = useState(0);
   const [padError, setPadError] = useState("");
   const [extraMode, setExtraMode] = useState<PadMode | null>(null);
+  // Modes the controller does not know page locally; paging the controller
+  // selection would drop back to its mode.
+  const [extraPage, setExtraPage] = useState(0);
   const padMode = extraMode ?? PAD_MODE_NAMES[selection.mode];
-  const displayedPage = padMode==="sampler"?samplerState.bank:padPage;
-  const lastPage = padMode==="sampler"?3:1;
+  const [memoryRevision, setMemoryRevision] = useState(0);
+  useEffect(() => {
+    const changed = () => setMemoryRevision((value) => value + 1);
+    window.addEventListener("plumdeck:memory-cues", changed);
+    return () => window.removeEventListener("plumdeck:memory-cues", changed);
+  }, []);
+  const memoryTrack = deck?.track ? assetIdentity(deck.track) : undefined;
+  const memoryPoints = useMemo(() => memoryTrack ? memoryCues(memoryTrack, deck?.track?.durationMs) : [], [memoryTrack, deck?.track?.durationMs, memoryRevision]);
+  const memorySelected = selectedMemoryCue(id, memoryTrack);
+  const displayedPage = padMode==="sampler"?samplerState.bank:extraMode?extraPage:padPage;
+  const lastPage = padMode==="sampler"?3:padMode==="memorycue"?Math.min(7,Math.max(1,Math.ceil(memoryPoints.length/8)-1)):1;
   const movePage = (delta:number) => {
     if(padMode==="sampler") void sampler.command("bank",{bank:Math.max(0,Math.min(3,samplerState.bank+delta))}).catch(error=>setPadError(String(error)));
+    else if(extraMode) setExtraPage(page=>Math.max(0,Math.min(lastPage,page+delta)));
     else setPadPage(page=>page+delta);
   };
   const setPadMode = (mode: PadMode) => {
     const index = PAD_MODE_NAMES.indexOf(mode as typeof PAD_MODE_NAMES[number]);
     setExtraMode(index < 0 ? mode : null);
+    setExtraPage(0);
     if (index >= 0) selectPads(id,index,index===4 || index===7 ? 1 : 0,true);
   };
   useEffect(() => { setExtraMode(null); }, [selection]);
@@ -107,6 +123,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
   const fxReason = unavailable("mixer.fx", "PAD FX", Boolean(onFx));
   const quantizeReason = unavailable("deck.quantize", "QUANTIZE", Boolean(onQuantize), false);
   const gridReason = unavailable("deck.beatgrid", "GRID EDIT", true);
+  const memoryReason = unavailable("deck.transport", "MEMORY CUE", Boolean(onMemory && onMemoryCall));
   const selectLoopBeats = (beats: number) => {
     const next = Math.max(.125, Math.min(32, beats));
     setLoopBeats(next);
@@ -201,7 +218,14 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
               })().catch(e=>setPadError(String(e)));
             }} mode={padMode} hotCues={deck?.hotCues} formatTime={formatTime} describeCue={describeCue} selectedLoopBeats={loopBeats} fxMix={fxMix} activeFx={channel?.fx?.enabled ? channel.fx.effect : undefined}
               hotCueDisabledReason={hotCueReason} beatLoopDisabledReason={loopReason} beatJumpDisabledReason={jumpReason} padFxDisabledReason={fxReason}
-              onHotCue={onHotCue} onBeatLoop={(beats) => { setLoopBeats(beats); (onBeatLoop ?? onLoop)(beats); }} onBeatJump={onBeatJump} onFx={onFx} />}
+              onHotCue={onHotCue} onBeatLoop={(beats) => { setLoopBeats(beats); (onBeatLoop ?? onLoop)(beats); }} onBeatJump={onBeatJump} onFx={onFx}
+              memoryCues={memoryPoints} selectedMemory={memorySelected} memoryDisabledReason={memoryReason} onMemoryCall={onMemoryCall} />}
+            {padMode === "memorycue" && <div className="dj-memory-actions" role="group" aria-label={`Deck ${id} MEMORY CUE`}>
+              <button type="button" disabled={Boolean(memoryReason) || !memoryPoints.length} title={memoryReason ?? "前のメモリーキューへ"} aria-label="前のメモリーキュー" onClick={() => onMemory?.("previous")}>◀</button>
+              <button type="button" disabled={Boolean(memoryReason)} title={memoryReason ?? "現在位置（ループ中はループ）をメモリーキューとして保存"} onClick={() => onMemory?.("save")}>MEMORY</button>
+              <button type="button" disabled={Boolean(memoryReason) || memorySelected === null} title={memoryReason ?? (memorySelected === null ? "削除するメモリーキューをパッドで選んでください" : "選択中のメモリーキューを削除")} onClick={() => onMemory?.("delete")}>DELETE</button>
+              <button type="button" disabled={Boolean(memoryReason) || !memoryPoints.length} title={memoryReason ?? "次のメモリーキューへ"} aria-label="次のメモリーキュー" onClick={() => onMemory?.("next")}>▶</button>
+            </div>}
             {padMode === "keyboard" && <label>HOT CUE <select aria-label={`Deck ${id} KEYBOARDのキュー`} value={keyboardCue} onChange={e=>setKeyboardCue(Number(e.target.value))}>{Array.from({length:16},(_,i)=><option key={i} value={i} disabled={deck?.hotCues[i]==null}>{String.fromCharCode(65+i)}</option>)}</select></label>}
             {padError && <small role="alert">{padError}</small>}
             <details className="dj-pad-extras"><summary>KEY / SLIP / MEMORY</summary><DeckPerformanceControls id={id} deck={deck} enabled={Boolean(connected && deck?.track)} /></details>
@@ -220,7 +244,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
           </>}
           <div className="dj-perf-caption">
             <span>{bar === null ? "BAR —" : `BAR ${bar} · ${beatInBar ?? "—"}/${beatsPerBar}`}</span>
-            <span>{gridEditor ? "GRID編集中 · 再生操作は利用可" : UNBACKED_PAD_MODES[padMode] ? "この音声エンジン未対応" : padMode === "hotcue" ? (hotCueReason ?? "SHIFT: CLEAR") : padMode === "padfx" ? (fxReason ?? "HOLD: ACTIVE") : (padMode === "beatloop" ? loopReason : jumpReason) ?? "READY"}</span>
+            <span>{gridEditor ? "GRID編集中 · 再生操作は利用可" : UNBACKED_PAD_MODES[padMode] ? "この音声エンジン未対応" : padMode === "hotcue" ? (hotCueReason ?? "SHIFT: CLEAR") : padMode === "padfx" ? (fxReason ?? "HOLD: ACTIVE") : padMode === "memorycue" ? (memoryReason ?? `MEMORY ${memoryPoints.length}`) : (padMode === "beatloop" ? loopReason : jumpReason) ?? "READY"}</span>
           </div>
         </div>
       </div>

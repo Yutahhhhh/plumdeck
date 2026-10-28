@@ -4,6 +4,7 @@ export { CUE_COLORS } from "@/services/midi/pad-colors";
 import { useEffect, useRef, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import type { PadEffect } from "@/types/dj-engine";
+import type { MemoryCue } from "@/services/dj-engine/memory-cues";
 
 /** rekordbox の PAD モードセレクタと同じ並び・同じ表記。 */
 export type PadMode =
@@ -36,7 +37,6 @@ export const UNBACKED_PAD_MODES: Record<string, string> = {
   seqcall: "SEQ. CALL はこの音声エンジン未対応",
   actcensr: "ACT. CENSR はこの音声エンジン未対応",
   stems: "STEMS はこの音声エンジン未対応",
-  memorycue: "MEMORY CUE はこの音声エンジン未対応",
 };
 
 /** パッドと波形で同じ色を使う。ずれると現場で見間違える。 */
@@ -77,6 +77,11 @@ type Props = {
   onBeatLoop?: (beats: number) => void;
   onBeatJump?: (beats: number) => void;
   onFx?: (effect: FxEffect, enabled: boolean, mix: number, depth: number) => void;
+  memoryCues?: readonly MemoryCue[];
+  /** Position of the memory cue last called; DELETE removes it. */
+  selectedMemory?: number | null;
+  memoryDisabledReason?: string;
+  onMemoryCall?: (index: number) => void;
 };
 
 /** Physical pad order: 1–4 on the top row, 5–8 on the bottom row. */
@@ -191,8 +196,22 @@ export function PerformancePads(props: Props) {
     <DeadPad key={pad} text={pad} reason={unbacked!} />)}</PadGrid>;
 
 
-  // SEQ. CALL と MEMORY CUE は rekordbox でも空欄から始まる。
-  return <PadGrid label={props.mode === "seqcall" ? "Sequence call" : "Memory cues"}>
+  if (props.mode === "memorycue") return <PadGrid label="Memory cues">{Array.from({ length: 8 }, (_, pad) => {
+    const index = pad + (props.page ?? 0) * 8;
+    const cue = props.memoryCues?.[index];
+    if (!cue) return <DeadPad key={index} text="" reason={props.memoryDisabledReason ?? "空き：MEMORY で現在位置（ループ中はループ）を保存"} muted />;
+    const where = props.describeCue?.(cue.positionMs) ?? props.formatTime(cue.positionMs);
+    const selected = props.selectedMemory !== null && props.selectedMemory !== undefined && Math.abs(props.selectedMemory - cue.positionMs) <= 1;
+    return <button key={index} type="button" className={cn("dj-performance-pad dj-performance-pad--memory", cue.endMs !== undefined && "is-loop", selected && "is-selected")}
+      disabled={Boolean(props.memoryDisabledReason)} aria-pressed={selected}
+      title={props.memoryDisabledReason ?? `${where}${cue.endMs !== undefined ? " · ループ" : ""}：呼び出して停止（選択中のものを DELETE で削除）`}
+      onClick={() => props.onMemoryCall?.(index)}>
+      <b>{cue.endMs !== undefined ? "LOOP" : "CUE"} {index + 1}</b><span className="dj-num">{props.formatTime(cue.positionMs)}</span>
+    </button>;
+  })}</PadGrid>;
+
+  // SEQ. CALL は rekordbox でも空欄から始まる。
+  return <PadGrid label="Sequence call">
     {Array.from({ length: 8 }, (_, index) => <DeadPad key={index} text="" reason={unbacked!} muted />)}
   </PadGrid>;
 }

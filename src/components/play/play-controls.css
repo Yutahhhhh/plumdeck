@@ -338,3 +338,12 @@
 .dj-recording-actions button.is-destructive { border-color: #7a3630; color: #efa7a1; }
 .dj-recording-actions button:disabled { opacity: .45; }
 .dj-recording-actions svg { width: 12px; height: 12px; }
+
+/* MEMORY CUE: memory cues are red, saved loops yellow; the selected one is outlined. */
+.dj-pad-grid[aria-label="Memory cues"] { --pad-color: #ff5c5c; }
+.dj-workspace .dj-pad-grid .dj-performance-pad--memory.is-loop { --pad-color: #f2c94c; }
+.dj-workspace .dj-pad-grid .dj-performance-pad--memory.is-selected { box-shadow: inset 0 0 0 2px #fff; }
+.dj-memory-actions { display: grid; grid-template-columns: 24px 1fr 1fr 24px; gap: 3px; flex-shrink: 0; }
+.dj-memory-actions button { height: 22px; border: 1px solid #3a3f46; border-radius: 2px; background: #1b1d20; color: #d0d4da; font-size: 10px; font-weight: 700; letter-spacing: .04em; }
+.dj-memory-actions button:not(:disabled):hover { background: #2a2e34; }
+.dj-memory-actions button:disabled { opacity: .4; }

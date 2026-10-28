@@ -9,7 +9,7 @@ import { JunctionInputDeck } from "./JunctionInputDeck";
 import { JunctionTurnBar } from "./JunctionTurnBar";
 import { TAIL_LOCK_TEXT } from "@/services/junction/turn-state";
 import { BeatFxPanel } from "./BeatFxPanel";
-import { memoryAction } from "@/services/dj-engine/memory-cues";
+import { callMemoryCue, memoryAction } from "@/services/dj-engine/memory-cues";
 import { jogWeight } from "@/services/dj-engine/jog-weight";
 import { sampler } from "@/services/dj-engine/sampler";
 import "./sampler.css";
@@ -783,6 +783,12 @@ export function PlayWorkspace() {
     onMaster={() => void makeMaster(id)}
     onUnload={() => void run(async () => { ++deckLoadRequests.current[id]; cuePoints.current[id] = 0; manualLoopIn.current[id] = null; await client.unload(id); await finalizeHistory(id, "ejected"); })}
     onHotCue={(index, clear) => void editHotCue(id, index, clear)}
+    onMemory={(action) => void run(() => memoryAction(id, action))}
+    onMemoryCall={(index) => void run(async () => {
+      const cue = await callMemoryCue(id, index);
+      // A called memory cue becomes the CUE point, like CALL on a player.
+      if (cue) cuePoints.current[id] = cue.positionMs;
+    })}
     onLoopIn={() => void run(async () => {
       const deck = client.getState().snapshot?.decks[id];
       if (deck?.track) manualLoopIn.current[id] = deck.positionMs;
