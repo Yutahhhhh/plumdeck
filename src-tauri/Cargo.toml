@@ -81,6 +81,7 @@ rust-version = "1.91"
 plumdeck-core = { path = "crates/plumdeck-core" }
 plumdeck-db = { path = "crates/plumdeck-db" }
 plumdeck-domain = { path = "crates/plumdeck-domain" }
+plumdeck-key = { path = "crates/plumdeck-key" }
 plumdeck-media = { path = "crates/plumdeck-media" }
 plumdeck-backend = { path = "crates/plumdeck-backend" }
 plumdeck-rekordbox = { path = "crates/plumdeck-rekordbox" }

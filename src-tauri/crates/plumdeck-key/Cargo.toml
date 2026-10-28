@@ -1,0 +1,16 @@
+[package]
+name = "plumdeck-key"
+version = "0.1.0"
+description = "Musical keys for plumdeck: ids, notations, parsing, relations and the effective key"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# No DuckDB: shared with the Tauri side, the engine and the frontend tables.
+[dependencies]
+plumdeck-core.workspace = true
+serde_json.workspace = true
+
+[[bin]]
+name = "plumdeck-key-tables"
+path = "src/bin/plumdeck-key-tables.rs"

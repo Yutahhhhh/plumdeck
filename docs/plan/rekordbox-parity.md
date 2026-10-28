@@ -97,7 +97,7 @@ Play モード（デッキ、パッド、FX、ミキサー、サンプラー、�
 
 | バグ | 場所 | 状態 |
 |---|---|---|
-| 部分一致の変換で「Ab minor」が 10A になる | `src/components/setlist-creator/utils.ts` | 未修正。生成した表（RB-02）か完全一致に |
+| 部分一致の変換で「Ab minor」が 10A になる | `src/components/setlist-creator/utils.ts` | 修正済み（musical-key の完全一致と生成した表） |
 | キーのフィルタが 0 件 | `backend/infra/repositories/track_repository.py` | 修正済み（大文字小文字を無視） |
 | XML 書き出しでグリッドが出ない | `backend/app/services/workflow_service.py` | 修正済み（release-integration） |
 | デッキ見出しのキー UI が無効 | `src/components/play/SoftwareDeck.tsx` | 修正済み（release-integration） |
@@ -355,7 +355,7 @@ struct Phrase {
 | ID | 内容 | 依存 | 規模 | 状態 |
 |---|---|---|---|---|
 | RB-01 | [P0] 確定済みバグ（§1.6） | A1 | S | 一部済 |
-| RB-02 | [P0] `plumdeck-key` と `contracts/key/keys.json`、TS モジュールの生成 | S0 | S | |
+| RB-02 | [P0] `plumdeck-key` と `contracts/key/keys.json`、TS モジュールの生成 | S0 | S | 済 |
 | RB-03 | [P0] キー表記の設定と全画面の統一（既定 Alphanumeric） | RB-01, RB-02 | S〜M | |
 | RB-04 | [P0] マスターデッキの決定と実効キー、デッキ見出しの表示 | RB-01, RB-02 | M | |
 | RB-05 | [P0] Traffic Light（既定 ON）と全画面の相性表示 | RB-03, RB-04 | M | |

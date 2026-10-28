@@ -8,4 +8,5 @@ publish = false
 
 [dependencies]
 plumdeck-core.workspace = true
+plumdeck-key.workspace = true
 regex.workspace = true

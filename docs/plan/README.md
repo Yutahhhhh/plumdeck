@@ -145,7 +145,7 @@
 ### 3.3 未着手（主なもの）
 
 - バックエンド：S4〜S14 すべて。
-- rekordbox 同等化：RB-01 の残り（Setlist 自動生成のキー変換の部分一致バグ、HOT CUE マーカーの色の食い違いは要確認）、RB-02 以降すべて（キー表記の設定、Traffic Light、推薦のキー相性フィルタ、フレーズ、PDW3 波形、MEMORY CUE の DB 化など）。
+- rekordbox 同等化：RB-01 の残り（HOT CUE マーカーの色の食い違いは要確認。Setlist 自動生成のキー変換の部分一致バグは修正済み）、RB-03 以降すべて（キー表記の設定、Traffic Light、推薦のキー相性フィルタ、フレーズ、PDW3 波形、MEMORY CUE の DB 化など）。
 - 解析：A5（Windows の整理。Rust 移行に畳み込む）、A6（Rust の MusiCNN）、A7（Rust 解析ワーカー、Essentia 撤去）、自前検出 v1（RB-30〜RB-36）。
 - エンジンと Junction：W2-01 以降すべて、切替 W3-01〜W3-04。
 - 取り込み UX：Explorer 撤去、ドラッグ＆ドロップ、「曲を追加」、Dashboard の要対応と rekordbox コレクション取り込み。
@@ -167,7 +167,7 @@
 
 ### 段 1：DuckDB に依存しない基盤（並行可）
 
-- **RB-02** `plumdeck-key`（KeyId 0〜23、Classic / Alphanumeric / Open Key / タグのまま、入力の正規化、関係の分類、実効キー）と `contracts/key/keys.json` の生成。
+- ~~**RB-02** `plumdeck-key`~~（完了。`src-tauri/crates/plumdeck-key`、`contracts/key/keys.json`、`src/lib/keys.generated.ts`。`normalize_key` は Python の全件ベクタ `contracts/key/normalize_key.jsonl` で一致を確認）。
 - ~~**S3** ライブラリの中核~~（完了。`/api/fs/list` は D-15 として DROP を記録）。
 - **W1-06 / Opus**：`plumdeck-decode` の OS フォールバック（HE-AAC）と Opus（Mac / Win のランナーが要る）。
 - **W1-07** `plumdeck-dsp`（リサンプラ、STFT、biquad など）。
@@ -228,7 +228,7 @@
 
   ```sh
   cd src-tauri
-  cargo test -p plumdeck-core -p plumdeck-db -p plumdeck-domain -p plumdeck-media -p plumdeck-backend -p plumdeck-parity
+  cargo test -p plumdeck-core -p plumdeck-db -p plumdeck-domain -p plumdeck-media -p plumdeck-key -p plumdeck-backend -p plumdeck-parity
   ```
 
   別々に回すと build-dependency の feature が分かれ、bundled DuckDB を何度もビルドし直すことになる。新しく DuckDB を使う crate を足したら、このリストと CI の `backend-port` ジョブに加える。

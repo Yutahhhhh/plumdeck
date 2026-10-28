@@ -4365,7 +4365,16 @@ name = "plumdeck-domain"
 version = "0.1.0"
 dependencies = [
  "plumdeck-core",
+ "plumdeck-key",
  "regex",
+]
+
+[[package]]
+name = "plumdeck-key"
+version = "0.1.0"
+dependencies = [
+ "plumdeck-core",
+ "serde_json",
 ]
 
 [[package]]

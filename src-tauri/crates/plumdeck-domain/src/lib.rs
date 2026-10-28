@@ -1,9 +1,9 @@
 //! Pure domain rules shared by the repositories and services (plan §1.2:
 //! core → domain → db). Nothing here does I/O.
 //!
-//! - [`audio_math`]: the Camelot tables and `normalize_key`
-//!   (backend/utils/audio_math.py) and the library's key filter and sort
-//!   (backend/infra/repositories/track_repository.py).
+//! - [`audio_math`]: the library's key filter and sort
+//!   (backend/infra/repositories/track_repository.py) over plumdeck-key's
+//!   `normalize_key`.
 //! - [`genre_rules`]: label clean-up for MCP genre analyses and the
 //!   spelling-variant grouping of `GET /api/genres/cleanup-suggestions`
 //!   (backend/app/services/genre_app_service.py).
