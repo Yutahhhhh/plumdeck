@@ -1,0 +1,6 @@
+{
+  "python": "3.12.13",
+  "numpy": "2.5.3",
+  "cases": 602,
+  "source_sha256": "06b213ce6e629c649a7fbdcb5d64b52982989631f9c2cc6d2d24bcac9f19f385"
+}

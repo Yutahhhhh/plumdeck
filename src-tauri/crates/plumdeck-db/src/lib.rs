@@ -6,6 +6,8 @@
 //! Python backend's connection settings, the version check and the v5 schema
 //! DDL (`contracts/schema/v5.sql`, dumped from the Python backend).
 
+pub mod array_codec;
+
 use std::path::Path;
 
 pub use duckdb;
