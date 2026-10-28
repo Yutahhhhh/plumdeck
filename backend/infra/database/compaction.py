@@ -10,7 +10,12 @@
 必要なら「新しいファイルへ生きているデータだけを書き出して差し替える」再構築を行う:
 
 1. schema version < CURRENT_SCHEMA_VERSION  -> 新スキーマ(BLOB化)へ変換しつつ再構築
-2. version は最新だがファイルが肥大  -> 変換なしで再構築 (コンパクション)
+2. features_extra_json に許可リスト外のキーが残っている -> 再構築 (1 回だけ)
+3. version は最新だがファイルが肥大  -> 変換なしで再構築 (コンパクション)
+
+どの再構築でも features_extra_json は utils/features_extra の許可リストで作り直す
+(読み手のない拍・波形の重複配列や記録用キーを落とす)。UPDATE で書き換えると
+DuckDB はファイルを大きくするため、再構築の中でだけ行う。
 
 再構築は新ファイルに書き出してから rename で差し替えるため、成功するまで元ファイルは無傷。
 元ファイルは `<db>.bak-v<N>-<timestamp>` として残す (自動削除しない)。
@@ -29,6 +34,7 @@ from infra.database.schema import (
     get_schema_statements,
 )
 from utils.array_codec import pack_f32, pack_u8_waveform
+from utils.features_extra import PERSISTED_KEYS, persisted_features_extra
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -38,6 +44,12 @@ COMPACT_MIN_BYTES = 256 * 1024 * 1024          # これ未満のファイルは�
 COMPACT_BYTES_PER_TRACK = 64 * 1024            # 1曲あたりの許容目安 (BLOB化後は十分過大)
 COMPACT_RATIO_LIMIT = 4                        # 目安の何倍を超えたら再構築するか
 BATCH = 500
+
+# schema_info key marking that features_extra_json holds only PERSISTED_KEYS.
+# Bump FX_CLEAN_VERSION when PERSISTED_KEYS shrinks so existing rows are rebuilt.
+FX_CLEAN_KEY = "features_extra_clean"
+FX_CLEAN_VERSION = 1
+_PERSISTED = frozenset(PERSISTED_KEYS)
 
 
 def ensure_healthy_db(db_path: str) -> None:
@@ -56,13 +68,19 @@ def ensure_healthy_db(db_path: str) -> None:
         version = _read_version(con)
         legacy = _has_legacy_analysis_columns(con)
         needs_migrate = version < CURRENT_SCHEMA_VERSION or legacy
-        needs_compact = (not needs_migrate) and _is_bloated(con, db_path)
+        needs_fx = (not needs_migrate) and _needs_fx_cleanup(con)
+        needs_compact = (not needs_migrate) and (not needs_fx) and _is_bloated(con, db_path)
 
-        if not needs_migrate and not needs_compact:
+        if not needs_migrate and not needs_fx and not needs_compact:
             return
 
         size_mb = os.path.getsize(db_path) / 1e6
-        reason = f"schema v{version} -> v{CURRENT_SCHEMA_VERSION}" if needs_migrate else "肥大ファイルのコンパクション"
+        if needs_migrate:
+            reason = f"schema v{version} -> v{CURRENT_SCHEMA_VERSION}"
+        elif needs_fx:
+            reason = "features_extra の許可リスト外キーの削除"
+        else:
+            reason = "肥大ファイルのコンパクション"
         logger.warning(f"DuckDB ファイルを再構築します ({reason}, 現在 {size_mb:.0f}MB)")
 
         if os.path.exists(new_path):
@@ -83,12 +101,49 @@ def ensure_healthy_db(db_path: str) -> None:
 # --------------------------------------------------------------------------- #
 # 判定ヘルパー
 # --------------------------------------------------------------------------- #
-def _read_version(con) -> int:
+def _read_info_int(con, key: str) -> int:
     try:
-        row = con.execute("SELECT value FROM schema_info WHERE key = 'version'").fetchone()
+        row = con.execute("SELECT value FROM schema_info WHERE key = ?", [key]).fetchone()
         return int(row[0]) if row and row[0] is not None else 0
     except Exception:
         return 0
+
+
+def _read_version(con) -> int:
+    return _read_info_int(con, "version")
+
+
+def _write_info(con, key: str, value: str) -> None:
+    con.execute(
+        "INSERT INTO schema_info (key, value) VALUES (?, ?) "
+        "ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        [key, value],
+    )
+
+
+def _needs_fx_cleanup(con) -> bool:
+    """features_extra_json に許可リスト外のキーを持つ行があるか。
+
+    中身を走査するのは印 (FX_CLEAN_KEY) が無いときだけ。きれいならその場で印を付け、
+    以後の起動は印だけを見る。古いバックアップを復元すると印が無いので再び判定される。
+    """
+    if _read_info_int(con, FX_CLEAN_KEY) >= FX_CLEAN_VERSION:
+        return False
+    try:
+        dirty = con.execute(
+            "SELECT 1 FROM track_analyses WHERE CASE "
+            "WHEN json_valid(features_extra_json) AND json_type(features_extra_json) = 'OBJECT' "
+            "THEN NOT list_has_all(?::VARCHAR[], json_keys(features_extra_json)) "
+            "ELSE false END LIMIT 1",
+            [list(PERSISTED_KEYS)],
+        ).fetchone() is not None
+        if not dirty:
+            _write_info(con, FX_CLEAN_KEY, str(FX_CLEAN_VERSION))
+    except Exception as e:
+        # 判定できなければ起動を止めず、次回の起動で再判定する。
+        logger.warning(f"features_extra の判定をスキップしました: {e}")
+        return False
+    return dirty
 
 
 def _has_legacy_analysis_columns(con) -> bool:
@@ -179,6 +234,22 @@ def _as_list(v) -> list:
     return []
 
 
+def _clean_features_extra(fx) -> str:
+    """Rebuild a features_extra_json object with the persisted allow-list.
+
+    Already clean or non-object values are kept byte-for-byte.
+    """
+    if not fx:
+        return "{}"
+    try:
+        extra = json.loads(fx)
+    except (TypeError, ValueError):
+        return fx
+    if not isinstance(extra, dict) or extra.keys() <= _PERSISTED:
+        return fx
+    return json.dumps(persisted_features_extra(extra))
+
+
 def _copy_track_analyses(src, dst, convert: bool) -> None:
     total = src.execute("SELECT count(*) FROM track_analyses").fetchone()[0] or 0
     if convert:
@@ -204,11 +275,11 @@ def _copy_track_analyses(src, dst, convert: bool) -> None:
                         track_id,
                         pack_f32(_as_list(beats)),
                         pack_u8_waveform(_as_list(wave)),
-                        fx or "{}",
+                        _clean_features_extra(fx),
                     )
                 )
             else:
-                out.append((track_id, beats, wave, fx or "{}"))
+                out.append((track_id, beats, wave, _clean_features_extra(fx)))
         dst.executemany(
             "INSERT INTO track_analyses "
             "(track_id, beats_f32, waveform_u8, features_extra_json) VALUES (?, ?, ?, ?)",
@@ -245,11 +316,8 @@ def _build_new_file(src, new_path: str, convert: bool) -> None:
         if _table_exists(src, "track_analyses"):
             _copy_track_analyses(src, dst, convert)
 
-        dst.execute(
-            "INSERT INTO schema_info (key, value) VALUES ('version', ?) "
-            "ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-            [str(CURRENT_SCHEMA_VERSION)],
-        )
+        _write_info(dst, "version", str(CURRENT_SCHEMA_VERSION))
+        _write_info(dst, FX_CLEAN_KEY, str(FX_CLEAN_VERSION))
         dst.execute("CHECKPOINT")
     finally:
         dst.close()
