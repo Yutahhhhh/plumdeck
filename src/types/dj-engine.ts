@@ -125,6 +125,8 @@ export const DJ_ENGINE_CAPABILITIES = {
    * H-2: every deck's `syncLeader` / `syncEnabled` mirror the engine each tick,
    * including leaders the engine elects by itself. H-3 (interim on Mixxx): SYNC
    * ON, or play while synced, aligns the follower's beat phase once (<=2 ms).
+   * A synced start is aligned before its first audible block; SYNC ON while
+   * playing is one audible jump.
    */
   deckSyncLeaderTelemetry: "deck.sync.leader.v2",
   /** H-11: loops 1/64..512 beats and beat jumps 1/64..128 beats. */

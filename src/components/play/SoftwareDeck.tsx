@@ -220,7 +220,9 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
           <button className="dj-chip dj-chip--keysync" disabled={Boolean(keySyncReason)}
             title={keySyncReason ?? "KEY SYNC：MASTER のキーに近い方向へキーを合わせます"} onClick={() => onKeySync?.()}>KEY SYNC</button>
           <button className={cn("dj-chip dj-chip--beatsync", deck?.syncEnabled && "is-on")} disabled={!supported("deck.sync")} aria-pressed={Boolean(deck?.syncEnabled)}
-            title={capabilities.includes("deck.sync") ? "テンポシンク：BPMを合わせます。拍位置の自動移動は行いません" : "この音声エンジンはシンク非対応"}
+            title={!capabilities.includes("deck.sync") ? "この音声エンジンはシンク非対応"
+              : capabilities.includes(DJ_ENGINE_CAPABILITIES.deckSyncLeaderTelemetry) ? "テンポシンク：BPM を合わせ、ON にした瞬間に一度だけ拍位置を揃えます（再生中は音が一度飛ぶことがあります）"
+              : "テンポシンク：BPMを合わせます。拍位置の自動移動は行いません"}
             onClick={() => onSync(!deck?.syncEnabled)}><span>BEAT</span><span>SYNC</span></button>
           <div className="dj-key-shift" title={keyReason ?? `現在のキー${key.approximate ? "（MT OFF のためテンポで音程が動いています。≈ は最寄りの半音）" : ""}${originalKey ? ` · 原キー ${originalKey}` : " · 原キー不明"}。ダブルクリックで KEY RESET`}
             onDoubleClick={() => { if (!keyReason && keyShift !== 0) onKeyReset?.(); }}>

@@ -529,14 +529,12 @@ public:
     QJsonObject samplerState() const override { return samplers_ ? samplers_->state() : QJsonObject{}; }
     QString samplerCommand(const QString& op, const QJsonObject& params) override { return samplers_ ? samplers_->command(op, params) : "Sampler unavailable"; }
     void play(int index, bool enabled) override {
-        const bool starting = enabled && !playing(index), stopping = !enabled && playing(index);
+        const bool starting = enabled && !playing(index);
         ControlObject::set(ConfigKey(groups[index], "play"), enabled ? 1 : 0);
-        if (starting) requestPhaseSync(index); else if (!enabled) ++phaseGenerations_[index];
-        // The slip timeline only runs while playing (see armSlip).
-        if (starting && slipWanted_[index] && !slipEngaged(index)) armSlip(index);
-        if (stopping && slipWanted_[index] && slipEngaged(index) && !inSlipGesture(index)) {
-            ++slipGenerations_[index]; ControlObject::set(ConfigKey(groups[index], "slip_enabled"), 0);
-        }
+        // Phase-align a synced start before its first audible block (H-3).
+        // SLIP needs no handling here: it is engaged only during a gesture
+        // (see beginSlipGesture), so a pause between gestures never seeks.
+        if (starting) alignPhaseNow(index); else if (!enabled) ++phaseGenerations_[index];
     }
     void seek(int index, double ms) override {
         ++phaseGenerations_[index];
@@ -553,7 +551,7 @@ public:
         if (phase == "begin") scratchOwner_[index] = origin;
         else if (scratchOwner_[index] != origin) return;
         else if (release) scratchOwner_[index] = ScratchOrigin::None;
-        if (phase == "begin") { pitchbend(index, 0); cancelSlipReturn(index); }
+        if (phase == "begin") { pitchbend(index, 0); beginSlipGesture(index); }
         const double sampleRate = tracks_[index] ? tracks_[index]->getSampleRate().value() : 44100;
         // "abort" は曲の入れ替えなどでの強制解放。制動も着地もせず即座に離す。
         decks_[index]->requestScratch(!release, phase == "begin", ms * sampleRate * 2.0 / 1000.0, sampleRate, phase != "abort", capturedNativeUs, keepalive, inputSequence);
@@ -665,12 +663,13 @@ public:
     void performanceControl(int index, const QString& control, double value) override {
         const bool wasReverse = control == "reverse" && ControlObject::get(ConfigKey(groups[index], control)) > 0;
         if (control == "slip_enabled") {
+            // Turning SLIP on applies from the next gesture. Turning it off
+            // mid-gesture returns now, as Mixxx seeks when slip disengages.
             ++slipGenerations_[index]; slipWanted_[index] = value > 0;
-            if (value > 0) { if (playing(index) && !slipEngaged(index)) armSlip(index); }
-            else ControlObject::set(ConfigKey(groups[index], control), 0);
+            if (value <= 0) ControlObject::set(ConfigKey(groups[index], control), 0);
             return;
         }
-        if ((control == "reverse" || control == "reverseroll") && value > 0) cancelSlipReturn(index);
+        if ((control == "reverse" || control == "reverseroll") && value > 0) beginSlipGesture(index);
         ControlObject::set(ConfigKey(groups[index], control), value);
         if (wasReverse && value == 0) requestSlipReturn(index);
     }
@@ -686,67 +685,53 @@ public:
     void requestPhaseSync(int index) {
         const auto token = ++phaseGenerations_[index], generation = generations_[index];
         QTimer::singleShot(20, this, [this,index,token,generation] {
-            if (phaseGenerations_[index] != token || generations_[index] != generation || !playing(index) || syncLeader() == index ||
-                    ControlObject::get(ConfigKey(groups[index], "sync_enabled")) <= 0 || beatgridState(index).isEmpty()) return;
-            // Explicit one-shot phase requests work with native quantize off.
-            // Do not enable quantize, which also changes cue and seek behavior.
-            trigger(index, "beatsync_phase");
+            if (phaseGenerations_[index] != token || generations_[index] != generation || !playing(index)) return;
+            triggerPhaseSync(index);
         });
+    }
+    // On a synced start, play=1 and the phase request land in the same Qt
+    // turn: EngineBuffer::processSeek() applies SEEK_PHASE in the first
+    // callback that sees play, before that callback renders any audio.
+    // (A delayed request let ~25 ms play unaligned before jumping.)
+    void alignPhaseNow(int index) {
+        ++phaseGenerations_[index];
+        triggerPhaseSync(index);
+    }
+    void triggerPhaseSync(int index) {
+        if (!playing(index) || syncLeader() == index || ControlObject::get(ConfigKey(groups[index], "sync_enabled")) <= 0 || beatgridState(index).isEmpty()) return;
+        // Explicit one-shot phase requests work with native quantize off.
+        // Do not enable quantize, which also changes cue and seek behavior.
+        trigger(index, "beatsync_phase");
     }
     bool slipEngaged(int index) const { return ControlObject::get(ConfigKey(groups[index], "slip_enabled")) > 0; }
-    bool inSlipGesture(int index) const {
-        const auto get = [&](const char* control) { return ControlObject::get(ConfigKey(groups[index], control)) > 0; };
-        return get("loop_enabled") || get("reverse") || get("reverseroll") || scratching(index);
-    }
-    // Mixxx captures the slip timeline's speed once, when slip_enabled turns
-    // on. Engaged while stopped, or in the same callback that starts
-    // playback, the timeline would stand still and a later return would jump
-    // back to where SLIP was pressed. So SLIP is engaged only while playing,
-    // a few callbacks after playback started.
-    void armSlip(int index) {
-        const auto token = ++slipGenerations_[index], generation = generations_[index];
-        continueArmSlip(index, token, generation, decks_[index]->renderedBlocks(), 0);
-    }
-    void continueArmSlip(int index, quint64 token, quint64 generation, quint64 start, int attempts) {
-        if (slipGenerations_[index] != token || generations_[index] != generation || !slipWanted_[index] || !playing(index)) return;
-        if (decks_[index]->renderedBlocks() > start + 2) { ControlObject::set(ConfigKey(groups[index], "slip_enabled"), 1); return; }
-        if (attempts >= 200) return;
-        QTimer::singleShot(5, this, [this,index,token,generation,start,attempts] { continueArmSlip(index, token, generation, start, attempts + 1); });
-    }
-    void cancelSlipReturn(int index) {
-        const auto key = ConfigKey(groups[index], "slip_enabled");
-        // A gesture on a stopped deck has no running timeline to return to.
-        if (interruptSlipReturn(slipGenerations_[index], slipWanted_[index], ControlObject::get(key) > 0) && playing(index))
-            ControlObject::set(key, 1);
+    // Mixxx fixes the slip timeline's speed when slip_enabled turns on
+    // (m_dSlipRate = m_rate_old) and never updates it. Engaged for as long as
+    // the SLIP button is on, a later tempo, SYNC or bend change would move the
+    // timeline away from the playhead. So slip is engaged only for a gesture:
+    // just before a loop, reverse or scratch starts (same Qt turn, so the
+    // callback captures the current rate and position), and released when the
+    // gesture ends. A gesture on a stopped deck has no running timeline.
+    void beginSlipGesture(int index) {
+        // Also cancels a pending return; the running timeline is kept.
+        if (interruptSlipReturn(slipGenerations_[index], slipWanted_[index], slipEngaged(index)) && playing(index))
+            ControlObject::set(ConfigKey(groups[index], "slip_enabled"), 1);
     }
     void requestSlipReturn(int index) {
-        if (!slipWanted_[index] || !slipEngaged(index)) return;
+        if (!slipEngaged(index)) return;
         const auto token = ++slipGenerations_[index], generation = generations_[index];
-        continueSlipReturn(index, token, generation, false, 0, 0);
+        continueSlipReturn(index, token, generation, 0);
     }
-    void continueSlipReturn(int index, quint64 token, quint64 generation, bool off, quint64 frame, int attempts) {
-        if (slipGenerations_[index] != token || generations_[index] != generation || !slipWanted_[index]) return;
-        // EngineBuffer polls slip_enabled in its callback. OFF then ON in one
-        // Qt turn is invisible to it. Wait for observed rendered blocks between
-        // the two writes, and for a scratch release ramp to finish first.
+    void continueSlipReturn(int index, quint64 token, quint64 generation, int attempts) {
+        if (slipGenerations_[index] != token || generations_[index] != generation) return;
         const auto get = [&](const char* control) { return ControlObject::get(ConfigKey(groups[index], control)); };
-        if (!off) {
-            // The engine applies loop/reverse/scratch exits on its callback;
-            // wait (up to ~1 s) until it reports the gesture has ended.
-            if (get("loop_enabled") > 0 || get("reverse") > 0 || get("reverseroll") > 0 || scratching(index)) {
-                if (attempts >= 200) return;
-            } else {
-                frame = decks_[index]->renderedBlocks();
-                ControlObject::set(ConfigKey(groups[index], "slip_enabled"), 0); off = true;
-            }
-        } else if (decks_[index]->renderedBlocks() > frame + 1 || attempts >= 200) {
-            // Re-engage only while playing; play() arms it again otherwise.
-            if (playing(index)) ControlObject::set(ConfigKey(groups[index], "slip_enabled"), 1);
+        // The engine applies loop/reverse/scratch exits on its callback, and a
+        // scratch release ramps first; wait (up to ~1 s) for the gesture to end.
+        if ((get("loop_enabled") > 0 || get("reverse") > 0 || get("reverseroll") > 0 || scratching(index)) && attempts < 200) {
+            QTimer::singleShot(5, this, [this,index,token,generation,attempts] { continueSlipReturn(index, token, generation, attempts + 1); });
             return;
         }
-        QTimer::singleShot(5, this, [this,index,token,generation,off,frame,attempts] {
-            continueSlipReturn(index, token, generation, off, frame, attempts + 1);
-        });
+        // Disengaging seeks to the slip timeline. Stays off until the next gesture.
+        ControlObject::set(ConfigKey(groups[index], "slip_enabled"), 0);
     }
     int syncLeader() const override {
         for (int index = 0; index < 4; ++index) {
@@ -776,7 +761,7 @@ public:
     }
     void loopEnable(int index, bool enabled) override {
         const bool wasEnabled = ControlObject::get(ConfigKey(groups[index], "loop_enabled")) > 0;
-        if (enabled) cancelSlipReturn(index);
+        if (enabled && !wasEnabled) beginSlipGesture(index);
         ControlObject::set(ConfigKey(groups[index], "loop_enabled"), enabled ? 1 : 0);
         if (!enabled && wasEnabled) requestSlipReturn(index);
     }

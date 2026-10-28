@@ -273,7 +273,19 @@ test('Play engine conformance on BlackHole 2ch', { timeout: 900000, skip: !binar
       await h.ok('deck.pause', { deck: 'B' }); await outOfPhase();
       const started = await h.record(async mark => { await h.ok('deck.play', { deck: 'B' }); mark('play'); }, 2000);
       const onPlay = offsets(started, started.marks.play + 0.5);
-      results[label] = { before, afterSyncOn: after, afterSyncedPlay: onPlay };
+      // From the very first block: B cued exactly on its beat while A is
+      // mid-beat, so an unaligned pre-roll would sound a click ~half a beat off.
+      await h.ok('deck.pause', { deck: 'B' });
+      let a = (await h.snapshot()).decks.A.positionMs;
+      await delay(((0.5 - (a % BEAT_MS) / BEAT_MS + 1) % 1) * BEAT_MS);
+      a = (await h.snapshot()).decks.A.positionMs;
+      await h.ok('deck.seek', { deck: 'B', positionMs: (Math.floor(a / BEAT_MS) + 8) * beatB });
+      const cued = await h.record(async mark => { mark('play'); await h.ok('deck.play', { deck: 'B' }); }, 900);
+      const from = Math.max(0, cued.marks.play - 0.05);
+      const firstWindow = { ...cued, mono: cued.mono.subarray(0, Math.floor((cued.marks.play + 0.6) * RATE)) };
+      const firstClicks = offsets(firstWindow, from);
+      results[label] = { before, afterSyncOn: after, afterSyncedPlay: onPlay, firstBlocksAfterPlay: firstClicks };
+      expect(`${label}: no unaligned click in the first 600 ms after play`, firstClicks.count >= 1 && firstClicks.worst <= 2.5, firstClicks);
       expect(`${label}: decks start out of phase`, before.count > 0 && before.worst > 50, before);
       expect(`${label}: phase error <= 2 ms one beat after SYNC ON`, after.count >= 2 && Math.abs(after.median) <= 2 && after.worst <= 2.5, after);
       expect(`${label}: phase error <= 2 ms after play while synced`, onPlay.count >= 2 && Math.abs(onPlay.median) <= 2 && onPlay.worst <= 2.5, onPlay);
@@ -351,6 +363,22 @@ test('Play engine conformance on BlackHole 2ch', { timeout: 900000, skip: !binar
       await h.ok('deck.scratch', { deck: 'A', phase: 'end', gestureId, positionMs: -150 });
       await delay(400);
     });
+    // Tempo changed after SLIP was armed: the slip timeline must follow the
+    // new speed (Mixxx fixes it when slip engages, so it may only engage per gesture).
+    await h.ok('deck.tempo.set', { deck: 'A', rate: 1.06 }); await h.ok('deck.tempo.set', { deck: 'B', rate: 1.06 });
+    await delay(2000);
+    await measure('loop after tempo change', async () => {
+      await h.ok('deck.loop.beats', { deck: 'A', beats: 0.25 }); await delay(400);
+      await h.ok('deck.loop.enable', { deck: 'A', enabled: false });
+    });
+    // Pausing with SLIP armed and no gesture must not move the playhead.
+    const playing = await h.snapshot();
+    await h.ok('deck.pause', { deck: 'A' }); await h.ok('deck.pause', { deck: 'B' });
+    await delay(150);
+    const paused = await h.snapshot();
+    const pauseJumpMs = gap(paused) - gap(playing);
+    results.pause = { jumpMs: pauseJumpMs, slipArmed: paused.decks.A.slip };
+    expect('pause with SLIP armed after a tempo change: no jump (<= 25 ms)', Math.abs(pauseJumpMs) <= 25, pauseJumpMs);
     metric('slip', results);
     expect('SLIP stays armed', Object.values(results).every(r => r.slipArmed), Object.fromEntries(Object.entries(results).map(([k, v]) => [k, v.slipArmed])));
   });
