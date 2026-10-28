@@ -1,33 +1,15 @@
 import { FilterState } from "@/components/music-library/types";
+import { KEYS } from "@/lib/keys.generated";
+import { parseKey } from "@/services/dj-engine/musical-key";
 import { Track } from "@/types";
 
 // --- Camelot Wheel (Harmonic Mixing) ---
-// backend/utils/audio_math.py の KEY_TO_CAMELOT / CAMELOT_ADJACENCY と対応
-
-const KEY_TO_CAMELOT: Record<string, string> = {
-  "C Major": "8B", "C Minor": "5A",
-  "C# Major": "3B", "Db Major": "3B", "C# Minor": "12A",
-  "D Major": "10B", "D Minor": "7A",
-  "D# Major": "5B", "Eb Major": "5B", "D# Minor": "2A", "Eb Minor": "2A",
-  "E Major": "12B", "E Minor": "9A",
-  "F Major": "7B", "F Minor": "4A",
-  "F# Major": "2B", "Gb Major": "2B", "F# Minor": "11A",
-  "G Major": "9B", "G Minor": "6A",
-  "G# Major": "4B", "Ab Major": "4B", "G# Minor": "1A",
-  "A Major": "11B", "A Minor": "8A",
-  "A# Major": "6B", "Bb Major": "6B", "A# Minor": "3A", "Bb Minor": "3A",
-  "B Major": "1B", "B Minor": "10A",
-};
+// Whole-key parsing: matching a table name inside the text turned
+// "Ab minor" into B minor (10A).
 
 function normalizeKeyToCamelot(key?: string | null): string | null {
-  if (!key) return null;
-  const trimmed = key.trim();
-  if (/^\d{1,2}[AB]$/.test(trimmed)) return trimmed;
-  if (KEY_TO_CAMELOT[trimmed]) return KEY_TO_CAMELOT[trimmed];
-  const found = Object.keys(KEY_TO_CAMELOT).find((k) =>
-    trimmed.toLowerCase().includes(k.toLowerCase())
-  );
-  return found ? KEY_TO_CAMELOT[found] : null;
+  const parsed = parseKey(key);
+  return parsed ? KEYS[parsed.pitch + (parsed.minor ? 12 : 0)].alphanumeric : null;
 }
 
 export type KeyCompatibility = "perfect" | "compatible" | "clash" | "unknown";
