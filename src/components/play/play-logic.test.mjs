@@ -189,22 +189,25 @@ test("PAD FX presets: no sine tremolo, inserts at full wet, one source for mouse
   }
 });
 
-test("PAD FX banks follow the redesign once the host declares the slots", () => {
+test("PAD FX banks follow the owner's assignment, then the redesign", () => {
   const extended = [...CURRENT_HOST, PAD_FX_EXTENDED];
   const names = (mode, caps) => Array.from({ length: 16 }, (_, slot) => {
     const preset = padPreset(mode, slot, caps);
     return `${preset.label}${preset.beats ? ` ${formatBeats(preset.beats)}` : preset.variant ? ` ${preset.variant}` : ""}`;
   });
-  assert.deepEqual(names(1, extended).slice(0, 7), ["ECHO 1/2", "ECHO 3/4", "ROLL 1/4", "ROLL 1/8", "TRANS 1/4", "TRANS 1/8", "FILTER HPF"]);
-  assert.deepEqual(names(1, extended).slice(8, 15), ["ECHO 1", "SPIRAL 1/2", "SLIP ROLL 1/8", "SLIP ROLL 1/16", "REVERB 60%", "FLANGER 16", "FILTER LPF"]);
-  assert.deepEqual(names(5, extended).slice(0, 7), ["ECHO 1/4", "PING PONG 1/2", "ROLL 1/16", "TRANS 1/16", "NOISE", "CRUSH", "PITCH +"]);
-  assert.equal(padPreset(5, 13, extended).label, "DELAY");
+  // Pads 1-8: the owner's PAD FX 1 / PAD FX 2 (Rust-only slots play the nearest host effect).
+  assert.deepEqual(names(1, extended).slice(0, 8), ["ROLL 1/2", "FILTER LPF", "FLANGER 16", "ECHO 3/4", "ECHO 1/4", "ECHO 1/2", "REVERB 50%", "ECHO 1/2"]);
+  assert.deepEqual(names(5, extended).slice(0, 8), ["SLIP ROLL 1/16", "SLIP ROLL 1/8", "SLIP ROLL 1/4", "SLIP ROLL 1/2", "ROLL 1/16", "ROLL 1/8", "ROLL 1/4", "ROLL 1/2"]);
+  // Pads 9-16: the redesign's proposal.
+  assert.deepEqual(names(1, extended).slice(8, 15), ["ECHO 1", "SPIRAL 1/2", "SLIP ROLL 1/8", "SLIP ROLL 1/16", "REVERB 60%", "TRANS 1/4", "FILTER LPF"]);
+  assert.deepEqual(names(5, extended).slice(8, 15), ["REVERB LONG", "DUB ECHO", "PHASER 4", "PAN 1", "NOISE", "DELAY 1", "PITCH +"]);
   assert.deepEqual(padFxParams(padPreset(5, 13, extended), true).params, { feedback_amount: 0 });
   // Today's host: color pads work (Color FX), processor pads keep a working fallback.
-  assert.equal(padPreset(1, 6, CURRENT_HOST).kind, "color");
-  assert.equal(padPreset(1, 2, CURRENT_HOST).effect, "reverb");
+  assert.equal(padPreset(1, 1, CURRENT_HOST).kind, "color");
+  assert.equal(padPreset(1, 0, CURRENT_HOST).effect, "echo");
+  assert.equal(padPreset(5, 0, CURRENT_HOST).effect, "echo");
   // Without Color FX either, the color pads fall back too.
-  assert.equal(padPreset(1, 6, []).kind, "beat");
+  assert.equal(padPreset(1, 1, []).kind, "beat");
 });
 
 test("color pads borrow the COLOR FX and give the knob back after the last release", async () => {
@@ -218,13 +221,13 @@ test("color pads borrow the COLOR FX and give the knob back after the last relea
     setFilter: async (deck, value) => { calls.push(["filter", deck, value]); },
   };
   const sender = createPadFxSender(client);
-  const hpf = padPreset(1, 6, CURRENT_HOST), noise = padPreset(5, 4, CURRENT_HOST);
-  assert.equal(padFxGroup(hpf), "color");
-  await sender.send("A", hpf, true);
+  const sweep = padPreset(1, 1, CURRENT_HOST), noise = padPreset(5, 12, CURRENT_HOST);
+  assert.equal(padFxGroup(sweep), "color");
+  await sender.send("A", sweep, true);
   await sender.send("A", noise, true);
   assert.ok(padFxSounding(noise, channel));
-  await sender.send("A", hpf, false);
-  assert.deepEqual(calls, [["color", "A", "filter", 0.6], ["color", "A", "whitenoise", 0.5], ["color", "A", "echo", 0.2]]);
+  await sender.send("A", sweep, false);
+  assert.deepEqual(calls, [["color", "A", "filter", -0.8], ["color", "A", "whitenoise", 0.5], ["color", "A", "echo", 0.2]]);
   const echo = padPreset(1, 0, CURRENT_HOST);
   assert.equal(padFxGroup(echo), "chain");
   await sender.send("A", echo, true);

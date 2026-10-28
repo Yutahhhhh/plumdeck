@@ -63,57 +63,58 @@ const color = (effect: ColorPadEffect, label: string, amount: number, variant?: 
 /** Needs the host's PAD FX upgrade (beat processors, beats and params). */
 const extended = (pad: BeatPadSlot): BeatPadSlot => ({ ...pad, requires: [PAD_FX_EXTENDED] });
 
-// plumdeck's own default banks, following the Play redesign (2.7.1). The
-// official software publishes no default assignment, and the owner's Pad
-// Editor assignment is not readable from the library data. Each entry is
-// [slot, fallback]: the fallback keeps the pad working on hosts without the
-// slot's capability. Slots that need the Rust engine (HELIX, REV ROLL, SWEEP,
-// VINYL BRAKE and the RELEASE pads) stay on their fallback until then.
+// Default banks. Pads 1-8 of each bank follow the owner's own PAD FX
+// assignment (taken from a screenshot of their DJ software, 2026-10-28);
+// pads 9-16 follow the Play redesign (2.7.1). Each entry is [slot, fallback]:
+// the fallback keeps the pad working on hosts without the slot's capability.
+// Slots that need the Rust engine (SWEEP, REV ROLL, VINYL BRAKE and the
+// RELEASE pads, then HELIX) play the nearest effect the host has until then.
 // The Mixxx filter macro is centred at 0.5 (bypass): below sweeps LPF, above HPF.
 type Entry = readonly [PadFxSlot, BeatPadSlot];
+const echo = (beats: number, mix = 0.5, depth = 0.55) => slot("echo", "ECHO", { beats, mix, depth });
 const BANKS: Record<1 | 5, readonly Entry[]> = {
   1: [
-    [slot("echo", "ECHO", { beats: 1 / 2, mix: 0.5, depth: 0.5 }), slot("echo", "ECHO", { beats: 1 / 2, mix: 0.5, depth: 0.5 })],
-    [slot("echo", "ECHO", { beats: 3 / 4, mix: 0.55, depth: 0.6 }), slot("echo", "ECHO", { beats: 3 / 4, mix: 0.55, depth: 0.6 })],
-    [extended(slot("roll", "ROLL", { beats: 1 / 4, depth: 1 })), slot("reverb", "REVERB", { variant: "SHORT", mix: 0.45, depth: 0.45 })],
-    [extended(slot("roll", "ROLL", { beats: 1 / 8, depth: 1 })), slot("flanger", "FLANGER", { beats: 16, mix: 0.6, depth: 0.7 })],
-    [extended(slot("tremolo", "TRANS", { beats: 1 / 4, depth: 1 })), slot("phaser", "PHASER", { beats: 1 / 4, mix: 0.6, depth: 0.7 })],
-    [extended(slot("tremolo", "TRANS", { beats: 1 / 8, depth: 1 })), slot("filter", "FILTER", { variant: "HPF", depth: 0.82 })],
-    [color("filter", "FILTER", 0.6, "HPF"), slot("bitcrusher", "CRUSH", { depth: 0.6 })],
-    // RELEASE: ECHO OUT 1/2 (Rust)
-    [slot("autopan", "PAN", { beats: 1 / 2, depth: 0.8 }), slot("autopan", "PAN", { beats: 1 / 2, depth: 0.8 })],
-    [slot("echo", "ECHO", { beats: 1, mix: 0.6, depth: 0.65 }), slot("echo", "ECHO", { beats: 1, mix: 0.6, depth: 0.65 })],
+    [extended(slot("roll", "ROLL", { beats: 1 / 2, depth: 1 })), echo(1 / 2)],
+    // SWEEP 80 (Rust): a low-pass COLOR sweep until then.
+    [color("filter", "FILTER", -0.8, "LPF"), slot("filter", "FILTER", { variant: "LPF", depth: 0.1 })],
+    [slot("flanger", "FLANGER", { beats: 16, mix: 0.6, depth: 0.7 }), slot("flanger", "FLANGER", { beats: 16, mix: 0.6, depth: 0.7 })],
+    // RELEASE: VINYL BRAKE 3/4 (Rust)
+    [echo(3 / 4, 0.55, 0.6), echo(3 / 4, 0.55, 0.6)],
+    [echo(1 / 4), echo(1 / 4)],
+    [echo(1 / 2), echo(1 / 2)],
+    [slot("reverb", "REVERB", { variant: "50%", mix: 0.5, depth: 0.5 }), slot("reverb", "REVERB", { variant: "50%", mix: 0.5, depth: 0.5 })],
+    // RELEASE: ECHO OUT 1/2 (needs mixer.fx.release)
+    [echo(1 / 2, 0.6, 0.65), echo(1 / 2, 0.6, 0.65)],
+    [echo(1, 0.6, 0.65), echo(1, 0.6, 0.65)],
     [extended(slot("spiral", "SPIRAL", { beats: 1 / 2, mix: 0.6, depth: 0.7 })), slot("reverb", "REVERB", { variant: "60%", mix: 0.6, depth: 0.7 })],
     [extended(slot("sliproll", "SLIP ROLL", { beats: 1 / 8, depth: 1 })), slot("flanger", "FLANGER", { beats: 8, mix: 0.7, depth: 0.85 })],
     [extended(slot("sliproll", "SLIP ROLL", { beats: 1 / 16, depth: 1 })), slot("phaser", "PHASER", { beats: 1, mix: 0.7, depth: 0.85 })],
     [slot("reverb", "REVERB", { variant: "60%", mix: 0.6, depth: 0.7 }), slot("filter", "FILTER", { variant: "LPF", depth: 0.18 })],
-    [slot("flanger", "FLANGER", { beats: 16, mix: 0.6, depth: 0.7 }), slot("distortion", "DIST", { depth: 0.55 })],
+    [extended(slot("tremolo", "TRANS", { beats: 1 / 4, depth: 1 })), slot("distortion", "DIST", { depth: 0.55 })],
     [color("filter", "FILTER", -0.6, "LPF"), slot("moogladder4filter", "LADDER", { variant: "LPF", depth: 0.2 })],
     // RELEASE: VINYL BRAKE 1 (Rust)
     [slot("autopan", "PAN", { beats: 1 / 4, depth: 0.9 }), slot("autopan", "PAN", { beats: 1 / 4, depth: 0.9 })],
   ],
   5: [
-    [slot("echo", "ECHO", { beats: 1 / 4, mix: 0.5, depth: 0.55 }), slot("echo", "ECHO", { beats: 1 / 4, mix: 0.5, depth: 0.55 })],
-    [extended(slot("echo", "PING PONG", { beats: 1 / 2, mix: 0.55, depth: 0.6, params: { pingpong_amount: 1 } })), slot("reverb", "REVERB", { variant: "LONG", mix: 0.75, depth: 0.9 })],
-    [extended(slot("roll", "ROLL", { beats: 1 / 16, depth: 1 })), slot("moogladder4filter", "LADDER", { variant: "LPF", depth: 0.25 })],
-    [extended(slot("tremolo", "TRANS", { beats: 1 / 16, depth: 1 })), slot("bitcrusher", "CRUSH", { variant: "HARD", depth: 0.85 })],
-    [color("whitenoise", "NOISE", 0.5), slot("phaser", "PHASER", { beats: 4, mix: 0.65, depth: 0.75 })],
-    [slot("bitcrusher", "CRUSH", { depth: 0.6 }), slot("flanger", "FLANGER", { beats: 16, mix: 0.75, depth: 0.9 })],
-    [extended(slot("pitchshift", "PITCH", { variant: "+", depth: 0.75 })), slot("filter", "FILTER", { variant: "HPF+", depth: 0.92 })],
-    // RELEASE: BACK SPIN 1 (Rust)
-    [slot("distortion", "DIST", { variant: "HARD", depth: 0.85 }), slot("distortion", "DIST", { variant: "HARD", depth: 0.85 })],
-    [slot("reverb", "REVERB", { variant: "LONG", mix: 0.75, depth: 0.9 }), slot("echo", "ECHO", { beats: 2, mix: 0.7, depth: 0.75 })],
+    [extended(slot("sliproll", "SLIP ROLL", { beats: 1 / 16, depth: 1 })), echo(1 / 4)],
+    [extended(slot("sliproll", "SLIP ROLL", { beats: 1 / 8, depth: 1 })), slot("phaser", "PHASER", { beats: 1 / 2, mix: 0.6, depth: 0.7 })],
+    [extended(slot("sliproll", "SLIP ROLL", { beats: 1 / 4, depth: 1 })), slot("flanger", "FLANGER", { beats: 4, mix: 0.6, depth: 0.7 })],
+    [extended(slot("sliproll", "SLIP ROLL", { beats: 1 / 2, depth: 1 })), echo(1 / 2)],
+    // REV ROLL 1/16 .. 1/2 (Rust): a forward ROLL of the same length until then.
+    [extended(slot("roll", "ROLL", { beats: 1 / 16, depth: 1 })), slot("bitcrusher", "CRUSH", { depth: 0.6 })],
+    [extended(slot("roll", "ROLL", { beats: 1 / 8, depth: 1 })), slot("moogladder4filter", "LADDER", { variant: "LPF", depth: 0.25 })],
+    [extended(slot("roll", "ROLL", { beats: 1 / 4, depth: 1 })), slot("phaser", "PHASER", { beats: 4, mix: 0.65, depth: 0.75 })],
+    [extended(slot("roll", "ROLL", { beats: 1 / 2, depth: 1 })), slot("reverb", "REVERB", { variant: "LONG", mix: 0.75, depth: 0.9 })],
+    [slot("reverb", "REVERB", { variant: "LONG", mix: 0.75, depth: 0.9 }), echo(2, 0.7, 0.75)],
     [color("echo", "DUB ECHO", 0.6), slot("reverb", "REVERB", { variant: "WASH", mix: 0.9, depth: 1 })],
     [slot("phaser", "PHASER", { beats: 4, mix: 0.65, depth: 0.75 }), slot("moogladder4filter", "LADDER", { variant: "HPF", depth: 0.78 })],
     // HELIX (Rust)
     [slot("autopan", "PAN", { beats: 1, depth: 1 }), slot("autopan", "PAN", { beats: 1, depth: 1 })],
-    // REV ROLL 1/2 (Rust)
-    [slot("phaser", "PHASER", { beats: 1 / 2, mix: 0.6, depth: 0.6 }), slot("phaser", "PHASER", { beats: 1 / 2, mix: 0.6, depth: 0.6 })],
+    [color("whitenoise", "NOISE", 0.5), slot("phaser", "PHASER", { beats: 1 / 2, mix: 0.6, depth: 0.6 })],
     [extended(slot("echo", "DELAY", { beats: 1, mix: 0.6, depth: 0.6, params: { feedback_amount: 0 } })), slot("flanger", "FLANGER", { beats: 4, mix: 0.55, depth: 0.6 })],
-    // SWEEP (Rust)
-    [slot("filter", "FILTER", { variant: "LPF+", depth: 0.08 }), slot("filter", "FILTER", { variant: "LPF+", depth: 0.08 })],
+    [extended(slot("pitchshift", "PITCH", { variant: "+", depth: 0.75 })), slot("filter", "FILTER", { variant: "HPF+", depth: 0.92 })],
     // RELEASE: VINYL BRAKE 1/2 (Rust)
-    [slot("echo", "ECHO", { beats: 1 / 8, mix: 0.45, depth: 0.5 }), slot("echo", "ECHO", { beats: 1 / 8, mix: 0.45, depth: 0.5 })],
+    [echo(1 / 8, 0.45, 0.5), echo(1 / 8, 0.45, 0.5)],
   ],
 };
 

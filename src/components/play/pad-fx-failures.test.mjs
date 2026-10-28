@@ -126,10 +126,10 @@ function midiFixture(handler) {
 }
 
 test("MIDI failed replacement and releases do not latch the previous effect", async () => {
-  const f = midiFixture(async (effect, enabled) => { if (effect === "reverb" && enabled) throw Error("rejected"); });
+  const f = midiFixture(async (effect, enabled) => { if (effect === "flanger" && enabled) throw Error("rejected"); });
   try {
     f.event(0, true); f.event(2, true); f.event(0, false); f.event(2, false); await f.wait();
-    assert.deepEqual(f.calls, [["echo", true], ["reverb", true], ["echo", true], ["echo", false]]);
+    assert.deepEqual(f.calls, [["echo", true], ["flanger", true], ["echo", true], ["echo", false]]);
     assert.equal(f.errors.length, 1);
   } finally { f.runtime.dispose(); await f.wait(); }
 });
@@ -156,9 +156,9 @@ test("MIDI reset waits for the pending press before releasing it", async () => {
 });
 
 test("MIDI mode change releases the acknowledged effect after a failed switch", async () => {
-  const f = midiFixture(async (effect, enabled) => { if (effect === "reverb" && enabled) throw Error("rejected"); });
+  const f = midiFixture(async (effect, enabled) => { if (effect === "flanger" && enabled) throw Error("rejected"); });
   try {
     f.event(0, true); f.event(2, true); selectPads("A", 0); await f.wait();
-    assert.deepEqual(f.calls, [["echo", true], ["reverb", true], ["echo", true], ["echo", false]]);
+    assert.deepEqual(f.calls, [["echo", true], ["flanger", true], ["echo", true], ["echo", false]]);
   } finally { f.runtime.dispose(); await f.wait(); }
 });
