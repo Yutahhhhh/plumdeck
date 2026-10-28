@@ -1,30 +1,43 @@
 //! The plumdeck backend server, assembled for headless use (`plumdeck-backend`
 //! binary) and, from S13, for running inside the Tauri process.
 //!
-//! S0 serves only the health check `GET /`; everything else gets the Python
-//! backend's plain-text 404 (see [`unmatched`]). S1 opens the library before
-//! serving and closes it after ([`startup`]). Startup progress lines
-//! (`PLUMDECK_STARTUP:{...}`) and the managed-sidecar stdin shutdown line keep
-//! the desktop's and scripts/smoke-backend.py's contracts with the Python
-//! sidecar. Logs go where Python's go ([`logging`]).
+//! Routes so far: `GET /` (S0), `GET/POST /api/settings` and
+//! `GET /api/dashboard` (S2); everything else gets the Python backend's
+//! plain-text 404 ([`middleware::unmatched`]). Every route sits behind the
+//! layers in [`middleware`] (panic → 500, loopback Host/Origin, CORS, HEAD).
+//! S1 opens the library before serving and closes it after ([`startup`]).
+//! Startup progress lines (`PLUMDECK_STARTUP:{...}`) and the managed-sidecar
+//! stdin shutdown line keep the desktop's and scripts/smoke-backend.py's
+//! contracts with the Python sidecar. Logs go where Python's go
+//! ([`logging`]).
 
+pub mod body;
 pub mod logging;
+pub mod middleware;
+pub mod response;
+pub mod routes;
 pub mod sandbox;
 pub mod startup;
 
 use std::future::Future;
 use std::io;
+use std::sync::Arc;
 
-use axum::extract::Request;
-use axum::http::{header, Method, StatusCode};
-use axum::middleware::{self, Next};
+use axum::extract::DefaultBodyLimit;
+use axum::http::StatusCode;
+use axum::middleware::{from_fn, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use plumdeck_core::compat::pyjson::{dumps, DumpOptions, PyValue};
 use plumdeck_core::error::ApiError;
-use serde_json::{json, Value};
+use plumdeck_db::handle::DbHandle;
+use plumdeck_db::DbError;
 use tokio::net::TcpListener;
+
+use middleware::{catch_panic_layer, cors, head_is_unmatched, internal_server_error, loopback_only, CorsPolicy};
+pub use middleware::unmatched;
+use response::PyJson;
 
 /// Body of `GET /` (main.py: root).
 pub const ROOT_MESSAGE: &str = "plumdeck Backend API is running";
@@ -50,50 +63,83 @@ impl IntoResponse for HttpError {
     }
 }
 
-async fn root() -> Json<Value> {
-    Json(json!({ "message": ROOT_MESSAGE }))
+/// An unexpected failure: logged, answered like an unhandled Python
+/// exception (500 "Internal Server Error").
+pub fn server_error(error: &dyn std::fmt::Display) -> Response {
+    tracing::error!(target: "plumdeck_backend::http", "request failed: {error}");
+    internal_server_error()
 }
 
-/// What the Python backend answers when no route takes a request.
-///
-/// main.py mounts the MCP app at `/`, so every request FastAPI's routes do
-/// not fully match (an unknown path, a known path with another method such as
-/// `POST /`, `HEAD` on a GET route, a plain `OPTIONS`) falls into it and gets
-/// Starlette's plain-text 404, never FastAPI's JSON 404 or a 405. Kept
-/// bug-compatible until a deviation is approved. CORS preflights are answered
-/// by the CORS middleware before this point (S2).
-pub fn unmatched() -> Response {
-    (StatusCode::NOT_FOUND, [(header::CONTENT_TYPE, "text/plain; charset=utf-8")], "Not Found").into_response()
+/// What every handler shares: the library and the CORS policy.
+#[derive(Clone)]
+pub struct AppState {
+    pub db: DbHandle,
+    pub cors: Arc<CorsPolicy>,
+}
+
+impl AppState {
+    pub fn new(db: DbHandle, cors: CorsPolicy) -> Self {
+        Self { db, cors: Arc::new(cors) }
+    }
+
+    /// Run blocking work (DuckDB) off the async workers; a panic in it is a
+    /// 500, as it would be in the handler itself.
+    pub async fn blocking_result<T: Send + 'static>(
+        &self,
+        work: impl FnOnce() -> T + Send + 'static,
+    ) -> Result<T, Response> {
+        tokio::task::spawn_blocking(work).await.map_err(|error| server_error(&error))
+    }
+
+    /// [`Self::blocking_result`] for database work: any [`DbError`] is a 500
+    /// (Python let SQL and pool errors escape as unhandled exceptions).
+    pub async fn blocking<T: Send + 'static>(
+        &self,
+        work: impl FnOnce() -> Result<T, DbError> + Send + 'static,
+    ) -> Result<T, Response> {
+        self.blocking_result(work).await?.map_err(|error| server_error(&error))
+    }
+}
+
+async fn root() -> PyJson {
+    PyJson(response::dict([("message", response::text(ROOT_MESSAGE))]))
 }
 
 async fn unmatched_handler() -> Response {
     unmatched()
 }
 
-/// FastAPI's GET routes do not answer HEAD (axum's do), so HEAD is unmatched.
-async fn head_is_unmatched(request: Request, next: Next) -> Response {
-    if request.method() == Method::HEAD {
-        return unmatched();
-    }
-    next.run(request).await
-}
-
-/// The HTTP routes.
-pub fn router() -> Router {
-    Router::new()
+/// The HTTP routes with their middleware.
+pub fn router(state: AppState) -> Router {
+    let cors_policy = state.cors.clone();
+    let routes = Router::new()
         .route("/", get(root))
+        .merge(routes::api())
         .fallback(unmatched_handler)
         .method_not_allowed_fallback(unmatched_handler)
-        .layer(middleware::from_fn(head_is_unmatched))
+        .with_state(state);
+    with_layers(routes, cors_policy)
 }
 
-/// Serve `router()` on `listener` until `shutdown` resolves, then finish
+/// The middleware stack of [`router`], outermost last (see [`middleware`]).
+pub fn with_layers(routes: Router, cors_policy: Arc<CorsPolicy>) -> Router {
+    routes
+        // Starlette reads bodies of any size.
+        .layer(DefaultBodyLimit::disable())
+        .layer(from_fn(head_is_unmatched))
+        .layer(from_fn_with_state(cors_policy, cors))
+        .layer(from_fn(loopback_only))
+        .layer(catch_panic_layer())
+}
+
+/// Serve [`router`] on `listener` until `shutdown` resolves, then finish
 /// in-flight requests.
 pub async fn serve(
     listener: TcpListener,
+    state: AppState,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
-    axum::serve(listener, router()).with_graceful_shutdown(shutdown).await
+    axum::serve(listener, router(state)).with_graceful_shutdown(shutdown).await
 }
 
 /// Startup milestones, as startup_progress.report prints them.
@@ -188,23 +234,88 @@ pub async fn stdin_shutdown_line() {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_support {
+    use std::path::PathBuf;
+
     use super::*;
     use axum::body::{to_bytes, Body};
-    use axum::http::{header, Method, Request};
+    use axum::http::{HeaderMap, Method, Request};
     use tower::ServiceExt;
 
-    async fn call(method: Method, path: &str) -> (StatusCode, String, String) {
-        let request = Request::builder().method(method).uri(path).body(Body::empty()).unwrap();
-        let response = router().oneshot(request).await.unwrap();
+    /// A fresh v5 library in a temp dir, removed on drop.
+    pub struct TestLibrary {
+        pub db: DbHandle,
+        dir: PathBuf,
+    }
+
+    impl TestLibrary {
+        pub fn new(name: &str) -> Self {
+            static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let unique = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!("plumdeck-backend-{name}-{}-{unique}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let db = DbHandle::open(&dir.join("plumdeck.duckdb")).unwrap();
+            db.write(|conn| plumdeck_db::schema::init_schema(conn)).unwrap();
+            Self { db, dir }
+        }
+
+        pub fn state(&self) -> AppState {
+            AppState::new(self.db.clone(), CorsPolicy::for_ports(8001, 1420))
+        }
+
+        pub fn execute(&self, sql: &str) {
+            self.db.write(|conn| Ok(conn.execute_batch(sql)?)).unwrap();
+        }
+    }
+
+    impl Drop for TestLibrary {
+        fn drop(&mut self) {
+            let _ = self.db.shutdown(std::time::Duration::from_secs(5));
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    pub struct Answer {
+        pub status: StatusCode,
+        pub headers: HeaderMap,
+        pub body: String,
+    }
+
+    impl Answer {
+        pub fn header(&self, name: &str) -> Option<&str> {
+            self.headers.get(name).map(|v| v.to_str().unwrap())
+        }
+
+        pub fn json(&self) -> serde_json::Value {
+            serde_json::from_str(&self.body).unwrap()
+        }
+    }
+
+    pub async fn send(app: Router, method: Method, path: &str, headers: &[(&str, &str)], body: &str) -> Answer {
+        let mut request = Request::builder().method(method).uri(path);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        let response = app.oneshot(request.body(Body::from(body.to_owned())).unwrap()).await.unwrap();
         let status = response.status();
-        let content_type = response
-            .headers()
-            .get(header::CONTENT_TYPE)
-            .map(|v| v.to_str().unwrap().to_owned())
-            .unwrap_or_default();
+        let headers = response.headers().clone();
         let body = to_bytes(response.into_body(), 1 << 20).await.unwrap();
-        (status, content_type, String::from_utf8(body.to_vec()).unwrap())
+        Answer { status, headers, body: String::from_utf8(body.to_vec()).unwrap() }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::{send, TestLibrary};
+    use super::*;
+    use axum::http::{header, Method};
+
+    async fn call(method: Method, path: &str) -> (StatusCode, String, String) {
+        let library = TestLibrary::new("call");
+        let answer = send(router(library.state()), method, path, &[], "").await;
+        let content_type = answer.header(header::CONTENT_TYPE.as_str()).unwrap_or_default().to_owned();
+        (answer.status, content_type, answer.body)
     }
 
     #[tokio::test]
@@ -217,23 +328,105 @@ mod tests {
 
     #[tokio::test]
     async fn unmatched_requests_get_the_mounts_plain_404() {
+        let library = TestLibrary::new("unmatched");
         for (method, path) in [
             (Method::GET, "/api/does-not-exist"),
             (Method::GET, "/api/"),
+            (Method::GET, "/api/settings/"),
             (Method::POST, "/"),
             (Method::DELETE, "/"),
+            (Method::PUT, "/api/settings"),
+            (Method::DELETE, "/api/dashboard"),
             (Method::OPTIONS, "/"),
         ] {
-            let (status, content_type, body) = call(method.clone(), path).await;
-            assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}");
-            assert_eq!(content_type, "text/plain; charset=utf-8", "{method} {path}");
-            assert_eq!(body, "Not Found", "{method} {path}");
+            let answer = send(router(library.state()), method.clone(), path, &[], "").await;
+            assert_eq!(answer.status, StatusCode::NOT_FOUND, "{method} {path}");
+            assert_eq!(answer.header("content-type"), Some("text/plain; charset=utf-8"), "{method} {path}");
+            assert_eq!(answer.body, "Not Found", "{method} {path}");
         }
-        let (status, content_type, body) = call(Method::HEAD, "/").await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-        assert_eq!(content_type, "text/plain; charset=utf-8");
-        // axum drops HEAD bodies, as uvicorn does.
-        assert_eq!(body, "");
+        for path in ["/", "/api/settings", "/api/dashboard"] {
+            let answer = send(router(library.state()), Method::HEAD, path, &[], "").await;
+            assert_eq!(answer.status, StatusCode::NOT_FOUND);
+            assert_eq!(answer.header("content-type"), Some("text/plain; charset=utf-8"));
+            // axum drops HEAD bodies, as uvicorn does.
+            assert_eq!(answer.body, "");
+        }
+    }
+
+    #[tokio::test]
+    async fn cors_follows_starlette() {
+        let library = TestLibrary::new("cors");
+        let app = || router(library.state());
+        let allowed = [("origin", "http://localhost:1420")];
+        let answer = send(app(), Method::GET, "/api/settings", &allowed, "").await;
+        assert_eq!(answer.status, StatusCode::OK);
+        assert_eq!(answer.header("access-control-allow-origin"), Some("http://localhost:1420"));
+        assert_eq!(answer.header("access-control-allow-credentials"), Some("true"));
+        assert_eq!(answer.header("vary"), Some("Origin"));
+        // A loopback origin outside the list: credentials only, as Starlette.
+        let other = send(app(), Method::GET, "/nope", &[("origin", "http://localhost:5555")], "").await;
+        assert_eq!(other.status, StatusCode::NOT_FOUND);
+        assert_eq!(other.header("access-control-allow-credentials"), Some("true"));
+        assert_eq!(other.header("access-control-allow-origin"), None);
+        assert_eq!(other.header("vary"), None);
+        // No Origin: no CORS headers at all.
+        let plain = send(app(), Method::GET, "/", &[], "").await;
+        assert_eq!(plain.header("access-control-allow-credentials"), None);
+
+        let preflight = [
+            ("origin", "tauri://localhost"),
+            ("access-control-request-method", "PATCH"),
+            ("access-control-request-headers", "X-Foo, content-type"),
+        ];
+        let answer = send(app(), Method::OPTIONS, "/api/anything", &preflight, "").await;
+        assert_eq!(answer.status, StatusCode::OK);
+        assert_eq!(answer.body, "OK");
+        assert_eq!(answer.header("content-type"), Some("text/plain; charset=utf-8"));
+        assert_eq!(answer.header("access-control-allow-methods"), Some("DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT"));
+        assert_eq!(answer.header("access-control-allow-headers"), Some("X-Foo, content-type"));
+        assert_eq!(answer.header("access-control-max-age"), Some("600"));
+        assert_eq!(answer.header("access-control-allow-origin"), Some("tauri://localhost"));
+        let refused = [
+            ("origin", "http://localhost:5555"),
+            ("access-control-request-method", "patch"),
+            ("access-control-request-private-network", "true"),
+        ];
+        let answer = send(app(), Method::OPTIONS, "/", &refused, "").await;
+        assert_eq!(answer.status, StatusCode::BAD_REQUEST);
+        assert_eq!(answer.body, "Disallowed CORS origin, method, private-network");
+        assert_eq!(answer.header("access-control-allow-origin"), None);
+        assert_eq!(answer.header("vary"), Some("Origin"));
+    }
+
+    #[tokio::test]
+    async fn d06_refuses_foreign_hosts_and_origins() {
+        let library = TestLibrary::new("d06");
+        let app = || router(library.state());
+        let answer = send(app(), Method::GET, "/", &[("host", "evil.example:8001")], "").await;
+        assert_eq!(answer.status, StatusCode::MISDIRECTED_REQUEST);
+        assert_eq!(answer.body, r#"{"detail":"Invalid Host header"}"#);
+        let answer = send(app(), Method::GET, "/", &[("host", "127.0.0.1:8001"), ("origin", "http://evil.example")], "").await;
+        assert_eq!(answer.status, StatusCode::FORBIDDEN);
+        assert_eq!(answer.body, r#"{"detail":"Invalid Origin header"}"#);
+        assert_eq!(answer.header("access-control-allow-credentials"), None);
+        let answer = send(app(), Method::GET, "/", &[("host", "localhost:8001"), ("origin", "null")], "").await;
+        assert_eq!(answer.status, StatusCode::FORBIDDEN);
+        let answer = send(app(), Method::GET, "/", &[("host", "[::1]:8001"), ("origin", "http://localhost:5555")], "").await;
+        assert_eq!(answer.status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn panics_answer_500_without_cors() {
+        async fn boom() -> &'static str {
+            panic!("boom")
+        }
+        let app = with_layers(Router::new().route("/boom", get(boom)), Arc::new(CorsPolicy::for_ports(8001, 1420)));
+        let answer = send(app, Method::GET, "/boom", &[("origin", "http://localhost:1420")], "").await;
+        assert_eq!(answer.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(answer.header("content-type"), Some("text/plain; charset=utf-8"));
+        assert_eq!(answer.body, "Internal Server Error");
+        assert_eq!(answer.header("access-control-allow-origin"), None);
+        assert_eq!(answer.header("access-control-allow-credentials"), None);
     }
 
     #[test]
@@ -250,7 +443,8 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
-        let server = tokio::spawn(serve(listener, async {
+        let library = TestLibrary::new("serve");
+        let server = tokio::spawn(serve(listener, library.state(), async {
             let _ = stopped.await;
         }));
         let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();

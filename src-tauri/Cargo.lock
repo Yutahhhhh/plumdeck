@@ -4250,6 +4250,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tower 0.5.2",
+ "tower-http 0.6.7",
  "tracing",
  "tracing-subscriber",
 ]
@@ -6674,11 +6675,13 @@ dependencies = [
  "futures-util",
  "http 1.4.0",
  "http-body 1.0.1",
+ "http-body-util",
  "iri-string",
  "pin-project-lite",
  "tower 0.5.2",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]

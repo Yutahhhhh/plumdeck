@@ -21,7 +21,8 @@ use std::time::Duration;
 use clap::Parser;
 use plumdeck_backend::sandbox::check_parity_sandbox;
 use plumdeck_backend::startup::{close_library, open_library, CompactionNotPorted, Library};
-use plumdeck_backend::{serve, shutdown_signal, stdin_shutdown_line, StartupStage, GRACEFUL_SHUTDOWN_SECS};
+use plumdeck_backend::middleware::CorsPolicy;
+use plumdeck_backend::{serve, shutdown_signal, stdin_shutdown_line, AppState, StartupStage, GRACEFUL_SHUTDOWN_SECS};
 use plumdeck_core::config::Config;
 use plumdeck_core::paths::{live_data_dirs, live_rekordbox_dirs};
 use plumdeck_core::time::SystemClock;
@@ -67,6 +68,9 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
     let port = args.port.unwrap_or(config.port);
+    // main.py builds its CORS list from PLUMDECK_PORT, the port the sidecar
+    // serves on; `--port` stands in for it here.
+    let cors = CorsPolicy::for_ports(port, config.frontend_port);
 
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("tokio runtime");
     runtime.block_on(async move {
@@ -131,7 +135,8 @@ fn main() -> ExitCode {
             }
         };
         let (stop, mut stopped) = tokio::sync::watch::channel(false);
-        let mut server = tokio::spawn(serve(listener, async move {
+        let state = AppState::new(library.db.clone(), cors);
+        let mut server = tokio::spawn(serve(listener, state, async move {
             let _ = stopped.wait_for(|stop| *stop).await;
         }));
         tracing::info!(port, "listening on 127.0.0.1");
