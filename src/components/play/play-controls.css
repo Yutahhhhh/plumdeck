@@ -282,8 +282,10 @@
    パッドが読める高さをデッキ側の下限として持たせる。 */
 .dj-workspace .dj-deck .dj-deck-controls { min-height: 132px; }
 .dj-workspace--compact .dj-deck .dj-deck-controls { min-height: 112px; }
-.dj-performance-pad { min-height: 17px; }
-.dj-workspace--compact .dj-performance-pad { min-height: 15px; }
+/* Spec 2.15 asks 44px for pads; 24px (compact 22px) is what fits four decks at
+   1280x800 without a layout change. Owner visual check: see the known gaps. */
+.dj-performance-pad { min-height: 24px; }
+.dj-workspace--compact .dj-performance-pad { min-height: 22px; }
 .dj-cue-clear { width: 15px; }
 /* 押した瞬間に見た目を返す。エンジンの往復を待つと反応が鈍く感じる。 */
 .dj-performance-pad, .dj-cue-hit, .dj-cue-clear, .dj-chip, .dj-abl-value, .dj-abl-step button, .dj-abl-mode button { touch-action: manipulation; }

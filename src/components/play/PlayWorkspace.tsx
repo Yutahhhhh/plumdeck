@@ -1004,8 +1004,8 @@ export function PlayWorkspace() {
         return <>
           {[decks.slice(0, Math.ceil(decks.length / 2)), decks.slice(Math.ceil(decks.length / 2))].filter(part => part.length).map((part, index) =>
             <table key={index}><thead><tr><th>操作</th><th>Deck 1</th><th>Deck 2</th></tr></thead>
-              <tbody>{part.map(row => <tr key={row.label}><td>{row.label}</td>{(row.keys as [string | null, string | null]).map((key, side) => <td key={side}><kbd>{key ?? "—"}</kbd></td>)}</tr>)}</tbody></table>)}
-          <dl>{others.map(row => <div key={row.label}><dt><kbd>{row.keys as string}</kbd></dt><dd>{row.label}</dd></div>)}
+              <tbody>{part.map(row => <tr key={`${row.label}:${String(row.keys)}`}><td>{row.label}</td>{(row.keys as [string | null, string | null]).map((key, side) => <td key={side}><kbd>{key ?? "—"}</kbd></td>)}</tr>)}</tbody></table>)}
+          <dl>{others.map(row => <div key={`${row.label}:${String(row.keys)}`}><dt><kbd>{row.keys as string}</kbd></dt><dd>{row.label}</dd></div>)}
             <div><dt>ドラッグ</dt><dd>曲を波形またはデッキへ</dd></div><div><dt>波形ドラッグ</dt><dd>スクラブ</dd></div></dl>
         </>;
       })()}
@@ -1076,9 +1076,9 @@ export function PlayWorkspace() {
           title={CROSSFADER_CURVE_OPTIONS.find(option => option.curve === preferences.crossfaderCurve)?.title} onChange={(event) => setPlayPreference("crossfaderCurve", readCrossfaderCurve(event.target.value))}>
           {CROSSFADER_CURVE_OPTIONS.map(option => <option key={option.curve} value={option.curve}>{option.label}</option>)}</select>}</div>
       {headphoneSupported && <div className="dj-headphone" role="group" aria-label="ヘッドホン">
-        <RotaryKnob label="HP MIX" min={-1} max={1} step={.02} fineStep={.005} defaultValue={0} value={snapshot?.mixer.headphoneMix ?? 0} disabled={!connected}
+        <RotaryKnob label="HP MIX" min={-1} max={1} step={.02} fineStep={.005} defaultValue={-1} value={snapshot?.mixer.headphoneMix ?? -1} disabled={!connected}
           valueText={(value) => Math.abs(value) < .01 ? "CUE＝MASTER" : value < 0 ? `CUE ${Math.round(-value * 100)}%` : `MASTER ${Math.round(value * 100)}%`} onChange={(value) => void run(() => client.setHeadphoneMix(value))} />
-        <RotaryKnob label="HP LEVEL" min={0} max={1} step={.02} fineStep={.005} defaultValue={.5} value={snapshot?.mixer.headphoneGain ?? .5} disabled={!connected}
+        <RotaryKnob label="HP LEVEL" min={0} max={1} step={.02} fineStep={.005} defaultValue={1} value={snapshot?.mixer.headphoneGain ?? 1} disabled={!connected}
           valueText={(value) => `${Math.round(value * 100)}%`} onChange={(value) => void run(() => client.setHeadphoneGain(value))} />
       </div>}
       <span className={cn("dj-master-note", snapshot?.recording?.active && "is-recording")}>{snapshot?.recording?.active ? `● REC ${formatTime(snapshot.recording.elapsedMs)}` : `DECK ${activeDeck} SELECTED`}</span>

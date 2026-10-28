@@ -444,9 +444,9 @@
 .dj-workspace .dj-pad-mode-trigger { height: 22px; font-size: 11px; }
 .dj-workspace .dj-pad-pages button { min-height: 22px; font-size: 10px; }
 .dj-workspace .dj-deck-rail { width: 32px; }
-.dj-workspace .dj-deck-rail .dj-chip { height: 20px; font-size: 10px; letter-spacing: 0; }
+.dj-workspace .dj-deck-rail .dj-chip { height: 24px; font-size: 10px; letter-spacing: 0; }
 .dj-workspace--compact .dj-deck-rail { width: 30px; }
-.dj-workspace--compact .dj-deck-rail .dj-chip { height: 17px; }
+.dj-workspace--compact .dj-deck-rail .dj-chip { height: 22px; }
 .dj-workspace .dj-cue-button { font-size: 11px; }
 .dj-workspace .dj-abl-mode { height: 20px; }
 .dj-workspace .dj-abl-step { height: 22px; }
