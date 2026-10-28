@@ -16,8 +16,10 @@
 //! - N14: Content-Type must match in full (media type and parameters);
 //!   other headers (date, content-length, server) are ignored.
 //!
-//! There is no deviation mechanism yet: until the owner approves entries in
-//! contracts/parity/deviations.yaml, every difference is unexplained.
+//! - N6: `ties` rules sort runs of equal sort keys (see [`Ties`]).
+//!
+//! Deviations (contracts/parity/deviations.yaml) are applied per step by the
+//! scenario runner, not here.
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -216,11 +218,70 @@ fn short(value: &Value) -> String {
     }
 }
 
+/// N6: an array whose order is undefined only among elements that agree on
+/// `by` (e.g. `ORDER BY count DESC` without a tie-breaker). Each run of
+/// consecutive elements with the same `by` value is sorted by its canonical
+/// JSON on both sides; the order between runs is still compared.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Ties {
+    /// JSONPath subset (see [`Tolerance::path`]) of the array.
+    pub path: String,
+    /// Member of each element that the query orders by.
+    pub by: String,
+}
+
+/// Apply [`Ties`] rules to `value` in place.
+pub fn normalize_ties(value: &mut Value, rules: &[Ties]) {
+    let patterns: Vec<(Vec<Pat>, &str)> = rules.iter().map(|rule| (parse_pattern(&rule.path), rule.by.as_str())).collect();
+    walk_ties(value, &mut Vec::new(), &patterns);
+}
+
+fn walk_ties(value: &mut Value, path: &mut Vec<Seg>, rules: &[(Vec<Pat>, &str)]) {
+    match value {
+        Value::Array(items) => {
+            for (pattern, by) in rules {
+                if matches(pattern, path) {
+                    sort_runs(items, by);
+                }
+            }
+            for (index, item) in items.iter_mut().enumerate() {
+                path.push(Seg::Index(index));
+                walk_ties(item, path, rules);
+                path.pop();
+            }
+        }
+        Value::Object(map) => {
+            for (key, item) in map.iter_mut() {
+                path.push(Seg::Key(key.clone()));
+                walk_ties(item, path, rules);
+                path.pop();
+            }
+        }
+        _ => {}
+    }
+}
+
+fn sort_runs(items: &mut [Value], by: &str) {
+    let mut start = 0;
+    while start < items.len() {
+        let key = items[start].get(by).cloned();
+        let mut end = start + 1;
+        while end < items.len() && items[end].get(by).cloned() == key {
+            end += 1;
+        }
+        items[start..end].sort_by_cached_key(|item| item.to_string());
+        start = end;
+    }
+}
+
 /// One side's HTTP response.
 #[derive(Clone, Debug)]
 pub struct Captured {
     pub status: u16,
     pub content_type: String,
+    /// Lowercased names, in arrival order.
+    pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
 }
 
@@ -236,6 +297,21 @@ impl Captured {
 
     fn json(&self) -> Option<Value> {
         serde_json::from_slice(&self.body).ok()
+    }
+
+    /// A copy whose header values read `:{port}` where they had `:<port>`.
+    pub fn with_port_placeholder(&self, port: u16) -> Self {
+        let needle = format!(":{port}");
+        let headers = self.headers.iter().map(|(name, value)| (name.clone(), value.replace(&needle, ":{port}"))).collect();
+        Self { headers, ..self.clone() }
+    }
+
+    /// Every value of header `name`, joined with ", "; `None` when absent.
+    pub fn header(&self, name: &str) -> Option<String> {
+        let name = name.to_ascii_lowercase();
+        let values: Vec<&str> =
+            self.headers.iter().filter(|(key, _)| *key == name).map(|(_, value)| value.as_str()).collect();
+        (!values.is_empty()).then(|| values.join(", "))
     }
 
     pub fn snippet(&self) -> String {
@@ -274,8 +350,25 @@ fn without_validation_detail(a: &mut Value, b: &mut Value) -> bool {
     }
 }
 
+/// N14: headers compared only where a step asks (CORS scenarios).
+pub fn compare_headers(a: &Captured, b: &Captured, names: &[String]) -> Vec<String> {
+    names
+        .iter()
+        .filter_map(|name| {
+            let (va, vb) = (a.header(name), b.header(name));
+            (va != vb).then(|| format!("header {name}: {va:?} vs {vb:?}"))
+        })
+        .collect()
+}
+
 /// Compare A (Python) with B (Rust).
+#[cfg(test)]
 pub fn compare_responses(a: &Captured, b: &Captured, comparer: &JsonComparer) -> Verdict {
+    compare_responses_with(a, b, comparer, &[])
+}
+
+/// [`compare_responses`] with N6 tie rules applied to JSON bodies.
+pub fn compare_responses_with(a: &Captured, b: &Captured, comparer: &JsonComparer, ties: &[Ties]) -> Verdict {
     let mut verdict = Verdict::default();
     if a.status == 500 {
         verdict.skipped = true;
@@ -291,6 +384,10 @@ pub fn compare_responses(a: &Captured, b: &Captured, comparer: &JsonComparer) ->
     }
     if a.is_json() && b.is_json() {
         if let (Some(mut ja), Some(mut jb)) = (a.json(), b.json()) {
+            if !ties.is_empty() {
+                normalize_ties(&mut ja, ties);
+                normalize_ties(&mut jb, ties);
+            }
             if a.status == 422 && without_validation_detail(&mut ja, &mut jb) {
                 verdict.notes.push("N7: 422 validation detail compared by shape only".into());
             }
@@ -310,7 +407,30 @@ mod tests {
     use serde_json::json;
 
     fn captured(status: u16, content_type: &str, body: &str) -> Captured {
-        Captured { status, content_type: content_type.into(), body: body.as_bytes().to_vec() }
+        Captured { status, content_type: content_type.into(), headers: Vec::new(), body: body.as_bytes().to_vec() }
+    }
+
+    #[test]
+    fn ties_sort_only_within_equal_keys() {
+        let rules = [Ties { path: "$.genres".into(), by: "count".into() }];
+        let comparer = JsonComparer::new(&[]);
+        let a = captured(200, "application/json", r#"{"genres":[{"name":"b","count":3},{"name":"x","count":2},{"name":"a","count":2}]}"#);
+        let b = captured(200, "application/json", r#"{"genres":[{"name":"b","count":3},{"name":"a","count":2},{"name":"x","count":2}]}"#);
+        assert!(compare_responses_with(&a, &b, &comparer, &rules).diffs.is_empty());
+        assert_eq!(compare_responses(&a, &b, &comparer).diffs.len(), 2);
+        // The order between different counts still matters.
+        let c = captured(200, "application/json", r#"{"genres":[{"name":"x","count":2},{"name":"a","count":2},{"name":"b","count":3}]}"#);
+        assert!(!compare_responses_with(&a, &c, &comparer, &rules).diffs.is_empty());
+    }
+
+    #[test]
+    fn headers_compare_all_values() {
+        let mut a = captured(200, "text/plain", "");
+        let mut b = a.clone();
+        a.headers = vec![("vary".into(), "Origin".into())];
+        b.headers = vec![("vary".into(), "Accept".into()), ("vary".into(), "Origin".into())];
+        assert_eq!(b.header("Vary").as_deref(), Some("Accept, Origin"));
+        assert_eq!(compare_headers(&a, &b, &["vary".into(), "x-missing".into()]).len(), 1);
     }
 
     #[test]

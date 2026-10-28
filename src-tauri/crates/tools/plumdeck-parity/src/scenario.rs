@@ -3,17 +3,38 @@
 //! ```yaml
 //! name: s0-root
 //! db: fixture            # fixture | real (real is refused for now)
+//! fixture: populated     # plumdeck-parity suite: the fixture case both sides start from
 //! steps:
 //!   - name: health check
 //!     expect_status: 200 # optional: both sides must answer this
 //!     http: {method: GET, path: /, query: {q: x, ids: [1, 2]}, headers: {}, body: null}
+//!   - name: raw body
+//!     http: {method: POST, path: /api/settings, headers: {content-type: text/plain}, raw: "{bad"}
+//!   - name: preflight
+//!     compare_headers: [access-control-allow-origin, vary]   # N14
+//!     http: {method: OPTIONS, path: /, headers: {origin: "http://127.0.0.1:{port}"}}
+//!   - name: intentional difference
+//!     deviation: {id: D-06, b_status: 421}
+//!     http: {method: GET, path: /, headers: {host: evil.example}}
 //! compare_overrides:
 //!   tolerances: [{path: "$..score", mode: rel, value: 1e-9}]
+//!   ties: [{path: "$.genre_distribution", by: count}]       # N6
 //! ```
 //! S0 executes `http` steps; other step kinds are rejected so a scenario
 //! never silently passes without being run. Query arrays are sent as
 //! repeated keys (`ids=1&ids=2`, FastAPI's list parameters); `body` is sent as
-//! JSON. Raw, form and multipart bodies arrive with the slices that use them.
+//! JSON, `raw` (text) or `raw_hex` (bytes) as they are with only the step's
+//! headers. `{port}` in a header value is the side's own port (CORS origins
+//! that main.py derives from PLUMDECK_PORT); compared headers map each
+//! side's `:<port>` back to `:{port}`. `fixture_sql` (suite only) runs on the
+//! fixture library before the sides start.
+//!
+//! A `deviation` step names an entry of contracts/parity/deviations.yaml:
+//! A's answer is recorded but not compared, and B must answer `b_status`
+//! (and `b_body`, when given). The report counts these by the entry's
+//! status; only an approved entry is accepted, a proposed one is listed for
+//! the owner (it is not an unexplained difference: the step pins B's
+//! intended behavior).
 //!
 //! `db: real` is refused until plan §4.2's safety rails exist: the runner's
 //! denylist of operations that rewrite or delete the owner's audio files and
@@ -28,7 +49,7 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::compare::{compare_responses, Captured, JsonComparer, Tolerance, Verdict};
+use crate::compare::{compare_headers, compare_responses_with, Captured, JsonComparer, Ties, Tolerance, Verdict};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -36,6 +57,13 @@ pub struct Scenario {
     pub name: String,
     #[serde(default = "default_db")]
     pub db: String,
+    /// The fixture case `plumdeck-parity suite` builds for this scenario.
+    #[serde(default)]
+    pub fixture: Option<String>,
+    /// SQL `suite` runs on the built fixture library before both sides
+    /// start (rows no route can create yet).
+    #[serde(default)]
+    pub fixture_sql: Option<String>,
     #[serde(default)]
     pub freeze_now: Option<String>,
     pub steps: Vec<Step>,
@@ -54,6 +82,8 @@ fn default_db() -> String {
 pub struct Overrides {
     #[serde(default)]
     pub tolerances: Vec<Tolerance>,
+    #[serde(default)]
+    pub ties: Vec<Ties>,
 }
 
 /// Global rules shared by every scenario (contracts/parity/normalize.yaml).
@@ -71,6 +101,11 @@ pub struct Step {
     pub name: Option<String>,
     #[serde(default)]
     pub expect_status: Option<u16>,
+    /// N14: headers to compare on this step (CORS).
+    #[serde(default)]
+    pub compare_headers: Vec<String>,
+    #[serde(default)]
+    pub deviation: Option<StepDeviation>,
     #[serde(default)]
     pub http: Option<HttpStep>,
     #[serde(default)]
@@ -79,6 +114,16 @@ pub struct Step {
     pub ws: Option<Value>,
     #[serde(default)]
     pub wait: Option<Value>,
+}
+
+/// An intentional difference this step demonstrates.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StepDeviation {
+    pub id: String,
+    pub b_status: u16,
+    #[serde(default)]
+    pub b_body: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -92,6 +137,62 @@ pub struct HttpStep {
     pub headers: BTreeMap<String, String>,
     #[serde(default)]
     pub body: Option<Value>,
+    #[serde(default)]
+    pub raw: Option<String>,
+    #[serde(default)]
+    pub raw_hex: Option<String>,
+}
+
+/// contracts/parity/deviations.yaml.
+#[derive(Debug, Default, Deserialize)]
+pub struct Ledger {
+    #[serde(default)]
+    pub deviations: Vec<LedgerEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LedgerEntry {
+    pub id: String,
+    pub status: String,
+}
+
+impl Ledger {
+    fn status(&self, id: &str) -> Option<&str> {
+        self.deviations.iter().find(|entry| entry.id == id).map(|entry| entry.status.as_str())
+    }
+}
+
+/// `deviations.yaml` next to `scenarios/`, if present.
+pub fn default_ledger_path(scenario: &Path) -> Option<PathBuf> {
+    let candidate = scenario.parent()?.parent()?.join("deviations.yaml");
+    candidate.is_file().then_some(candidate)
+}
+
+pub fn load_ledger(path: Option<&Path>) -> Result<Ledger> {
+    let Some(path) = path else { return Ok(Ledger::default()) };
+    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let ledger: Ledger = serde_yaml::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
+    for entry in &ledger.deviations {
+        if !matches!(entry.status.as_str(), "proposed" | "approved") {
+            bail!("{}: {} has status {:?} (proposed | approved)", path.display(), entry.id, entry.status);
+        }
+    }
+    Ok(ledger)
+}
+
+/// A server under test: its base URL and port.
+#[derive(Clone, Debug)]
+pub struct Target {
+    pub base: String,
+    pub port: u16,
+}
+
+impl Target {
+    pub fn from_url(base: &str) -> Result<Self> {
+        let url = reqwest::Url::parse(base).with_context(|| format!("parse {base}"))?;
+        let port = url.port_or_known_default().with_context(|| format!("{base} has no port"))?;
+        Ok(Self { base: base.to_owned(), port })
+    }
 }
 
 impl Step {
@@ -129,6 +230,13 @@ pub fn load(path: &Path) -> Result<Scenario> {
         let Some(http) = &step.http else {
             bail!("{}: step {}: only http steps are supported yet", path.display(), index + 1);
         };
+        let bodies = [http.body.is_some(), http.raw.is_some(), http.raw_hex.is_some()];
+        if bodies.iter().filter(|b| **b).count() > 1 {
+            bail!("{}: step {}: use one of body, raw, raw_hex", path.display(), index + 1);
+        }
+        if let Some(hex) = &http.raw_hex {
+            decode_hex(hex).with_context(|| format!("{}: step {}: raw_hex", path.display(), index + 1))?;
+        }
         for (key, value) in &http.query {
             let scalar = |v: &Value| matches!(v, Value::String(_) | Value::Number(_) | Value::Bool(_));
             let ok = match value {
@@ -145,6 +253,20 @@ pub fn load(path: &Path) -> Result<Scenario> {
         }
     }
     Ok(scenario)
+}
+
+fn decode_hex(text: &str) -> Result<Vec<u8>> {
+    let digits: Vec<u8> = text.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    if digits.len() % 2 != 0 {
+        bail!("odd number of hex digits");
+    }
+    digits
+        .chunks(2)
+        .map(|pair| {
+            let text = std::str::from_utf8(pair)?;
+            Ok(u8::from_str_radix(text, 16)?)
+        })
+        .collect()
 }
 
 /// Query pairs in order; an array becomes one pair per element.
@@ -176,19 +298,23 @@ pub fn load_normalize(path: Option<&Path>) -> Result<NormalizeFile> {
     }
 }
 
-async fn send(client: &reqwest::Client, base: &str, step: &HttpStep) -> Result<(Captured, Duration)> {
+async fn send(client: &reqwest::Client, target: &Target, step: &HttpStep) -> Result<(Captured, Duration)> {
     let method = reqwest::Method::from_bytes(step.method.to_ascii_uppercase().as_bytes())
         .with_context(|| format!("method {}", step.method))?;
-    let url = format!("{}{}", base.trim_end_matches('/'), step.path);
+    let url = format!("{}{}", target.base.trim_end_matches('/'), step.path);
     let mut request = client.request(method, &url);
     if !step.query.is_empty() {
         request = request.query(&query_pairs(&step.query));
     }
     for (name, value) in &step.headers {
-        request = request.header(name, value);
+        request = request.header(name, value.replace("{port}", &target.port.to_string()));
     }
     if let Some(body) = &step.body {
         request = request.json(body);
+    } else if let Some(raw) = &step.raw {
+        request = request.body(raw.clone());
+    } else if let Some(hex) = &step.raw_hex {
+        request = request.body(decode_hex(hex)?);
     }
     let started = Instant::now();
     let response = request.send().await.with_context(|| format!("request {url}"))?;
@@ -199,13 +325,20 @@ async fn send(client: &reqwest::Client, base: &str, step: &HttpStep) -> Result<(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_owned();
+    let headers = response
+        .headers()
+        .iter()
+        .map(|(name, value)| (name.as_str().to_owned(), String::from_utf8_lossy(value.as_bytes()).into_owned()))
+        .collect();
     let body = response.bytes().await.with_context(|| format!("read body {url}"))?.to_vec();
-    Ok((Captured { status, content_type, body }, started.elapsed()))
+    Ok((Captured { status, content_type, headers, body }, started.elapsed()))
 }
 
 /// One compared step for the report.
 pub struct StepResult {
     pub label: String,
+    /// `D-06 (proposed)` for a deviation step.
+    pub deviation: Option<(String, String)>,
     pub a_status: u16,
     pub b_status: u16,
     pub a_ms: f64,
@@ -223,11 +356,21 @@ impl RunReport {
         self.steps.iter().map(|s| s.verdict.diffs.len()).sum()
     }
 
+    /// Deviation steps whose B answer matched, by ledger status.
+    pub fn deviations(&self, status: &str) -> usize {
+        self.steps
+            .iter()
+            .filter(|s| s.verdict.diffs.is_empty() && s.deviation.as_ref().is_some_and(|(_, st)| st == status))
+            .count()
+    }
+
     pub fn print(&self, a: &str, b: &str) {
         println!("scenario {}  A={a}  B={b}", self.scenario);
         for step in &self.steps {
             let tag = if !step.verdict.diffs.is_empty() {
                 "DIFF"
+            } else if step.deviation.is_some() {
+                "DEV"
             } else if step.verdict.skipped {
                 "SKIP"
             } else {
@@ -246,9 +389,12 @@ impl RunReport {
         }
         let skipped = self.steps.iter().filter(|s| s.verdict.skipped).count();
         println!(
-            "summary: {} steps, {} skipped (N12), {} unexplained diffs",
+            "summary: {} steps, {} skipped (N12), {} deviation steps (approved {}, proposed {}), {} unexplained diffs",
             self.steps.len(),
             skipped,
+            self.steps.iter().filter(|s| s.deviation.is_some()).count(),
+            self.deviations("approved"),
+            self.deviations("proposed"),
             self.unexplained()
         );
     }
@@ -262,6 +408,7 @@ impl RunReport {
                 "status": [s.a_status, s.b_status],
                 "latency_ms": [s.a_ms, s.b_ms],
                 "skipped": s.verdict.skipped,
+                "deviation": s.deviation.as_ref().map(|(id, status)| serde_json::json!({"id": id, "status": status})),
                 "diffs": s.verdict.diffs,
                 "notes": s.verdict.notes,
             })).collect::<Vec<_>>(),
@@ -270,7 +417,13 @@ impl RunReport {
 }
 
 /// Send every step to A then B, in order, and compare.
-pub async fn run(scenario: &Scenario, global: &NormalizeFile, a: &str, b: &str) -> Result<RunReport> {
+pub async fn run(
+    scenario: &Scenario,
+    global: &NormalizeFile,
+    ledger: &Ledger,
+    a: &Target,
+    b: &Target,
+) -> Result<RunReport> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
         .redirect(reqwest::redirect::Policy::none())
@@ -280,21 +433,43 @@ pub async fn run(scenario: &Scenario, global: &NormalizeFile, a: &str, b: &str) 
     let mut tolerances = global.tolerances.clone();
     tolerances.extend(scenario.compare_overrides.tolerances.iter().cloned());
     let comparer = JsonComparer::new(&tolerances);
+    let ties = &scenario.compare_overrides.ties;
     let mut steps = Vec::new();
     for (index, step) in scenario.steps.iter().enumerate() {
         let http = step.http.as_ref().expect("validated in load");
+        let deviation = match &step.deviation {
+            Some(deviation) => {
+                let status = ledger
+                    .status(&deviation.id)
+                    .with_context(|| format!("step {}: {} is not in deviations.yaml", index + 1, deviation.id))?;
+                Some((deviation.id.clone(), status.to_owned()))
+            }
+            None => None,
+        };
         let (ra, ta) = send(&client, a, http).await?;
         let (rb, tb) = send(&client, b, http).await?;
-        let mut verdict = compare_responses(&ra, &rb, &comparer);
-        if let Some(expected) = step.expect_status {
-            for (side, got) in [("A", ra.status), ("B", rb.status)] {
-                if got != expected {
-                    verdict.diffs.push(format!("{side} status {got}, expected {expected}"));
+        let verdict = match &step.deviation {
+            Some(expected) => deviation_verdict(expected, &ra, &rb),
+            None => {
+                let mut verdict = compare_responses_with(&ra, &rb, &comparer, ties);
+                if !verdict.skipped {
+                    // Each side echoes its own port (CORS origins): compare as `{port}`.
+                    let (ha, hb) = (ra.with_port_placeholder(a.port), rb.with_port_placeholder(b.port));
+                    verdict.diffs.extend(compare_headers(&ha, &hb, &step.compare_headers));
                 }
+                if let Some(expected) = step.expect_status {
+                    for (side, got) in [("A", ra.status), ("B", rb.status)] {
+                        if got != expected {
+                            verdict.diffs.push(format!("{side} status {got}, expected {expected}"));
+                        }
+                    }
+                }
+                verdict
             }
-        }
+        };
         steps.push(StepResult {
             label: step.label(index),
+            deviation,
             a_status: ra.status,
             b_status: rb.status,
             a_ms: ta.as_secs_f64() * 1000.0,
@@ -303,6 +478,22 @@ pub async fn run(scenario: &Scenario, global: &NormalizeFile, a: &str, b: &str) 
         });
     }
     Ok(RunReport { scenario: scenario.name.clone(), steps })
+}
+
+/// A deviation step: B must answer as the step declares; A is only noted.
+fn deviation_verdict(expected: &StepDeviation, a: &Captured, b: &Captured) -> Verdict {
+    let mut verdict = Verdict::default();
+    verdict.notes.push(format!("{}: A answered {} {}", expected.id, a.status, a.snippet()));
+    if b.status != expected.b_status {
+        verdict.diffs.push(format!("{}: B status {}, expected {}", expected.id, b.status, expected.b_status));
+    }
+    if let Some(body) = &expected.b_body {
+        let got: Option<Value> = serde_json::from_slice(&b.body).ok();
+        if got.as_ref() != Some(body) {
+            verdict.diffs.push(format!("{}: B body {}, expected {body}", expected.id, b.snippet()));
+        }
+    }
+    verdict
 }
 
 #[cfg(test)]
@@ -324,6 +515,23 @@ mod tests {
         assert!(error.contains("db: real is not supported"), "{error}");
         let path = write("fixture.yaml", "name: f\nsteps:\n  - http: {method: GET, path: /}\n");
         assert_eq!(load(&path).unwrap().db, "fixture");
+    }
+
+    #[test]
+    fn raw_bodies_and_deviations_parse() {
+        let path = write(
+            "raw.yaml",
+            "name: r\nfixture: catalog\nsteps:\n  - deviation: {id: D-06, b_status: 421}\n    compare_headers: [vary]\n    http: {method: POST, path: /, raw_hex: 'ff 00'}\n",
+        );
+        let scenario = load(&path).unwrap();
+        assert_eq!(scenario.fixture.as_deref(), Some("catalog"));
+        assert_eq!(scenario.steps[0].deviation.as_ref().unwrap().b_status, 421);
+        assert_eq!(decode_hex("ff 00").unwrap(), [0xff, 0]);
+        let path = write("both.yaml", "name: b\nsteps:\n  - http: {method: POST, path: /, raw: x, body: 1}\n");
+        assert!(load(&path).is_err());
+        let ledger: Ledger = serde_yaml::from_str("deviations:\n  - {id: D-06, status: proposed, summary: x}\n").unwrap();
+        assert_eq!(ledger.status("D-06"), Some("proposed"));
+        assert_eq!(ledger.status("D-99"), None);
     }
 
     #[test]

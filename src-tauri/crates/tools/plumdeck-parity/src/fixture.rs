@@ -31,13 +31,17 @@ pub enum Case {
     PendingWal,
     /// Not a DuckDB file: both sides fail startup with the same report.
     Unreadable,
+    /// A v5 library with varied tracks, genres, lyrics and setlists for the
+    /// dashboard statistics (S2): excluded and case-variant genres, tied
+    /// counts, NULL flags, tiny and f32-inexact durations, microseconds.
+    Catalog,
     /// A library from a newer app (schema v6). Python opens it; Rust refuses
     /// it untouched (deviation D-14). Run on side B only.
     NewerSchema,
 }
 
 impl Case {
-    pub const ALL: [Case; 7] = [
+    pub const ALL: [Case; 8] = [
         Case::Fresh,
         Case::Populated,
         Case::UpgradedLayout,
@@ -45,6 +49,7 @@ impl Case {
         Case::PendingWal,
         Case::Unreadable,
         Case::NewerSchema,
+        Case::Catalog,
     ];
 
     pub fn name(self) -> &'static str {
@@ -56,6 +61,7 @@ impl Case {
             Case::PendingWal => "pending-wal",
             Case::Unreadable => "unreadable",
             Case::NewerSchema => "newer-schema",
+            Case::Catalog => "catalog",
         }
     }
 }
@@ -91,6 +97,35 @@ INSERT INTO wordplay_pairs (from_track_id, to_track_id, keyword, normalized_keyw
 INSERT INTO setlists (name, created_at, updated_at) VALUES ('Fixture set', '2026-01-04 00:00:00', '2026-01-04 00:00:00');
 INSERT INTO setlist_tracks (setlist_id, track_id, position, created_at) VALUES (1, 1, 0, '2026-01-04 00:00:00'), (1, 2, 1, '2026-01-04 00:00:00');
 INSERT INTO recordings (recording_key, filepath, started_at) VALUES ('rec-1', '/fixture/rec.wav', '2026-01-05 00:00:00');
+";
+
+const CATALOG_ROWS: &str = "
+INSERT INTO schema_info VALUES ('version', '5');
+INSERT INTO settings VALUES ('root_path', '/music/日本'), ('plumdeck.deckCount', '4');
+INSERT INTO tracks (filepath, title, genre, bpm, is_genre_verified, created_at) VALUES
+  ('/catalog/01.mp3', 'T01', 'House', 124.0, true, '2026-02-01 00:00:00'),
+  ('/catalog/02.mp3', 'T02', 'House', 0.0, false, '2026-02-01 00:00:01'),
+  ('/catalog/03.mp3', 'T03', 'house', 126.5, NULL, '2026-02-01 00:00:02'),
+  ('/catalog/04.mp3', 'T04', 'Techno', NULL, false, '2026-02-01 00:00:03'),
+  ('/catalog/05.mp3', 'T05', 'Techno', -1.0, false, '2026-02-01 00:00:04'),
+  ('/catalog/06.mp3', 'T06', 'Unknown', 128.0, false, '2026-02-01 00:00:05'),
+  ('/catalog/07.mp3', 'T07', '', 128.0, false, '2026-02-01 00:00:06'),
+  ('/catalog/08.mp3', 'T08', NULL, 0.001, false, '2026-02-01 00:00:07'),
+  ('/catalog/09.mp3', 'T09', 'J-Pop 日本', 99.9, true, '2026-02-01 00:00:08'),
+  ('/catalog/10.mp3', 'T10', 'unknown', 100.0, false, '2026-02-01 00:00:09'),
+  ('/catalog/11.mp3', 'T11', 'Drum & Bass', 174.0, true, '2026-02-01 00:00:10'),
+  ('/catalog/12.mp3', 'T12', 'Drum & Bass', 172.0, true, '2026-02-01 00:00:11'),
+  ('/catalog/13.mp3', 'T13', 'Drum & Bass', 0.0, true, '2026-02-01 00:00:12');
+INSERT INTO lyrics (track_id, content, source) VALUES
+  (1, 'la la', 'user'), (2, '', 'user'), (3, NULL, 'lrclib'), (9, '歌詞', 'user');
+INSERT INTO setlists (name, description, display_order, genre, target_duration, rating, created_at, updated_at) VALUES
+  ('Oldest', NULL, 0, NULL, 3600.0, NULL, '2026-01-01 00:00:00', '2026-01-01 00:00:00'),
+  ('Inexact', 'f32 duration', 1, 'House', 1234.56, 5, '2026-01-02 00:00:00', '2026-03-01 12:00:00.000120'),
+  ('Tie A', NULL, 2, NULL, NULL, 1, '2026-01-03 00:00:00', '2026-03-02 00:00:00'),
+  ('Tie B', '説明', 3, 'Techno', 0.5, 2, '2026-01-04 00:00:00', '2026-03-02 00:00:00'),
+  ('Tiny', NULL, NULL, NULL, 1e-7, NULL, '2026-01-05 00:00:00', '2026-03-03 00:00:00.5'),
+  ('Newest', NULL, 4, NULL, 60.25, 3, NULL, '2026-03-04 00:00:00'),
+  ('Never updated', NULL, 5, NULL, NULL, NULL, '2026-01-06 00:00:00', NULL);
 ";
 
 fn build_library(path: &Path, upgraded_layout: bool) -> Result<()> {
@@ -174,6 +209,12 @@ pub fn build(case: Case, dir: &Path) -> Result<()> {
             anyhow::ensure!(Path::new(&format!("{}.wal", db.display())).exists(), "fixture lost its WAL");
         }
         Case::Unreadable => std::fs::write(&db, b"not a duckdb file\n")?,
+        Case::Catalog => {
+            let conn = Connection::open(&db)?;
+            plumdeck_db::create_schema_v5(&conn)?;
+            conn.execute_batch(CATALOG_ROWS).context("catalog rows")?;
+            conn.execute_batch("CHECKPOINT")?;
+        }
         Case::NewerSchema => {
             build_library(&db, false)?;
             Connection::open(&db)?.execute_batch("UPDATE schema_info SET value = '6'; CHECKPOINT")?;
@@ -214,6 +255,7 @@ mod tests {
                 }
                 Case::PendingWal => assert!(dir.join(format!("{DB_NAME}.wal")).exists()),
                 Case::Unreadable => assert!(db.exists()),
+                Case::Catalog => assert!(db.exists() && !queue_of(&db).exists()),
                 Case::Populated | Case::UpgradedLayout | Case::NewerSchema => {
                     let conn = plumdeck_db::open_read_only(&db).unwrap();
                     let version = plumdeck_db::schema::read_schema_version(&conn).unwrap();

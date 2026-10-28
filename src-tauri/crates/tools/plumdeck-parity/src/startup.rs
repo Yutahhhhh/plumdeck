@@ -74,20 +74,20 @@ fn healthy(port: u16) -> bool {
     response.starts_with("HTTP/1.1 200")
 }
 
-struct Side {
-    label: &'static str,
-    root: PathBuf,
-    port: u16,
+pub(crate) struct Side {
+    pub(crate) label: &'static str,
+    pub(crate) root: PathBuf,
+    pub(crate) port: u16,
     child: Child,
 }
 
 impl Side {
-    fn ud(&self) -> PathBuf {
+    pub(crate) fn ud(&self) -> PathBuf {
         self.root.join("ud")
     }
 }
 
-fn spawn(label: &'static str, root: &Path, programs: &Programs) -> Result<Side> {
+pub(crate) fn spawn(label: &'static str, root: &Path, programs: &Programs) -> Result<Side> {
     let port = free_port()?;
     let mut command = if label == "A" {
         let mut command = Command::new(&programs.python);
@@ -120,7 +120,7 @@ fn spawn(label: &'static str, root: &Path, programs: &Programs) -> Result<Side> 
 }
 
 /// Wait until the side answers or exits; true when it answered.
-fn wait_ready(side: &mut Side) -> Result<bool> {
+pub(crate) fn wait_ready(side: &mut Side) -> Result<bool> {
     let started = Instant::now();
     while started.elapsed() < READY_TIMEOUT {
         if side.child.try_wait()?.is_some() {
@@ -134,7 +134,7 @@ fn wait_ready(side: &mut Side) -> Result<bool> {
     bail!("side {} did not answer within {READY_TIMEOUT:?}", side.label)
 }
 
-fn stop(side: &mut Side) -> Result<ExitStatus> {
+pub(crate) fn stop(side: &mut Side) -> Result<ExitStatus> {
     if let Some(status) = side.child.try_wait()? {
         return Ok(status);
     }
@@ -268,7 +268,7 @@ fn newer_schema_case(work: &Path, master: &Path, programs: &Programs) -> Result<
     if std::fs::read(root.join("ud").join(DB_NAME))? != before {
         report.diffs.push("the refused library was modified".into());
     }
-    report.notes.push("deviation D-14 (proposed): A is not run; Python opens a newer library".into());
+    report.notes.push("deviation D-14 (approved): A is not run; Python opens a newer library".into());
     Ok(report)
 }
 

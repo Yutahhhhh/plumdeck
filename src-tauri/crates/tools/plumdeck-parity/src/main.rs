@@ -6,6 +6,8 @@
 //! - `plumdeck-parity db-diff A.duckdb B.duckdb` compares two databases.
 //! - `plumdeck-parity startup --work DIR` starts both backends on copies of
 //!   each fixture library, stops them, and compares the files they leave.
+//! - `plumdeck-parity suite --work DIR SCENARIO...` starts both backends on
+//!   each scenario's fixture, runs it, stops them and diffs the libraries.
 //!
 //! Exit status: 0 when nothing unexplained differs, 1 on differences, 2 when
 //! the comparison itself could not run.
@@ -15,6 +17,7 @@ mod dbdiff;
 mod fixture;
 mod scenario;
 mod startup;
+mod suite;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -57,6 +60,28 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         max_rows: usize,
     },
+    /// For each scenario: start A and B on copies of its fixture library,
+    /// run it, stop both and db-diff what they leave.
+    Suite {
+        /// Scratch directory; each scenario gets <work>/<name>/{master,a,b}.
+        #[arg(long)]
+        work: PathBuf,
+        /// Python with the backend's dependencies (the oracle's interpreter).
+        #[arg(long, env = "PLUMDECK_ORACLE_PYTHON", default_value = "python3")]
+        python: PathBuf,
+        /// tools/parity/oracle_server.py.
+        #[arg(long, default_value = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../tools/parity/oracle_server.py"))]
+        oracle: PathBuf,
+        /// The Rust backend (default: plumdeck-backend next to this binary).
+        #[arg(long)]
+        backend: Option<PathBuf>,
+        /// Also write each scenario's report as JSON into this directory.
+        #[arg(long)]
+        report: Option<PathBuf>,
+        /// Scenario YAML files.
+        #[arg(required = true)]
+        scenarios: Vec<PathBuf>,
+    },
     /// Start A and B on copies of each fixture library, stop them with
     /// SIGINT and compare startup output, files, databases and job queues.
     Startup {
@@ -91,8 +116,10 @@ fn run_command(command: Command) -> Result<bool> {
             let loaded = scenario::load(&scenario)?;
             let normalize = normalize.or_else(|| scenario::default_normalize_path(&scenario));
             let global = scenario::load_normalize(normalize.as_deref())?;
+            let ledger = scenario::load_ledger(scenario::default_ledger_path(&scenario).as_deref())?;
+            let (ta, tb) = (scenario::Target::from_url(&a)?, scenario::Target::from_url(&b)?);
             let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-            let result = runtime.block_on(scenario::run(&loaded, &global, &a, &b))?;
+            let result = runtime.block_on(scenario::run(&loaded, &global, &ledger, &ta, &tb))?;
             result.print(&a, &b);
             if let Some(path) = report {
                 let text = serde_json::to_string_pretty(&result.to_json())?;
@@ -107,11 +134,15 @@ fn run_command(command: Command) -> Result<bool> {
             }
             Ok(result.differences == 0)
         }
+        Command::Suite { work, python, oracle, backend, report, scenarios } => {
+            let programs = startup::Programs { python, oracle, backend: backend_or_sibling(backend)? };
+            std::fs::create_dir_all(&work)?;
+            let work = work.canonicalize()?;
+            let reports = suite::run(&programs, &work, &scenarios, report.as_deref())?;
+            Ok(reports.iter().all(|report| report.unexplained() == 0))
+        }
         Command::Startup { work, python, oracle, backend, cases } => {
-            let backend = match backend {
-                Some(path) => path,
-                None => std::env::current_exe()?.with_file_name(format!("plumdeck-backend{}", std::env::consts::EXE_SUFFIX)),
-            };
+            let backend = backend_or_sibling(backend)?;
             let programs = startup::Programs { python, oracle, backend };
             let cases = if cases.is_empty() { fixture::Case::ALL.to_vec() } else { cases };
             std::fs::create_dir_all(&work)?;
@@ -120,6 +151,14 @@ fn run_command(command: Command) -> Result<bool> {
             Ok(startup::print(&reports) == 0)
         }
     }
+}
+
+/// `--backend`, or plumdeck-backend next to this binary.
+fn backend_or_sibling(backend: Option<PathBuf>) -> Result<PathBuf> {
+    Ok(match backend {
+        Some(path) => path,
+        None => std::env::current_exe()?.with_file_name(format!("plumdeck-backend{}", std::env::consts::EXE_SUFFIX)),
+    })
 }
 
 fn main() -> ExitCode {
