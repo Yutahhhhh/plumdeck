@@ -4,8 +4,11 @@
 
 Each *.jsonl file holds one case per line; the Rust unit tests replay every
 case and require 100% agreement. Floats travel as their IEEE-754 bit pattern
-("0x..."), Python ints as decimal strings, so nothing is lost in JSON. The run
+("0x..."), Python ints as decimal strings, so nothing is lost in JSON;
+float_parse.jsonl is the exception and carries float text on purpose. The run
 is seeded and deterministic: rerunning it must not change the files.
+meta.json records the interpreter: the vectors are CPython 3.12 behaviour
+(Unicode 15.0.0), which 3.11 builds do not reproduce.
 
 Where the backend has the function, the backend's own implementation is called
 (normalize_text, normalize_path, path_variants). Expressions that live inline in
@@ -21,6 +24,7 @@ import json
 import math
 import ntpath
 import os
+import platform
 import random
 import re
 import statistics
@@ -253,6 +257,28 @@ def numeric_vectors(writer: Writer, rng: random.Random) -> None:
             yield {"values": [fbits(v) for v in values],
                    "out": fbits(float(statistics.median(values))), "error": None}
     writer.write("median", medians())
+
+
+def float_parse_vectors(writer: Writer, rng: random.Random) -> None:
+    """Float text as Python writes it, with the bits Python reads back.
+
+    Request bodies and stored JSON reach Rust as text, so serde_json must parse
+    it to the same double as json.loads and pydantic (correct rounding) and
+    the encoder must write the same text again.
+    """
+    from pydantic import TypeAdapter
+
+    pydantic_float = TypeAdapter(float)
+
+    def rows():
+        for x in float_pool(rng, 24000):
+            if not math.isfinite(x):
+                continue
+            text = json.dumps(x)
+            assert fbits(json.loads(text)) == fbits(x), text
+            assert fbits(pydantic_float.validate_json(text)) == fbits(x), text
+            yield {"text": text, "x": fbits(x)}
+    writer.write("float_parse", rows())
 
 
 # ---------------------------------------------------------------- json
@@ -530,12 +556,11 @@ def main() -> None:
     args.out.mkdir(parents=True, exist_ok=True)
 
     sandbox = Path(tempfile.mkdtemp(prefix="plumdeck-vectors-"))
-    os.environ["USER_DATA_DIR"] = str(sandbox / "ud")
-    os.environ["DB_PATH"] = str(sandbox / "ud" / "plumdeck.duckdb")
-    os.environ["PLUMDECK_LOG_DIR"] = str(sandbox / "ud" / "logs")
+    parity_env.sandbox_env(sandbox)
     parity_env.require_sandbox_env()
     parity_env.use_backend()
     os.chdir(sandbox)
+    parity_env.require_sandbox_settings()
 
     writer = Writer(args.out)
     numeric_vectors(writer, random.Random(SEED))
@@ -544,6 +569,12 @@ def main() -> None:
     path_vectors(writer, random.Random(SEED + 3))
     time_vectors(writer, random.Random(SEED + 4))
     hash_vectors(writer)
+    float_parse_vectors(writer, random.Random(SEED + 5))
+    # The interpreter is part of the contract: str/unicodedata/pathlib rules
+    # differ between CPython minor versions (3.11 ships Unicode 14.0.0).
+    meta = {"implementation": platform.python_implementation(),
+            "python": platform.python_version(), "unicode": unicodedata.unidata_version}
+    (args.out / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="ascii")
     print(f"python {sys.version.split()[0]} unicode {unicodedata.unidata_version}")
     for name, count in writer.counts.items():
         print(f"{name}: {count}")

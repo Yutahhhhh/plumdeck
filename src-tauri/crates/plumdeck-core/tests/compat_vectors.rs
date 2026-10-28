@@ -13,7 +13,7 @@ use plumdeck_core::compat::pyfmt::{
     float_divmod, float_floordiv, float_mod, float_repr, format_float, int_floordiv, int_mod,
     int_trunc, median, percent_format, round_ndigits, round_to_int, PyNumError,
 };
-use plumdeck_core::compat::pyjson::{dumps, DumpError, DumpOptions, PyValue};
+use plumdeck_core::compat::pyjson::{dumps, dumps_json, DumpError, DumpOptions, PyValue};
 use plumdeck_core::compat::text::{
     casefold, is_py_space, is_word_char, nfc, nfd, nfkc, nfkd, normalize_text, py_lower, py_split,
     py_strip, search_tokens, tokens,
@@ -87,6 +87,39 @@ fn float_repr_matches_python() {
         check.eq(&row["x"], float_repr(x), str_of(&row["repr"]).to_owned());
     }
     check.finish();
+}
+
+#[test]
+fn float_text_round_trips_like_python() {
+    // Python reads its own float text back exactly (json.loads, pydantic);
+    // serde_json must too (float_roundtrip) and the encoder must write the
+    // same bytes again.
+    let mut check = Check::new("float_parse");
+    for row in load("float_parse") {
+        let text = str_of(&row["text"]);
+        let want = bits(&row["x"]);
+        let parsed: Value = serde_json::from_str(text).unwrap();
+        check.eq((text, "parse"), parsed.as_f64().map(f64::to_bits), Some(want.to_bits()));
+        check.eq((text, "dumps"), dumps_json(&parsed, &DumpOptions::default()).ok(), Some(text.to_owned()));
+        check.eq((text, "repr"), float_repr(want), text.to_owned());
+    }
+    check.finish();
+}
+
+#[test]
+fn vectors_come_from_the_reference_interpreter() {
+    let meta: Value =
+        serde_json::from_str(&fs::read_to_string(vectors_dir().join("meta.json")).unwrap()).unwrap();
+    assert_eq!(meta["implementation"], "CPython");
+    let python = str_of(&meta["python"]);
+    assert!(
+        python.starts_with(&format!("{}.", plumdeck_core::compat::REFERENCE_PYTHON)),
+        "vectors from Python {python}, compat layer targets {}",
+        plumdeck_core::compat::REFERENCE_PYTHON
+    );
+    assert_eq!(meta["unicode"], plumdeck_core::compat::UNICODE_VERSION);
+    let (major, minor, patch) = unicode_normalization::UNICODE_VERSION;
+    assert_eq!(meta["unicode"], format!("{major}.{minor}.{patch}"), "unicode-normalization tables");
 }
 
 #[test]

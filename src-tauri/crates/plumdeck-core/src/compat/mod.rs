@@ -9,3 +9,8 @@ mod unicode_tables;
 
 /// Unicode version of the generated case and class tables (Python 3.12).
 pub use unicode_tables::UNICODE_VERSION;
+
+/// The CPython minor version the compat layer reproduces. 3.11 differs in
+/// Unicode (14.0.0), NFKC and PureWindowsPath; contracts/compat-vectors/meta.json
+/// records the exact interpreter the vectors came from.
+pub const REFERENCE_PYTHON: &str = "3.12";
