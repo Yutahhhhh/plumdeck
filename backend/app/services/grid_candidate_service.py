@@ -32,6 +32,8 @@ ON_DEMAND_WAIT_SECONDS = 3.0
 # re-analysis still runs.
 _failed_on_demand: dict[int, tuple[str, str]] = {}
 _failed_lock = threading.Lock()
+# track id -> thread of an on-demand analysis still running in the background.
+_running_on_demand: dict[int, threading.Thread] = {}
 
 
 def audio_fingerprint(filepath: str) -> str:
@@ -153,12 +155,14 @@ class GridCandidateService:
                                   row.features_extra.get("bpm_confidence"))
         return self._within_duration(track, grid) if grid else None
 
-    def automatic(self, track: Track) -> tuple[BeatGrid | None, str | None]:
+    def automatic(self, track: Track) -> tuple[BeatGrid | None, str | None, bool]:
+        """(grid, warning, pending): ``pending`` means a missing grid is being
+        analyzed in the background; a later GET returns it from the cache."""
         warnings = []
         try:
             imported = self.rekordbox(track)
             if imported:
-                return imported, None
+                return imported, None, False
         except (rekordbox_grid.RekordboxGridError, GridAnalysisError, OSError) as exc:
             # A metadata GET must stay usable if a removable library is offline.
             # Explicit restore reports the failure; auto resolution logs it.
@@ -169,23 +173,44 @@ class GridCandidateService:
         except GridAnalysisError as exc:
             logger.warning("Analysis grid unavailable for track %s: %s", track.id, exc)
             warnings.append("analysis: " + str(exc))
-            return None, "; ".join(warnings)
+            return None, "; ".join(warnings), False
+        pending = False
         if grid is None and Path(track.filepath).is_file():
             # Tracks registered in rekordbox skip rhythm analysis at import, so
-            # without a readable PQTZ they have no beats yet: analyze them now.
-            try:
-                grid = self._on_demand(track)
-            except GridAnalysisError as exc:
-                logger.warning("On-demand grid analysis failed for track %s: %s", track.id, exc)
-                warnings.append("analysis: " + str(exc))
-        return grid, "; ".join(warnings) or None
+            # without a readable PQTZ they have no beats yet. Whole-track
+            # analysis takes long, so it runs in the background instead of
+            # holding the metadata GET (and the deck load waiting on it).
+            failed = self._failed(track)
+            if failed:
+                warnings.append("analysis: " + failed)
+            else:
+                pending = self._start_on_demand(track.id)
+        return grid, "; ".join(warnings) or None, pending
+
+    @staticmethod
+    def _failed(track: Track) -> str | None:
+        """The error of a failed on-demand analysis of this exact file, if any."""
+        with _failed_lock:
+            failed = _failed_on_demand.get(track.id)
+        return failed[1] if failed and failed[0] == audio_fingerprint(track.filepath) else None
+
+    @staticmethod
+    def _start_on_demand(track_id: int) -> bool:
+        """Start (or join) the background analysis of a missing grid."""
+        with _failed_lock:
+            running = _running_on_demand.get(track_id)
+            if running is None or not running.is_alive():
+                running = threading.Thread(target=_analyze_in_background, args=(track_id,),
+                                           name=f"grid-on-demand-{track_id}", daemon=True)
+                _running_on_demand[track_id] = running
+                running.start()
+        return True
 
     def _on_demand(self, track: Track) -> BeatGrid:
         fingerprint = audio_fingerprint(track.filepath)
-        with _failed_lock:
-            failed = _failed_on_demand.get(track.id)
-        if failed and failed[0] == fingerprint:
-            raise GridAnalysisError(failed[1])
+        failed = self._failed(track)
+        if failed:
+            raise GridAnalysisError(failed)
         # Share the native analysis slot with imports and the background job
         # instead of overlapping them while the DJ is playing.
         from app.services.analysis_coordinator import analysis_coordinator
@@ -230,3 +255,30 @@ class GridCandidateService:
             "sample_rate": 11025 if sys.platform == "win32" else 44100,
             "confidence": "raw algorithm score, not a probability", "forced": force,
         })
+
+
+def _analyze_in_background(track_id: int) -> None:
+    """Thread body: analyze a missing grid into the candidate cache."""
+    from infra.database import connection
+    try:
+        with Session(connection.engine) as session:
+            track = session.get(Track, track_id)
+            if track is not None:
+                GridCandidateService(session)._on_demand(track)
+    except GridAnalysisError as exc:
+        # Busy or failed; _on_demand recorded a failure, busy retries on the next GET.
+        logger.warning("On-demand grid analysis failed for track %s: %s", track_id, exc)
+    except Exception:
+        logger.exception("On-demand grid analysis crashed for track %s", track_id)
+    finally:
+        with _failed_lock:
+            if _running_on_demand.get(track_id) is threading.current_thread():
+                del _running_on_demand[track_id]
+
+
+def wait_for_on_demand(track_id: int, timeout: float | None = None) -> None:
+    """Block until a background analysis of ``track_id`` (if any) has ended."""
+    with _failed_lock:
+        running = _running_on_demand.get(track_id)
+    if running is not None:
+        running.join(timeout)

@@ -39,6 +39,7 @@ import { Fader, SoftwareDeck, formatTime } from "./SoftwareDeck";
 import { MixerPanel } from "./MixerPanel";
 import { chooseSyncLeader } from "./sync-leader";
 import { manualLoopOut, snapToBeat } from "./loop-math";
+import { awaitPendingGrid } from "./pending-grid";
 import { CROSSFADER_CURVE_OPTIONS, FADER_CURVES, FADER_CURVE_LABELS, nextDropouts, readCrossfaderCurve, readFaderCurve, type ColorFxEffect, type DropoutState } from "./mixer-math";
 import { readShortcutPreset, SHORTCUT_PRESETS, shortcutHelp } from "./keyboard-shortcuts";
 import { RotaryKnob } from "./RotaryKnob";
@@ -273,6 +274,30 @@ export function PlayWorkspace() {
     };
   }, [finalizeHistory, finalizeRecording]);
 
+  // The deck was loaded without a grid while the backend analyzes it; take
+  // the grid onto the deck when it lands, unless another track replaced it.
+  const applyLateGrid = useCallback(async (deck: DeckId, trackId: number, loadRequest: number) => {
+    const holdsTrack = () => loadRequest === deckLoadRequests.current[deck]
+      && client.getState().snapshot?.decks[deck]?.track?.trackId === String(trackId);
+    const metadata = await awaitPendingGrid({ fetch: () => performanceMetadataService.get(trackId), current: holdsTrack });
+    if (!metadata) return;
+    const grid = metadata.beat_grid;
+    if (!grid) {
+      if (metadata.grid_warning) setCommandError(`グリッド注意: ${metadata.grid_warning}`);
+      return;
+    }
+    try {
+      await gridOperations.current.run(trackId, async () => {
+        if (!holdsTrack()) return;
+        await client.setBeatgrid(deck, String(trackId), grid.bpm, grid.first_beat_ms, grid.beats_per_bar, grid.beat_times_ms, grid.beat_numbers);
+        setTrackMetadata(old => ({ ...old, [trackId]: metadata }));
+        await client.refreshSnapshot();
+      });
+    } catch (cause) {
+      setCommandError(`解析したグリッドをデッキに反映できませんでした: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+  }, [client]);
+
   const loadTrack = useCallback((deck: DeckId, track: Track) => {
     const junction = junctionState.get();
     if (junction?.active && junction.turn?.signal === "outgoing" && junction.turn.tailDecks.includes(deck)) {
@@ -300,8 +325,10 @@ export function PlayWorkspace() {
         setAudioSettingsOpen(true);
         throw cause;
       }
+      let gridPending = false;
       try {
         const metadata = await performanceMetadataService.get(track.id);
+        gridPending = !metadata.beat_grid && Boolean(metadata.grid_pending);
         setTrackMetadata(old => ({ ...old, [track.id]: metadata }));
         descriptor.hotCues = cuePositions(metadata, descriptor.durationMs);
         descriptor.bpm = metadata.beat_grid?.bpm ?? descriptor.bpm;
@@ -334,8 +361,9 @@ export function PlayWorkspace() {
       saveRuntime();
       await persist(() => playService.upsertHistory({ event_key: key, session_id: playSession.current, deck, track_id: track.id, loaded_at: loadedAt }));
       setActiveDeck(deck);
+      if (gridPending) void applyLateGrid(deck, track.id, loadRequest);
     })));
-  }, [client, connect, finalizeHistory, outputDevice, persist, run, saveRuntime, setLoopIn, start, status?.running]);
+  }, [applyLateGrid, client, connect, finalizeHistory, outputDevice, persist, run, saveRuntime, setLoopIn, start, status?.running]);
 
   const editHotCue = (deck: DeckId, slot: number, clear: boolean) => run(async () => {
     const trackId = client.getState().snapshot?.decks[deck].track?.trackId;

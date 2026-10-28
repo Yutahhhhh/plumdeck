@@ -46,6 +46,7 @@ def test_get_returns_unpersisted_empty_metadata(client, session: Session):
         "created_at": None,
         "updated_at": None,
         "grid_warning": None,
+        "grid_pending": False,
     }
 
 

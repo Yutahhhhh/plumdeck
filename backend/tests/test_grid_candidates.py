@@ -295,11 +295,17 @@ def test_get_analyzes_on_demand_without_rekordbox_grid_or_stored_beats(client, s
     monkeypatch.setattr(service, "analyze_grid", lambda path: calls.append(path) or {
         "bpm": 120.0, "ticks": [0.3, 0.8, 1.3, 1.8], "confidence": 4.0})
     url = f"/api/tracks/{track.id}/performance-metadata"
+    # The GET answers at once; the whole-track analysis runs in the background.
     first = client.get(url).json()
-    assert first["beat_grid"]["source"] == "analysis" and calls == [str(audio)]
+    assert first["beat_grid"] is None and first["grid_pending"] is True
     assert (first["grid_warning"] is not None) == (rekordbox == "unreadable")
+    service.wait_for_on_demand(track.id, 5)
+    session.rollback()  # the shared test session: see the background thread's commit
+    assert calls == [str(audio)]
     # The result is cached like an explicit analysis; the next load is immediate.
-    assert client.get(url).json()["beat_grid"] == first["beat_grid"]
+    second = client.get(url).json()
+    assert second["beat_grid"]["source"] == "analysis" and second["grid_pending"] is False
+    assert client.get(url).json()["beat_grid"] == second["beat_grid"]
     assert len(calls) == 1
     assert session.exec(text("SELECT count(*) FROM track_performance_metadata")).one()[0] == 0
 
@@ -420,15 +426,19 @@ def test_failed_on_demand_analysis_is_not_repeated_until_the_file_changes(client
         raise GridAnalysisError("Grid analysis failed: cannot decode")
     monkeypatch.setattr(service, "analyze_grid", fail)
     url = f"/api/tracks/{track.id}/performance-metadata"
-    for _ in range(3):  # deck load, then the editor's re-GETs after cue saves
+    assert client.get(url).json()["grid_pending"] is True
+    service.wait_for_on_demand(track.id, 5)
+    for _ in range(3):  # deck load polling, then the editor's re-GETs after cue saves
         body = client.get(url).json()
         assert body["beat_grid"] is None and "cannot decode" in body["grid_warning"]
+        assert body["grid_pending"] is False
     assert len(calls) == 1
     assert analysis_coordinator.owner is None  # the slot was released
 
     stat = audio.stat()
     os.utime(audio, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
-    client.get(url)
+    assert client.get(url).json()["grid_pending"] is True
+    service.wait_for_on_demand(track.id, 5)
     assert len(calls) == 2
 
 
@@ -451,10 +461,14 @@ def test_on_demand_analysis_waits_for_the_analysis_slot(client, session, monkeyp
     token = analysis_coordinator.acquire("Import")
     try:
         body = client.get(url).json()
+        service.wait_for_on_demand(track.id, 5)
     finally:
         analysis_coordinator.release(token)
-    # Busy is not a failure: no analysis ran and the next load analyzes.
-    assert body["beat_grid"] is None and "Another analysis" in body["grid_warning"] and not calls
+    # Busy is not a failure: no analysis ran and the next GET starts it again.
+    assert body["beat_grid"] is None and body["grid_pending"] is True and not calls
+    assert client.get(url).json()["grid_pending"] is True
+    service.wait_for_on_demand(track.id, 5)
+    session.rollback()  # the shared test session: see the background thread's commit
     assert client.get(url).json()["beat_grid"]["source"] == "analysis" and len(calls) == 1
 
 
@@ -489,3 +503,35 @@ def test_selected_jobs_skip_components_rekordbox_replaces(session, mocker, tmp_p
     session.rollback()
     config = {"features": ["rhythm", "key", "timbre"], "only_outdated": False}
     assert service._prepare_item({"track_id": track_id, "filepath": "/lib/pqtz.mp3"}, config) == ["timbre"]
+
+
+def test_metadata_get_does_not_wait_for_on_demand_grid_analysis(client, session, monkeypatch, tmp_path):
+    import app.services.grid_candidate_service as service
+    monkeypatch.setattr(rekordbox_grid, "find_analysis", lambda _: None)
+    monkeypatch.setattr(service, "_failed_on_demand", {})
+    track = _track(session)
+    audio = tmp_path / "long.wav"
+    audio.write_bytes(b"fixture")
+    track.filepath = str(audio)
+    session.add(track)
+    session.commit()
+    started, release = threading.Event(), threading.Event()
+
+    def slow(path):
+        started.set()
+        assert release.wait(10)
+        return {"bpm": 120.0, "ticks": [0.3, 0.8, 1.3, 1.8], "confidence": 4.0}
+    monkeypatch.setattr(service, "analyze_grid", slow)
+    url = f"/api/tracks/{track.id}/performance-metadata"
+    try:
+        body = client.get(url).json()
+        assert started.wait(5)
+        # The deck load gets its answer while the analysis is still running,
+        # and a repeated GET joins it instead of starting another one.
+        assert body["beat_grid"] is None and body["grid_pending"] is True
+        assert client.get(url).json()["grid_pending"] is True
+    finally:
+        release.set()
+        service.wait_for_on_demand(track.id, 5)
+    session.rollback()
+    assert client.get(url).json()["beat_grid"]["source"] == "analysis"
