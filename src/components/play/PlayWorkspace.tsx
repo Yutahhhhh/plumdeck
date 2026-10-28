@@ -37,7 +37,6 @@ import { manualLoopOut, snapToBeat } from "./loop-math";
 import { setPlayPreference, usePlayPreferences } from "./play-preferences";
 import { readKeyNotation } from "@/services/dj-engine/musical-key";
 import { PanelToolbar, PANEL_DEFAULTS, type PanelId, type PanelVisibility } from "./PanelToolbar";
-import { FxPanel, FX_UNIT_DEFAULTS, type FxUnitState } from "./FxPanel";
 import "./play-workspace.css";
 import "./play-density.css";
 import { AudioSettings } from "./AudioSettings";
@@ -132,7 +131,6 @@ export function PlayWorkspace() {
     try { return { ...PANEL_DEFAULTS, ...JSON.parse(localStorage.getItem("plumdeck.panels") ?? "{}") as Partial<PanelVisibility> }; }
     catch { return PANEL_DEFAULTS; }
   });
-  const [fxUnits, setFxUnits] = useState<[FxUnitState, FxUnitState]>(FX_UNIT_DEFAULTS);
   const [compactDecks, setCompactDecks] = useState(() => localStorage.getItem("plumdeck.compactDecks") === "true");
   const [waveformLayout, setWaveformLayout] = useState<WaveformLayout>(() => localStorage.getItem("plumdeck.waveformLayout") === "vertical" ? "vertical" : "horizontal");
   const snapshot = state.snapshot;
@@ -711,7 +709,6 @@ export function PlayWorkspace() {
     {waveform(id, layout)}
     <button className="dj-wave-expand" aria-label={`デッキ ${id} のペアを拡大`} aria-pressed={!!expandedPair?.includes(id)} onClick={()=>setExpandedPair(current=>current?.includes(id)?null:(id==='A'||id==='B'?'AB':'CD'))}>拡大</button>
   </DeckWaveformLane>;
-  // シンク先は「いま master になっているデッキ」。無ければ相方のデッキ。
   // 一覧のプレビュー波形に出すホットキュー。編集したトラックはこちらが最新。
   const listCueOverrides = useMemo(
     () => Object.fromEntries(Object.entries(trackMetadata).map(([id, metadata]) => {
@@ -727,17 +724,6 @@ export function PlayWorkspace() {
     localStorage.setItem("plumdeck.panels", JSON.stringify(next));
     return next;
   });
-
-  // FX ユニットは 1 チャンネル 1 エフェクト。担当チャンネルを移したら前の
-  // チャンネルを必ず切ってから掛け直す（掛かりっぱなしを残さない）。
-  const changeFxUnit = (index: 0 | 1, unit: FxUnitState) => {
-    const previous = fxUnits[index];
-    setFxUnits((current) => { const next = [...current] as [FxUnitState, FxUnitState]; next[index] = unit; return next; });
-    void run(async () => {
-      if (previous.channel !== unit.channel && previous.enabled) await client.setFx(previous.channel, previous.effect, false, previous.mix);
-      await client.setFx(unit.channel, unit.effect, unit.enabled, unit.mix);
-    });
-  };
 
   // Manual loop and loop resize. With Q on, IN and OUT land on the nearest beat.
   const gridOf = (track: { bpm: number | null; beatgridOffsetMs?: number; beatTimesMs?: number[] }) => ({ bpm: track.bpm, beatgridOffsetMs: track.beatgridOffsetMs, beatTimesMs: track.beatTimesMs });
@@ -909,9 +895,10 @@ export function PlayWorkspace() {
     </header>
     {(error || commandError || snapshot?.recording?.error) && <div role="alert" className="dj-error"><AlertTriangle />{commandError || error || snapshot?.recording?.error}</div>}
     {shortcuts && <div className="dj-shortcuts"><b>1–4</b> デッキ選択　<b>Space</b> 再生 / 一時停止　<b>Q / E</b> 5秒戻る / 進む　<b>ドラッグ</b> 曲を波形またはデッキへ　<b>波形ドラッグ</b> スクラブ</div>}
-    {panels.fx && <FxPanel decks={visibleDecks} units={fxUnits} onChange={changeFxUnit}
-      disabledReason={!connected ? "未接続" : !capabilities.includes("mixer.fx") ? "この音声エンジンはエフェクト非対応" : undefined} />}
-    {panels.fx && <BeatFxPanel state={snapshot?.mixer.beatFx} enabled={Boolean(snapshot?.engine.capabilities.includes("mixer.beatfx"))} />}
+    {panels.fx && <BeatFxPanel state={snapshot?.mixer.beatFx} decks={visibleDecks} releaseSupported={capabilities.includes(DJ_ENGINE_CAPABILITIES.mixerBeatFxRelease)}
+      micAvailable={Boolean(snapshot?.audio.microphone?.available)} samplerAvailable={capabilities.includes(DJ_ENGINE_CAPABILITIES.sampler)}
+      disabledReason={!connected ? "未接続" : !capabilities.includes(DJ_ENGINE_CAPABILITIES.mixerBeatFx) ? "この音声エンジンは BEAT FX 非対応" : undefined}
+      send={(params) => client.setBeatFx(params)} />}
     {panels.recording && <div className="dj-panel-stub" role="note">
       録音は上部ツールバーの REC ボタンから開始/停止できます。専用パネルは未実装です。
     </div>}

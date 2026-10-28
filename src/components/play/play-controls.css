@@ -102,12 +102,6 @@
 .dj-performance-pad--fx { justify-content: center; }
 .dj-performance-pad--fx span { display: none; }
 .dj-workspace .dj-channel--mixer { position: relative; }
-.dj-fx-mix { position: absolute; right: 27px; bottom: 18px; width: 70px; max-width: none; height: 22px; flex-direction: row; gap: 5px; }
-.dj-fx-mix .dj-knob-label { white-space: nowrap; font-size: 8px; }
-.dj-fx-mix .dj-knob-value { display: none; }
-.dj-fx-mix .dj-knob { width: 18px; height: 18px; }
-.dj-workspace--compact .dj-fx-mix { bottom: 17px; right: 27px; }
-.dj-workspace--compact .dj-fx-mix .dj-knob { width: 17px; height: 17px; }
 .dj-workspace .dj-deck-controls:has(.dj-grid-editor) { grid-template-columns: minmax(0, 1fr) var(--d-btn); }
 @container (max-width: 240px) {
   .dj-pad-modes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -230,24 +224,6 @@
 .dj-mixer-tempo-reset { height: 12px; padding: 0 3px; border: 1px solid #2f333a; border-radius: 2px; background: #1b1d20; color: #a9aeb6; font-size: 7px; }
 .dj-mixer-tempo-reset:disabled { opacity: .32; }
 
-/* FX パネル */
-.dj-fx-panel { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; flex-shrink: 0; background: #000; border-bottom: 1px solid #000; }
-.dj-fx-unit { display: flex; align-items: center; gap: 5px; min-width: 0; padding: 4px 6px; background: #17191c; }
-.dj-fx-label { flex-shrink: 0; color: #8f959d; font-size: 9px; font-weight: 700; letter-spacing: .08em; }
-.dj-fx-assign { display: flex; gap: 1px; flex-shrink: 0; }
-.dj-fx-assign button, .dj-fx-slotmode button { width: 18px; height: 16px; border: 1px solid #30343a; border-radius: 2px; background: #1b1d20; color: #9aa0a8; font-size: 8px; font-weight: 700; }
-.dj-fx-assign button.is-on, .dj-fx-slotmode button.is-on { border-color: #2f6fd0; background: #2f6fd0; color: #fff; }
-.dj-fx-assign button:disabled, .dj-fx-slotmode button:disabled, .dj-fx-onoff button:disabled { opacity: .32; }
-.dj-fx-slotmode { display: flex; gap: 1px; flex-shrink: 0; }
-.dj-fx-slot { display: flex; align-items: center; gap: 3px; min-width: 0; }
-.dj-fx-slot select { min-width: 0; max-width: 96px; height: 18px; border: 1px solid #34383f; border-radius: 2px; padding: 0 3px; background: #202327; color: #d3d7dd; font-size: 8px; }
-.dj-fx-slot.is-empty { opacity: .35; }
-.dj-fx-release { display: flex; align-items: center; gap: 4px; min-width: 0; opacity: .45; }
-.dj-fx-release select { height: 18px; border: 1px solid #34383f; border-radius: 2px; background: #202327; color: #aeb3bb; font-size: 8px; }
-.dj-fx-hint { color: #6c7178; font-size: 7px; white-space: nowrap; }
-.dj-fx-onoff { display: flex; margin-left: auto; gap: 2px; flex-shrink: 0; }
-.dj-fx-onoff button { width: 38px; height: 16px; border: 1px solid #30343a; border-radius: 2px; background: #1b1d20; color: #9aa0a8; font-size: 8px; font-weight: 700; }
-.dj-fx-onoff .dj-fx-auto.is-on { border-color: #2f6fd0; background: #2f6fd0; color: #fff; }
 /* デッキ行の高さに収めるため、つまみは 2 列に畳んで値表示を省く。 */
 .dj-mixer-panel { min-height: 0; align-items: stretch; }
 .dj-panel-stub { flex-shrink: 0; padding: 6px 10px; border-bottom: 1px solid #000; background: #17191c; color: #8f959d; font-size: 9px; }
@@ -348,3 +324,24 @@
 .dj-memory-actions button { height: 22px; border: 1px solid #3a3f46; border-radius: 2px; background: #1b1d20; color: #d0d4da; font-size: 10px; font-weight: 700; letter-spacing: .04em; }
 .dj-memory-actions button:not(:disabled):hover { background: #2a2e34; }
 .dj-memory-actions button:disabled { opacity: .4; }
+
+/* BEAT FX unit. ON / RELEASE light blue while active (FX parameter colour). */
+.dj-beatfx { display: flex; align-items: center; gap: 8px; flex-shrink: 0; flex-wrap: wrap; min-height: 34px; padding: 4px 8px; border-bottom: 1px solid #000; background: #17191c; }
+.dj-beatfx-label { color: #b6bdc8; font-size: 11px; font-weight: 800; letter-spacing: .08em; }
+.dj-beatfx button { min-width: 28px; height: 24px; padding: 0 6px; border: 1px solid #3a3f46; border-radius: 2px; background: #1b1d20; color: #c8ccd2; font-size: 11px; font-weight: 700; }
+.dj-beatfx button:not(:disabled):hover { background: #2a2e34; }
+.dj-beatfx button.is-on { border-color: #2f6fd0; background: #2f6fd0; color: #fff; }
+.dj-beatfx button:disabled, .dj-beatfx select:disabled, .dj-beatfx input:disabled { opacity: .4; }
+.dj-beatfx-select { height: 24px; min-width: 120px; border: 1px solid #3a3f46; border-radius: 2px; padding: 0 4px; background: #202327; color: #e2e5e9; font-size: 11px; }
+.dj-beatfx-beats { display: flex; align-items: center; gap: 2px; }
+.dj-beatfx-beats output { min-width: 40px; color: #fff; font-size: 18px; font-weight: 700; text-align: center; }
+.dj-beatfx-level { display: flex; align-items: center; gap: 6px; }
+.dj-beatfx-level span { color: #b6bdc8; font-size: 10px; font-weight: 700; letter-spacing: .04em; }
+.dj-beatfx-level input { width: 110px; accent-color: #2f6fd0; }
+.dj-beatfx-level b { min-width: 34px; color: #e2e5e9; font-size: 11px; text-align: right; }
+.dj-beatfx-assign, .dj-beatfx-bpm { display: flex; align-items: center; gap: 2px; }
+.dj-beatfx-bpm span { min-width: 64px; color: #b6bdc8; font-size: 11px; }
+.dj-beatfx button.dj-beatfx-release { display: inline-flex; flex-direction: column; justify-content: center; height: 28px; line-height: 1.1; touch-action: none; }
+.dj-beatfx-release small { color: #9aa0a8; font-size: 10px; font-weight: 600; }
+.dj-beatfx-release.is-on small { color: #fff; }
+.dj-beatfx-error { color: #f3a49d; font-size: 11px; }
