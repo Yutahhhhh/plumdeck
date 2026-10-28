@@ -253,7 +253,6 @@ def test_rebuild_drops_features_extra_keys_outside_allow_list(tmp_path):
     assert after["fx"][2] == _CLEAN_FX_TEXT
     assert after["fx"][3] == "{}"
     assert after["marker"] == (str(compaction.FX_CLEAN_VERSION),)
-    assert os.path.getsize(db) < os.path.getsize(glob.glob(db + ".bak-v5-*")[0])
 
     # 2 回目は何もしない (冪等)
     size = os.path.getsize(db)
@@ -327,3 +326,37 @@ def test_unreadable_features_extra_is_kept_as_is(tmp_path):
     assert json.loads(fx[1]) == _KEPT_FX
     assert fx[2] == "not json"
     assert fx[3] == "[1, 2]"
+
+
+def test_rebuild_handles_quoted_paths_and_stale_partial_files(tmp_path):
+    db = str(tmp_path / "o'neil-ライブラリ.duckdb")
+    _make_v5_db(db, [json.dumps(_LEGACY_FX)])
+    # 前回の中断で残った再構築ファイルと WAL は再生せずに捨てる
+    with open(db + ".rebuild", "wb") as f:
+        f.write(b"partial")
+    with open(db + ".rebuild.wal", "wb") as f:
+        f.write(b"stale wal")
+
+    ensure_healthy_db(db)
+
+    assert json.loads(_snapshot(db)["fx"][1]) == _KEPT_FX
+    assert not os.path.exists(db + ".rebuild")
+    assert not os.path.exists(db + ".rebuild.wal")
+
+
+def test_failed_rebuild_leaves_original_file(tmp_path, monkeypatch):
+    db = str(tmp_path / "fail.duckdb")
+    _make_v5_db(db, [json.dumps(_LEGACY_FX), "{}"])
+    before = _snapshot(db)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(compaction, "_copy_track_analyses", boom)
+    with pytest.raises(RuntimeError, match="disk full"):
+        ensure_healthy_db(db)
+
+    assert _snapshot(db) == before
+    assert glob.glob(db + ".bak-v5-*") == []
+    assert not os.path.exists(db + ".rebuild")
+    assert not os.path.exists(db + ".rebuild.wal")

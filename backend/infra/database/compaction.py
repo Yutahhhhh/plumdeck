@@ -44,6 +44,10 @@ COMPACT_MIN_BYTES = 256 * 1024 * 1024          # これ未満のファイルは�
 COMPACT_BYTES_PER_TRACK = 64 * 1024            # 1曲あたりの許容目安 (BLOB化後は十分過大)
 COMPACT_RATIO_LIMIT = 4                        # 目安の何倍を超えたら再構築するか
 BATCH = 500
+# The new file is attached to the source connection under this name so tables
+# are copied inside DuckDB (row-by-row executemany took minutes on 25k tracks).
+_DST = "plumdeck_rebuild"
+_FX_UDF = "plumdeck_clean_features_extra"
 
 # schema_info key marking that features_extra_json holds only PERSISTED_KEYS.
 # Bump FX_CLEAN_VERSION when PERSISTED_KEYS shrinks so existing rows are rebuilt.
@@ -83,15 +87,14 @@ def ensure_healthy_db(db_path: str) -> None:
             reason = "肥大ファイルのコンパクション"
         logger.warning(f"DuckDB ファイルを再構築します ({reason}, 現在 {size_mb:.0f}MB)")
 
-        if os.path.exists(new_path):
-            os.remove(new_path)
+        _remove_partial(new_path)
         _build_new_file(con, new_path, convert=legacy)
         built = True
     finally:
         con.close()
-        if not built and os.path.exists(new_path):
+        if not built:
             try:
-                os.remove(new_path)
+                _remove_partial(new_path)
             except OSError:
                 pass
 
@@ -113,9 +116,9 @@ def _read_version(con) -> int:
     return _read_info_int(con, "version")
 
 
-def _write_info(con, key: str, value: str) -> None:
+def _write_info(con, key: str, value: str, table: str = "schema_info") -> None:
     con.execute(
-        "INSERT INTO schema_info (key, value) VALUES (?, ?) "
+        f"INSERT INTO {table} (key, value) VALUES (?, ?) "
         "ON CONFLICT (key) DO UPDATE SET value = excluded.value",
         [key, value],
     )
@@ -176,43 +179,52 @@ def _is_bloated(con, db_path: str) -> bool:
 # --------------------------------------------------------------------------- #
 # 再構築
 # --------------------------------------------------------------------------- #
-def _column_names(con, table: str) -> List[str]:
+def _remove_partial(new_path: str) -> None:
+    # Leftovers of an interrupted rebuild, including its WAL.
+    for path in (new_path, new_path + ".wal"):
+        if os.path.exists(path):
+            os.remove(path)
+
+
+def _ident(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _column_names(con, catalog: str, table: str) -> List[str]:
     return [
         r[0]
         for r in con.execute(
             "SELECT column_name FROM information_schema.columns "
-            "WHERE table_schema = 'main' AND table_name = ? ORDER BY ordinal_position",
-            [table],
+            "WHERE table_catalog = ? AND table_schema = 'main' AND table_name = ? "
+            "ORDER BY ordinal_position",
+            [catalog, table],
         ).fetchall()
     ]
 
 
-def _common_columns(src, dst, table: str) -> List[str]:
-    src_cols = set(_column_names(src, table))
-    return [c for c in _column_names(dst, table) if c in src_cols]
-
-
-def _table_exists(con, table: str) -> bool:
+def _table_exists(con, catalog: str, table: str) -> bool:
     row = con.execute(
         "SELECT 1 FROM information_schema.tables "
-        "WHERE table_schema = 'main' AND table_name = ?",
-        [table],
+        "WHERE table_catalog = ? AND table_schema = 'main' AND table_name = ?",
+        [catalog, table],
     ).fetchone()
     return row is not None
 
 
-def _copy_plain_table(src, dst, table: str) -> int:
-    cols = _common_columns(src, dst, table)
+def _copy_plain_table(con, src_db: str, table: str) -> int:
+    src_cols = set(_column_names(con, src_db, table))
+    cols = [c for c in _column_names(con, _DST, table) if c in src_cols]
     if not cols:
         return 0
-    col_list = ", ".join(f'"{c}"' for c in cols)
-    placeholders = ", ".join(["?"] * len(cols))
-    rows = src.execute(f"SELECT {col_list} FROM {table}").fetchall()
-    if rows:
-        dst.executemany(
-            f"INSERT INTO {table} ({col_list}) VALUES ({placeholders})", rows
-        )
-    return len(rows)
+    col_list = ", ".join(_ident(c) for c in cols)
+    return con.execute(
+        f"INSERT INTO {_DST}.main.{_ident(table)} ({col_list}) "
+        f"SELECT {col_list} FROM {_ident(src_db)}.main.{_ident(table)}"
+    ).fetchone()[0]
 
 
 def _as_list(v) -> list:
@@ -250,43 +262,54 @@ def _clean_features_extra(fx) -> str:
     return json.dumps(persisted_features_extra(extra))
 
 
-def _copy_track_analyses(src, dst, convert: bool) -> None:
-    total = src.execute("SELECT count(*) FROM track_analyses").fetchone()[0] or 0
-    if convert:
-        cur = src.execute(
+def _copy_track_analyses(con, src_db: str, convert: bool) -> None:
+    src_table = f"{_ident(src_db)}.main.track_analyses"
+    insert = (
+        f"INSERT INTO {_DST}.main.track_analyses "
+        "(track_id, beats_f32, waveform_u8, features_extra_json) "
+    )
+    if not convert:
+        con.create_function(
+            _FX_UDF, _clean_features_extra, ["VARCHAR"], "VARCHAR",
+            null_handling="special", side_effects=False,
+        )
+        try:
+            n = con.execute(
+                insert + f"SELECT track_id, beats_f32, waveform_u8, {_FX_UDF}(features_extra_json) "
+                f"FROM {src_table}"
+            ).fetchone()[0]
+        finally:
+            con.remove_function(_FX_UDF)
+        logger.info(f"Rebuilding DB: copied {n} analyses")
+        return
+
+    # v3 の JSON 配列は Python で BLOB に詰め直す
+    total = con.execute(f"SELECT count(*) FROM {src_table}").fetchone()[0] or 0
+    cur = con.cursor()  # 読み出しを続けたまま同じ DB インスタンスへ書き込む
+    try:
+        cur.execute(
             "SELECT track_id, beat_positions, waveform_peaks, features_extra_json "
-            "FROM track_analyses"
+            f"FROM {src_table}"
         )
-    else:
-        cur = src.execute(
-            "SELECT track_id, beats_f32, waveform_u8, features_extra_json "
-            "FROM track_analyses"
-        )
-    done = 0
-    while True:
-        chunk = cur.fetchmany(BATCH)
-        if not chunk:
-            break
-        out = []
-        for track_id, beats, wave, fx in chunk:
-            if convert:
-                out.append(
-                    (
-                        track_id,
-                        pack_f32(_as_list(beats)),
-                        pack_u8_waveform(_as_list(wave)),
-                        _clean_features_extra(fx),
-                    )
+        done = 0
+        while True:
+            chunk = cur.fetchmany(BATCH)
+            if not chunk:
+                break
+            out = [
+                (
+                    track_id,
+                    pack_f32(_as_list(beats)),
+                    pack_u8_waveform(_as_list(wave)),
+                    _clean_features_extra(fx),
                 )
-            else:
-                out.append((track_id, beats, wave, _clean_features_extra(fx)))
-        dst.executemany(
-            "INSERT INTO track_analyses "
-            "(track_id, beats_f32, waveform_u8, features_extra_json) VALUES (?, ?, ?, ?)",
-            out,
-        )
-        done += len(chunk)
-        logger.info(f"Rebuilding DB: {done}/{total} analyses")
+                for track_id, beats, wave, fx in chunk
+            ]
+            con.executemany(insert + "VALUES (?, ?, ?, ?)", out)
+            done += len(chunk)
+            logger.info(f"Rebuilding DB: {done}/{total} analyses")
+    finally:
+        cur.close()
 
 
 def _build_new_file(src, new_path: str, convert: bool) -> None:
@@ -303,24 +326,29 @@ def _build_new_file(src, new_path: str, convert: bool) -> None:
     try:
         for stmt in get_schema_statements(seq_starts):
             dst.execute(stmt)
-
-        for table in PLAIN_TABLES:
-            if _table_exists(src, table):
-                n = _copy_plain_table(src, dst, table)
-                logger.info(f"Rebuilding DB: copied {n} rows from {table}")
-
-        if _table_exists(src, "track_embeddings"):
-            n = _copy_plain_table(src, dst, "track_embeddings")
-            logger.info(f"Rebuilding DB: copied {n} rows from track_embeddings")
-
-        if _table_exists(src, "track_analyses"):
-            _copy_track_analyses(src, dst, convert)
-
-        _write_info(dst, "version", str(CURRENT_SCHEMA_VERSION))
-        _write_info(dst, FX_CLEAN_KEY, str(FX_CLEAN_VERSION))
-        dst.execute("CHECKPOINT")
     finally:
         dst.close()
+
+    src_db = src.execute("SELECT current_database()").fetchone()[0]
+    src.execute(f"ATTACH {_literal(new_path)} AS {_DST}")
+    try:
+        for table in PLAIN_TABLES + ["track_embeddings"]:
+            if _table_exists(src, src_db, table):
+                n = _copy_plain_table(src, src_db, table)
+                logger.info(f"Rebuilding DB: copied {n} rows from {table}")
+
+        if _table_exists(src, src_db, "track_analyses"):
+            _copy_track_analyses(src, src_db, convert)
+
+        info = f"{_DST}.main.schema_info"
+        _write_info(src, "version", str(CURRENT_SCHEMA_VERSION), table=info)
+        _write_info(src, FX_CLEAN_KEY, str(FX_CLEAN_VERSION), table=info)
+        src.execute(f"CHECKPOINT {_DST}")
+    finally:
+        try:
+            src.execute(f"DETACH {_DST}")
+        except Exception:
+            pass  # the caller's con.close() releases the file as well
 
 
 def _swap(db_path: str, new_path: str) -> None:
