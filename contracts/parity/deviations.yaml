@@ -1,10 +1,11 @@
 # Intentional differences between the Python backend (A) and the Rust port (B)
-# (plan §0.4, §4.9). Only entries the owner has approved may excuse a parity
-# difference; until then the Rust side stays bug-compatible.
+# (plan §0.4, §4.9). Anything not listed here stays bug-compatible.
 #
-# plumdeck-parity does not read this file yet: no entry is approved, so every
-# difference is reported as unexplained. Runner support (match on method,
-# path pattern and status) lands together with the first approved entry.
+# plumdeck-parity reads this file: a scenario step tagged
+# `deviation: {id, b_status[, b_body]}` must name an entry here; A's answer is
+# recorded but not compared and B must answer as declared. The report counts
+# such steps by status: approved entries are accepted, proposed ones are
+# listed for the owner's decision (B already behaves as proposed).
 #
 # status: proposed | approved
 deviations:
@@ -26,7 +27,7 @@ deviations:
       calls them; B answers them with the unmatched-request 404.
     current: not ported; no scenario covers them.
   - id: D-10
-    status: proposed
+    status: approved
     source: plan §1.4 (gate), §4.9 D-10; src-tauri/crates/plumdeck-db/src/handle.rs
     summary: >
       Backup/restore (the maintenance gate) waits up to 2 s for pooled
@@ -41,7 +42,7 @@ deviations:
       e.g. a Play import finished. Messages are unchanged.
     current: implemented in plumdeck-db (S1); no HTTP route uses it until S10.
   - id: D-14
-    status: proposed
+    status: approved
     source: plan R1 (design.md W0-05); src-tauri/crates/plumdeck-db/src/schema.rs
     summary: >
       Startup refuses a library whose schema_info.version is newer than 5
@@ -53,3 +54,17 @@ deviations:
     current: >
       B refuses; plumdeck-parity startup's newer-schema case checks that
       the file stays byte-identical (A is not run for that case).
+  - id: D-06
+    status: proposed
+    source: plan §1.5 (middleware), §4.9 D-06, R15; src-tauri/crates/plumdeck-backend/src/middleware.rs
+    summary: >
+      Every route refuses requests that did not come from this machine's own
+      pages: a Host other than 127.0.0.1, localhost or [::1] (any port) gets
+      421 {"detail": "Invalid Host header"}, and an Origin other than a
+      loopback http(s) origin or the WebView's (tauri://localhost,
+      http(s)://tauri.localhost) gets 403 {"detail": "Invalid Origin header"},
+      before CORS runs. Requests without Host or Origin (scripts, MCP hosts)
+      pass. Python answered all of them (DNS rebinding and cross-site POSTs
+      reached the API, /mcp and the file-writing routes). The WebView, the
+      Vite dev server and every loopback client are unaffected.
+    current: implemented in plumdeck-backend (S2); s2-middleware.yaml pins B's answers.

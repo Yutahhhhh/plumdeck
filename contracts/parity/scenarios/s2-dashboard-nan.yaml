@@ -1,0 +1,18 @@
+# S2: a NaN target_duration on a setlist outside the five most recent is
+# never serialized, so GET /api/dashboard still answers 200 on both sides
+# (s2-dashboard-nan-recent covers the 500 when it is serialized).
+name: s2-dashboard-nan
+db: fixture
+fixture: catalog
+fixture_sql: UPDATE setlists SET target_duration = 'nan' WHERE name = 'Oldest'
+compare_overrides:
+  ties:
+    - {path: "$.genre_distribution", by: count}
+    - {path: "$.recent_setlists", by: updated_at}
+steps:
+  - name: NaN outside the five most recent setlists
+    expect_status: 200
+    http: {method: GET, path: /api/dashboard}
+  - name: settings still answer
+    expect_status: 200
+    http: {method: GET, path: /api/settings}

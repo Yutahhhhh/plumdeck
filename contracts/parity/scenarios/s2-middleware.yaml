@@ -1,0 +1,134 @@
+# S2: the layers around every route. CORS is Starlette's CORSMiddleware as
+# main.py configures it: the seven origins ({port} is each side's own
+# PLUMDECK_PORT), credentials on every response to a request with an Origin,
+# the origin echoed with Vary only for listed origins, preflights answered
+# for any path (200 "OK" or 400 "Disallowed CORS ..."), and the 404 of the
+# MCP mount, 400 and 422 answers carrying the same headers. N14: CORS
+# headers are compared on these steps only.
+#
+# D-06 (proposed): B refuses non-loopback Host (421) and Origin (403) before
+# CORS; Python answered them. Loopback origins outside the CORS list pass
+# D-06 and get Starlette's answer on both sides. The refused writes carry an
+# invalid body so A (which accepts them) answers 422 and stores nothing: both
+# libraries stay comparable.
+name: s2-middleware
+db: fixture
+fixture: fresh
+steps:
+  - name: Vite dev server origin (localhost)
+    expect_status: 200
+    compare_headers: &cors [access-control-allow-origin, access-control-allow-credentials, access-control-allow-methods, access-control-allow-headers, access-control-max-age, access-control-expose-headers, vary]
+    http: {method: GET, path: /api/settings, headers: {origin: "http://localhost:1420"}}
+  - name: Vite dev server origin (127.0.0.1)
+    expect_status: 200
+    compare_headers: *cors
+    http: {method: GET, path: /, headers: {origin: "http://127.0.0.1:1420"}}
+  - name: own port origin (localhost)
+    expect_status: 200
+    compare_headers: *cors
+    http: {method: GET, path: /api/dashboard, headers: {origin: "http://localhost:{port}"}}
+  - name: own port origin (127.0.0.1)
+    expect_status: 200
+    compare_headers: *cors
+    http: {method: GET, path: /, headers: {origin: "http://127.0.0.1:{port}"}}
+  - name: macOS WebView origin
+    expect_status: 200
+    compare_headers: *cors
+    http: {method: GET, path: /, headers: {origin: "tauri://localhost"}}
+  - name: Windows WebView origin (http)
+    expect_status: 200
+    compare_headers: *cors
+    http: {method: GET, path: /, headers: {origin: "http://tauri.localhost"}}
+  - name: Windows WebView origin (https)
+    expect_status: 200
+    compare_headers: *cors
+    http: {method: POST, path: /api/settings, headers: {origin: "https://tauri.localhost"}, body: {key: k, value: v}}
+  - name: loopback origin outside the list gets credentials only
+    expect_status: 200
+    compare_headers: *cors
+    http: {method: GET, path: /, headers: {origin: "http://localhost:5555"}}
+  - name: D-06 origin with a path (browsers never send one)
+    deviation: {id: D-06, b_status: 403, b_body: {detail: Invalid Origin header}}
+    http: {method: GET, path: /, headers: {origin: "http://localhost:1420/"}}
+  - name: CORS headers on the mount's 404
+    expect_status: 404
+    compare_headers: *cors
+    http: {method: GET, path: /api/nope, headers: {origin: "http://localhost:1420"}}
+  - name: CORS headers on a 400
+    expect_status: 400
+    compare_headers: *cors
+    http: {method: POST, path: /api/settings, headers: {origin: "tauri://localhost"}, body: {key: llm_model, value: x}}
+  - name: CORS headers on a 422
+    expect_status: 422
+    compare_headers: *cors
+    http: {method: POST, path: /api/settings, headers: {origin: "tauri://localhost"}, body: {key: k}}
+  - name: HEAD with an origin
+    expect_status: 404
+    compare_headers: *cors
+    http: {method: HEAD, path: /, headers: {origin: "tauri://localhost"}}
+  - name: plain OPTIONS with an origin is not a preflight
+    expect_status: 404
+    compare_headers: *cors
+    http: {method: OPTIONS, path: /api/settings, headers: {origin: "tauri://localhost"}}
+
+  - name: preflight from the WebView
+    expect_status: 200
+    compare_headers: *cors
+    http: {method: OPTIONS, path: /api/settings, headers: {origin: "tauri://localhost", access-control-request-method: POST, access-control-request-headers: content-type}}
+  - name: preflight mirrors requested headers
+    expect_status: 200
+    compare_headers: *cors
+    http: {method: OPTIONS, path: /api/tracks/1/info, headers: {origin: "http://localhost:1420", access-control-request-method: PATCH, access-control-request-headers: "X-Custom, Content-Type"}}
+  - name: preflight on an unknown path
+    expect_status: 200
+    compare_headers: *cors
+    http: {method: OPTIONS, path: /api/does-not-exist, headers: {origin: "http://127.0.0.1:{port}", access-control-request-method: DELETE}}
+  - name: preflight with a lowercase method
+    expect_status: 400
+    compare_headers: *cors
+    http: {method: OPTIONS, path: /api/settings, headers: {origin: "tauri://localhost", access-control-request-method: post}}
+  - name: preflight with an unknown method
+    expect_status: 400
+    compare_headers: *cors
+    http: {method: OPTIONS, path: /api/settings, headers: {origin: "tauri://localhost", access-control-request-method: PROPFIND}}
+  - name: preflight from a loopback origin outside the list
+    expect_status: 400
+    compare_headers: *cors
+    http: {method: OPTIONS, path: /, headers: {origin: "http://localhost:5555", access-control-request-method: GET}}
+  - name: preflight asking for private network access
+    expect_status: 400
+    compare_headers: *cors
+    http: {method: OPTIONS, path: /, headers: {origin: "tauri://localhost", access-control-request-method: GET, access-control-request-private-network: "true"}}
+  - name: everything wrong at once
+    expect_status: 400
+    compare_headers: *cors
+    http: {method: OPTIONS, path: /, headers: {origin: "http://[::1]:9", access-control-request-method: get, access-control-request-private-network: "true"}}
+
+  - name: localhost Host header
+    expect_status: 200
+    http: {method: GET, path: /, headers: {host: "localhost:{port}"}}
+  - name: IPv6 loopback Host header
+    expect_status: 200
+    http: {method: GET, path: /, headers: {host: "[::1]:{port}"}}
+  - name: Host without a port
+    expect_status: 200
+    http: {method: GET, path: /, headers: {host: "127.0.0.1"}}
+
+  - name: D-06 foreign Host
+    deviation: {id: D-06, b_status: 421, b_body: {detail: Invalid Host header}}
+    http: {method: GET, path: /api/settings, headers: {host: "evil.example:{port}"}}
+  - name: D-06 rebinding-style Host
+    deviation: {id: D-06, b_status: 421, b_body: {detail: Invalid Host header}}
+    http: {method: POST, path: /api/settings, headers: {host: "127.0.0.1.nip.io:{port}"}, body: {key: rebinding}}
+  - name: D-06 foreign Origin on a write
+    deviation: {id: D-06, b_status: 403, b_body: {detail: Invalid Origin header}}
+    http: {method: POST, path: /api/settings, headers: {origin: "http://evil.example"}, body: {key: csrf}}
+  - name: D-06 null Origin
+    deviation: {id: D-06, b_status: 403, b_body: {detail: Invalid Origin header}}
+    http: {method: GET, path: /api/dashboard, headers: {origin: "null"}}
+  - name: D-06 foreign preflight
+    deviation: {id: D-06, b_status: 403, b_body: {detail: Invalid Origin header}}
+    http: {method: OPTIONS, path: /api/settings, headers: {origin: "https://evil.example", access-control-request-method: POST}}
+  - name: the refused writes stored nothing
+    expect_status: 200
+    http: {method: GET, path: /api/settings}

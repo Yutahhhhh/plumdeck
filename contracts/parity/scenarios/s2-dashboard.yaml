@@ -1,0 +1,39 @@
+# S2: GET /api/dashboard (backend/api/routers/system.py) on the catalog
+# fixture: excluded genres ('Unknown', '', NULL) next to case variants that
+# count ('house', 'unknown'), counts tied at 2 (House/Techno; the GROUP BY has
+# no tie-breaker, N6), bpm 0/NULL/negative/0.001, NULL is_genre_verified,
+# lyrics with NULL/'' content, and setlists with tiny (1e-07) and
+# f32-inexact durations, NULL display_order, microseconds, a tie on
+# updated_at inside the top five and NULL timestamps.
+name: s2-dashboard
+db: fixture
+fixture: catalog
+compare_overrides:
+  ties:
+    - {path: "$.genre_distribution", by: count}
+    - {path: "$.recent_setlists", by: updated_at}
+steps:
+  - name: catalog statistics
+    expect_status: 200
+    http: {method: GET, path: /api/dashboard}
+  - name: query parameters are ignored
+    expect_status: 200
+    http: {method: GET, path: /api/dashboard, query: {limit: 1}}
+  - name: an empty root_path is not configured
+    expect_status: 200
+    http: {method: POST, path: /api/settings, body: {key: root_path, value: ""}}
+  - name: statistics without a root path
+    expect_status: 200
+    http: {method: GET, path: /api/dashboard}
+  - name: a whitespace root_path counts as configured
+    expect_status: 200
+    http: {method: POST, path: /api/settings, body: {key: root_path, value: " "}}
+  - name: statistics with a whitespace root path
+    expect_status: 200
+    http: {method: GET, path: /api/dashboard}
+  - name: POST is left to the mount
+    expect_status: 404
+    http: {method: POST, path: /api/dashboard}
+  - name: HEAD is left to the mount
+    expect_status: 404
+    http: {method: HEAD, path: /api/dashboard}

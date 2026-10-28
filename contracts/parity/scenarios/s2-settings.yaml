@@ -1,0 +1,136 @@
+# S2: GET/POST /api/settings (backend/api/routers/settings.py). Starts from
+# the populated fixture, whose retired LLM keys startup has already deleted.
+# Covers inserts, updates, retired-key refusals (400), FastAPI's body
+# handling (JSON only for application/json and application/*+json; 422
+# validation shapes; 400 for an undecodable body) and the methods FastAPI
+# leaves to the MCP mount (404). The suite db-diffs both libraries after.
+name: s2-settings
+db: fixture
+fixture: populated
+steps:
+  - name: list (retired keys already gone)
+    expect_status: 200
+    http: {method: GET, path: /api/settings}
+  - name: insert a new key
+    expect_status: 200
+    http: {method: POST, path: /api/settings, body: {key: plumdeck.deckCount, value: "4"}}
+  - name: update an existing key
+    expect_status: 200
+    http: {method: POST, path: /api/settings, body: {key: root_path, value: /Volumes/日本語 ß/Music}}
+  - name: same value again
+    expect_status: 200
+    http: {method: POST, path: /api/settings, body: {key: root_path, value: /Volumes/日本語 ß/Music}}
+  - name: empty key and value
+    expect_status: 200
+    http: {method: POST, path: /api/settings, body: {key: "", value: ""}}
+  - name: case and whitespace make a different key
+    expect_status: 200
+    http: {method: POST, path: /api/settings, body: {key: " Root_Path ", value: x}}
+  - name: extra fields are ignored
+    expect_status: 200
+    http: {method: POST, path: /api/settings, body: {key: ui.theme, value: light, extra: [1, 2], nested: {a: null}}}
+  - name: emoji, NFD and control characters survive
+    expect_status: 200
+    http: {method: POST, path: /api/settings, body: {key: "🎵 café", value: "line1\nline2\ttab \"quoted\""}}
+  - name: long value
+    expect_status: 200
+    http: {method: POST, path: /api/settings, body: {key: long, value: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}}
+  - name: +json content type with parameters
+    expect_status: 200
+    http: {method: POST, path: /api/settings, headers: {content-type: "Application/Vnd.Plumdeck+JSON; charset=utf-8"}, raw: '{"key": "vnd", "value": "ok"}'}
+  - name: UTF-8 BOM before the JSON
+    expect_status: 200
+    http: {method: POST, path: /api/settings, headers: {content-type: application/json}, raw_hex: "efbbbf7b226b6579223a22626f6d222c2276616c7565223a2231227d"}
+  - name: UTF-16 body is detected
+    expect_status: 200
+    http: {method: POST, path: /api/settings, headers: {content-type: application/json}, raw_hex: "7b0022006b006500790022003a002000220075003100360022002c0020002200760061006c007500650022003a0020002200760022007d00"}
+  - name: NaN in an ignored field is accepted
+    expect_status: 200
+    http: {method: POST, path: /api/settings, headers: {content-type: application/json}, raw: '{"key": "nan-extra", "value": "v", "x": NaN}'}
+  - name: duplicate key in the object (last wins)
+    expect_status: 200
+    http: {method: POST, path: /api/settings, headers: {content-type: application/json}, raw: '{"key": "dup", "value": "first", "value": "second"}'}
+
+  - name: retired key
+    expect_status: 400
+    http: {method: POST, path: /api/settings, body: {key: llm_provider, value: openai}}
+  - name: retired key, any case and whitespace
+    expect_status: 400
+    http: {method: POST, path: /api/settings, body: {key: " OpenAI_API_Key\n", value: sk-test}}
+  - name: retired llm_ prefix
+    expect_status: 400
+    http: {method: POST, path: /api/settings, body: {key: LLM_anything, value: x}}
+  - name: retired provider model key
+    expect_status: 400
+    http: {method: POST, path: /api/settings, body: {key: ollama_api_key, value: x}}
+
+  - name: missing value
+    expect_status: 422
+    http: {method: POST, path: /api/settings, body: {key: a}}
+  - name: empty object
+    expect_status: 422
+    http: {method: POST, path: /api/settings, body: {}}
+  - name: wrong types
+    expect_status: 422
+    http: {method: POST, path: /api/settings, body: {key: 1, value: true}}
+  - name: null value
+    expect_status: 422
+    http: {method: POST, path: /api/settings, body: {key: a, value: null}}
+  - name: float value
+    expect_status: 422
+    http: {method: POST, path: /api/settings, body: {key: a, value: 1.5}}
+  - name: array body
+    expect_status: 422
+    http: {method: POST, path: /api/settings, body: [{key: a, value: b}]}
+  - name: string body
+    expect_status: 422
+    http: {method: POST, path: /api/settings, body: "key=value"}
+  - name: JSON null body
+    expect_status: 422
+    http: {method: POST, path: /api/settings, body: null}
+  - name: no body
+    expect_status: 422
+    http: {method: POST, path: /api/settings}
+  - name: whitespace-only JSON body
+    expect_status: 422
+    http: {method: POST, path: /api/settings, headers: {content-type: application/json}, raw: "  "}
+  - name: invalid JSON
+    expect_status: 422
+    http: {method: POST, path: /api/settings, headers: {content-type: application/json}, raw: "{bad"}
+  - name: trailing comma
+    expect_status: 422
+    http: {method: POST, path: /api/settings, headers: {content-type: application/json}, raw: '{"key": "a", "value": "b",}'}
+  - name: extra data after the object
+    expect_status: 422
+    http: {method: POST, path: /api/settings, headers: {content-type: application/json}, raw: '{"key": "a", "value": "b"} x'}
+  - name: JSON without a content type is not parsed
+    expect_status: 422
+    http: {method: POST, path: /api/settings, raw: '{"key": "a", "value": "b"}'}
+  - name: text/plain is not parsed
+    expect_status: 422
+    http: {method: POST, path: /api/settings, headers: {content-type: text/plain}, raw: '{"key": "a", "value": "b"}'}
+  - name: form body is not parsed
+    expect_status: 422
+    http: {method: POST, path: /api/settings, headers: {content-type: application/x-www-form-urlencoded}, raw: key=a&value=b}
+  - name: invalid UTF-8
+    expect_status: 400
+    http: {method: POST, path: /api/settings, headers: {content-type: application/json}, raw_hex: "7b226b6579223a22ff222c2276616c7565223a2276227d"}
+
+  - name: PUT is left to the mount
+    expect_status: 404
+    http: {method: PUT, path: /api/settings, body: {key: a, value: b}}
+  - name: DELETE is left to the mount
+    expect_status: 404
+    http: {method: DELETE, path: /api/settings}
+  - name: HEAD is left to the mount
+    expect_status: 404
+    http: {method: HEAD, path: /api/settings}
+  - name: trailing slash
+    expect_status: 404
+    http: {method: POST, path: /api/settings/, body: {key: a, value: b}}
+  - name: query parameters are ignored
+    expect_status: 200
+    http: {method: GET, path: /api/settings, query: {key: root_path}}
+  - name: final list
+    expect_status: 200
+    http: {method: GET, path: /api/settings}

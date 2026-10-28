@@ -1,0 +1,14 @@
+# S2: a NaN target_duration among the five most recent setlists: Python's
+# json.dumps(allow_nan=False) raises (500 "Internal Server Error"); Rust
+# renders with the same rule. N12 skips A's 500; expect_status pins both.
+name: s2-dashboard-nan-recent
+db: fixture
+fixture: catalog
+fixture_sql: UPDATE setlists SET target_duration = 'nan' WHERE name = 'Newest'
+steps:
+  - name: NaN in a recent setlist
+    expect_status: 500
+    http: {method: GET, path: /api/dashboard}
+  - name: the failure does not stick
+    expect_status: 200
+    http: {method: GET, path: /api/settings}

@@ -1,0 +1,18 @@
+# S2: GET /api/dashboard and GET /api/settings on a library created at
+# startup (fresh install): zero counts, empty lists, no root path.
+name: s2-dashboard-empty
+db: fixture
+fixture: fresh
+steps:
+  - name: empty library statistics
+    expect_status: 200
+    http: {method: GET, path: /api/dashboard}
+  - name: no settings yet
+    expect_status: 200
+    http: {method: GET, path: /api/settings}
+  - name: first setting on a fresh library
+    expect_status: 200
+    http: {method: POST, path: /api/settings, body: {key: root_path, value: /music}}
+  - name: statistics with a root path and no tracks
+    expect_status: 200
+    http: {method: GET, path: /api/dashboard}
