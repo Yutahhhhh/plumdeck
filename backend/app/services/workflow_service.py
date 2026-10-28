@@ -499,11 +499,19 @@ class PresetService:
         return {**definition, "revision": int(saved[0])}
 
 
+# A per-beat grid becomes tempo segments: a segment continues while each beat
+# stays this close to its fitted period, so ms rounding jitter gives one marker.
+TEMPO_SEGMENT_TOLERANCE_MS = 10.0
+# Segments of a real track stay within this tempo ratio; a grid that does not
+# (an irregular manual grid) is handed over as one constant marker instead.
+TEMPO_SEGMENT_MAX_RATIO = 1.5
+
+
 def _tempo_markers(grid: Any) -> list[tuple[float, float, int, int]]:
     """Rekordbox TEMPO markers (start ms, BPM, beat in bar, beats per bar) for a saved BeatGrid.
 
     A constant grid is one marker at its first non-negative beat. A per-beat
-    grid gets one marker per beat with the local tempo to the next beat.
+    grid gets one marker per tempo segment (see TEMPO_SEGMENT_TOLERANCE_MS).
     """
     if not isinstance(grid, dict):
         return []
@@ -516,19 +524,36 @@ def _tempo_markers(grid: Any) -> list[tuple[float, float, int, int]]:
         return []
     times = grid.get("beat_times_ms") or []
     numbers = grid.get("beat_numbers") or []
-    if len(times) < 2:
-        number = int(numbers[0]) if numbers else 1
+
+    def number_at(index):
+        return int(numbers[index]) if index < len(numbers) else index % bar + 1
+
+    def constant():
         period = 60_000 / bpm
         skipped = max(0, math.ceil(-first / period))
-        return [(first + skipped * period, bpm, (number - 1 + skipped) % bar + 1, bar)]
-    markers = []
-    for index, time_ms in enumerate(times[:100_000]):
-        if time_ms < 0:
-            continue
-        following = times[index + 1] if index + 1 < len(times) else None
-        interval = following - time_ms if following is not None else time_ms - times[index - 1]
-        number = int(numbers[index]) if index < len(numbers) else index % bar + 1
-        markers.append((float(time_ms), 60_000 / interval if interval > 0 else bpm, number, bar))
+        return [(first + skipped * period, bpm, (number_at(0) - 1 + skipped) % bar + 1, bar)]
+
+    times = [float(value) for value in times[:100_000]]
+    start = next((index for index, value in enumerate(times) if value >= 0), None)
+    if len(times) < 2 or start is None or start == len(times) - 1:
+        return constant()
+    if any(not math.isfinite(b - a) or b <= a for a, b in zip(times, times[1:])):
+        return constant()
+    markers, end = [], start + 1
+    while end < len(times):
+        # Grow the segment while the next beat stays on the fitted period.
+        while end + 1 < len(times):
+            period = (times[end] - times[start]) / (end - start)
+            predicted = times[start] + (end + 1 - start) * period
+            if abs(times[end + 1] - predicted) > TEMPO_SEGMENT_TOLERANCE_MS:
+                break
+            end += 1
+        period = (times[end] - times[start]) / (end - start)
+        markers.append((times[start], 60_000 / period, number_at(start), bar))
+        start, end = end, end + 1
+    tempos = [marker[1] for marker in markers]
+    if max(tempos) / min(tempos) > TEMPO_SEGMENT_MAX_RATIO:
+        return constant()
     return markers
 
 
