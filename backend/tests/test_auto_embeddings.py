@@ -212,7 +212,7 @@ def test_enqueue_at_previous_worker_exit_is_not_stranded(session, tmp_path, monk
         service.shutdown()
 
 
-def test_new_foreground_analysis_invalidates_old_embedding_but_metadata_does_not(session, tmp_path):
+def test_reanalysis_keeps_the_embedding_unless_the_audio_changed(session, tmp_path):
     from infra.repositories.ingestion_repository import IngestionRepository
     ids = add_tracks(session, 1)
     old = TrackEmbedding(track_id=ids[0], embedding_json=json.dumps([.1] * 200), model_name=EMBEDDING_MODEL)
@@ -221,9 +221,14 @@ def test_new_foreground_analysis_invalidates_old_embedding_but_metadata_does_not
     repository = IngestionRepository()
     repository.save_track_result(session, {"filepath": "/auto/0.mp3", "title": "Renamed"})
     assert session.get(TrackEmbedding, ids[0]) is not None
-    repository.save_track_result(session, {"filepath": "/auto/0.mp3", "title": "Renamed", "bpm": 129,
-        "duration": 180, "energy": .8, "danceability": .7, "brightness": .6, "noisiness": .3,
-        "features_extra": {"analysis_components": {"timbre": "timbre-v1"}}})
+    analysed = {"filepath": "/auto/0.mp3", "title": "Renamed", "bpm": 129,
+                "duration": 180.4, "energy": .8, "danceability": .7, "brightness": .6, "noisiness": .3,
+                "features_extra": {"analysis_components": {"timbre": "timbre-v1"}}}
+    # Same audio (tags or lyrics rewritten, or an incomplete row repaired).
+    repository.save_track_result(session, analysed)
+    assert session.get(TrackEmbedding, ids[0]) is not None
+    # The file now holds different audio: the old vector must not be compared.
+    repository.save_track_result(session, {**analysed, "duration": 241.0})
     assert session.get(TrackEmbedding, ids[0]) is None
     session.rollback()
     service = AnalysisJobService(session.bind, str(tmp_path / "jobs.sqlite3"), lambda *args: result())

@@ -178,3 +178,44 @@ def test_csv_path_update_merges_instead_of_replacing_features_extra(session):
     analysis = session.get(TrackAnalysis, track.id)
     assert analysis.features_extra == extra_before
     assert analysis.beats_f32 == beats_before
+
+
+def _skipped_rhythm(filepath, **values):
+    """A registered track's import: rhythm skipped, BPM from rekordbox."""
+    result = analysis_result(filepath, **values)
+    del result["embedding"], result["embedding_model"]
+    extra = result["features_extra"]
+    for key in ("playback_grid", "playback_grid_version", "beat_positions"):
+        del extra[key]
+    extra["analysis_components"] = {"timbre": "timbre-v1", "sources": {"bpm": "rekordbox"}}
+    return result
+
+
+def test_skipped_rhythm_keeps_own_grid_and_embedding_for_the_same_audio(session, mocker):
+    from domain.services.value_sources import RekordboxValues
+    mocker.patch("domain.services.value_sources.lookup", return_value=RekordboxValues(True, 128.0))
+    track = add_synced_track(session)
+    IngestionRepository()._prepare_track_models(session, _skipped_rhythm(track.filepath, duration=180.3))
+    session.commit()
+    session.expire_all()
+    analysis = session.get(TrackAnalysis, track.id)
+    extra = analysis.features_extra
+    assert extra["playback_grid"] == GRID and extra["playback_grid_version"] == 2
+    assert extra["analysis_components"]["rhythm"] == "rhythm-attacks-v4"
+    assert analysis.beat_positions == pytest.approx([0.25, 0.72, 1.19])
+    assert session.get(TrackEmbedding, track.id) is not None
+
+
+def test_skipped_rhythm_on_replaced_audio_clears_the_old_beats(session, mocker):
+    from domain.services.value_sources import RekordboxValues
+    mocker.patch("domain.services.value_sources.lookup", return_value=RekordboxValues(True, 128.0))
+    track = add_synced_track(session)
+    IngestionRepository()._prepare_track_models(session, _skipped_rhythm(track.filepath, duration=241.0))
+    session.commit()
+    session.expire_all()
+    analysis = session.get(TrackAnalysis, track.id)
+    assert not analysis.beats_f32
+    assert "playback_grid" not in analysis.features_extra
+    assert "rhythm" not in analysis.features_extra["analysis_components"]
+    assert session.get(TrackEmbedding, track.id) is None
+    assert session.get(Track, track.id).bpm == 128.0

@@ -2,6 +2,8 @@
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from sqlmodel import select
 
 from domain.models.track import Track, TrackAnalysis, TrackEmbedding
@@ -47,6 +49,9 @@ def test_default_timbre_missing_waveform_and_bad_values_are_incomplete():
                     defaults, dict.fromkeys(TIMBRE, 0.0)):
         assert not has_completed_analysis(SimpleNamespace(**{**ready(), **changes}), None, stored())
         assert not has_completed_analysis_result(result(**changes))
+    # A fresh result that measured timbre may legitimately be near zero.
+    measured = {"waveform_peaks": [.2, .8], "analysis_components": {"timbre": "bounded-summary-v2"}}
+    assert has_completed_analysis_result(result(**defaults, features_extra=measured))
     # One descriptor can measure 0.00 (brightness does on real tracks).
     assert has_completed_analysis(SimpleNamespace(**ready(brightness=0.0)), None, stored())
     assert not has_completed_analysis(SimpleNamespace(**ready()), None, stored(waveform=False))
@@ -65,7 +70,14 @@ def test_sql_and_python_readiness_agree_and_every_screen_uses_it(session, client
         ({"duration": 0}, {}, False),
         (defaults, {}, False),
         ({}, {"waveform": False}, False),
-        ({"analysis_level": "light"}, {}, False),  # old excerpt-only light row
+        ({"analysis_level": "light"}, {}, False),  # no rhythm version recorded
+        ({"analysis_level": "light"}, {"components": {"rhythm": "numpy-autocorrelation-light-v2",
+                                                      "timbre": "bounded-summary-v2"}}, False),  # excerpt-only
+        # A Windows timbre or rhythm job rewrote the light components.
+        ({"analysis_level": "light"}, {"components": {"rhythm": "librosa-attacks-v2",
+                                                      "timbre": "librosa-timbre-v1"}}, True),
+        # Near-silent audio measured at 0.00: a recorded timbre version counts.
+        (defaults, {"components": {"timbre": "timbre-v1"}}, True),
         ({"analysis_level": "light"}, {"components": LIGHT_COMPONENTS}, True),
         ({"analysis_level": "light"}, {"components": LIGHT_COMPONENTS, "beats": False}, False),
         ({"analysis_level": "light"}, {"raw": "{not json"}, False),
@@ -100,3 +112,32 @@ def test_sql_and_python_readiness_agree_and_every_screen_uses_it(session, client
     # Dashboard.
     stats = client.get("/api/dashboard").json()
     assert (stats["analyzed_tracks"], stats["unanalyzed_tracks"]) == (len(expected), len(cases) - len(expected))
+
+
+def test_light_import_keeps_a_full_row_and_repairs_only_default_timbre(session):
+    from infra.repositories.ingestion_repository import IngestionRepository
+    defaults = dict.fromkeys(("danceability", "brightness", "noisiness"), 0.0)
+    track = Track(filepath="/ready/full.mp3", title="Full", artist="Artist", genre="House",
+                  **{**ready(analysis_level=None), **defaults})
+    session.add(track)
+    session.flush()
+    analysis = stored({"rhythm": "rhythm-attacks-v4"})
+    analysis.track_id = track.id
+    session.add(analysis)
+    session.add(TrackEmbedding(track_id=track.id, embedding_json=json.dumps([.1] * 200)))
+    session.commit()
+    beats, waveform = analysis.beats_f32, analysis.waveform_u8
+
+    light = {**ready(analysis_level="light", bpm=127.0, energy=.5, danceability=.4, brightness=.3,
+                     noisiness=.1), "filepath": track.filepath, "features_extra": {
+        "analysis_components": {"rhythm": "numpy-attacks-v2", "timbre": "bounded-summary-v2"},
+        "beat_positions": [.1, .6], "waveform_peaks": [.9, .9]}}
+    IngestionRepository()._prepare_track_models(session, light)
+    session.commit()
+    session.expire_all()
+    track, analysis = session.get(Track, track.id), session.get(TrackAnalysis, track.id)
+    assert (track.analysis_level, track.bpm) == (None, 128.0)
+    assert (analysis.beats_f32, analysis.waveform_u8) == (beats, waveform)
+    assert session.get(TrackEmbedding, track.id) is not None
+    assert (track.danceability, track.brightness, track.noisiness) == pytest.approx((.4, .3, .1))
+    assert has_completed_analysis(track, None, analysis)

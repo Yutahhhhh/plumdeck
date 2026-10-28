@@ -54,28 +54,45 @@ def _is_unit(value: Any) -> bool:
             and math.isfinite(value) and 0 <= value <= 1)
 
 
-def _has_timbre(track: Any) -> bool:
-    """All four descriptors are measured, not left at the column default 0.0.
+def _components(extra: Any) -> dict:
+    components = extra.get("analysis_components") if isinstance(extra, dict) else None
+    return components if isinstance(components, dict) else {}
 
-    One descriptor can round to 0.00 in real audio (brightness does), so a
-    track counts as unmeasured only when three or more are exactly 0.0.
+
+def has_measured_timbre(track: Any, extra: Any = None) -> bool:
+    """All four descriptors are in [0, 1] and measured, not the column default.
+
+    A row without a recorded timbre version counts as unmeasured when three
+    or more descriptors are exactly 0.0 (one can round to 0.00 in real audio).
+    A recorded timbre version means the zeros were measured (near-silent or
+    sub-bass audio), so they count. ``extra`` is the row's or result's
+    features_extra.
     """
     values = [track.get(field) if isinstance(track, dict) else getattr(track, field, None)
               for field in TIMBRE_FIELDS]
-    return all(_is_unit(value) for value in values) and sum(value == 0 for value in values) < 3
+    return (all(_is_unit(value) for value in values)
+            and (sum(value == 0 for value in values) < 3 or bool(_components(extra).get("timbre"))))
 
 
 def _has_waveform(analysis: Any) -> bool:
     return bool(getattr(analysis, "waveform_u8", None))
 
 
+# Light rows from the excerpt-only profile (no whole-track grid) are upgraded
+# on re-import. Any other recorded rhythm version with stored beats is current,
+# also after a Windows job rewrote the components with full-profile versions.
+EXCERPT_LIGHT_RHYTHM = ("librosa-rhythm-light-v1", "numpy-autocorrelation-light-v2")
+
+
 def _current_light_analysis(analysis: Any) -> bool:
-    extra = getattr(analysis, "features_extra", {})
-    components = extra.get("analysis_components", {}) if isinstance(extra, dict) else {}
-    return bool(isinstance(components, dict)
-                and components.get("rhythm") == "numpy-attacks-v2"
-                and components.get("timbre") == "bounded-summary-v2"
-                and getattr(analysis, "beats_f32", None))
+    rhythm = _components(getattr(analysis, "features_extra", {})).get("rhythm")
+    return bool(rhythm and rhythm not in EXCERPT_LIGHT_RHYTHM and getattr(analysis, "beats_f32", None))
+
+
+def is_protected_full_row(track: Any) -> bool:
+    """A detailed (non-light) row with core BPM/duration: a light import must
+    not overwrite its beats, waveform or embedding, only repair its timbre."""
+    return bool(_has_audio_analysis_core(track) and getattr(track, "analysis_level", None) != "light")
 
 
 def has_full_analysis(track: Any, embedding: Any = None, analysis: Any = None) -> bool:
@@ -92,7 +109,9 @@ def has_completed_analysis(track: Any, embedding: Any = None, analysis: Any = No
     excerpt-only light rows are upgraded on re-import. ``embedding`` is kept
     for callers: similarity vectors are optional and filled in the background.
     """
-    return bool(_has_audio_analysis_core(track) and _has_timbre(track) and _has_waveform(analysis)
+    return bool(_has_audio_analysis_core(track)
+                and has_measured_timbre(track, getattr(analysis, "features_extra", None))
+                and _has_waveform(analysis)
                 and (getattr(track, "analysis_level", None) != "light"
                      or _current_light_analysis(analysis)))
 
@@ -100,26 +119,27 @@ def has_completed_analysis(track: Any, embedding: Any = None, analysis: Any = No
 def completed_analysis_condition():
     """SQL form of has_completed_analysis for Track queries.
 
-    Only light rows read features_extra_json; the CASE keeps that JSON work
-    off the detailed rows that make up most libraries.
+    Only light rows and rows with default-looking timbre read
+    features_extra_json; the CASEs keep that JSON work off most rows.
     """
     from sqlalchemy import and_, case, func, select as sql_select
     values = [getattr(Track, field) for field in TIMBRE_FIELDS]
     raw = case((func.json_valid(TrackAnalysis.features_extra_json), TrackAnalysis.features_extra_json))
     current_light = and_(
-        func.json_extract_string(raw, "$.analysis_components.rhythm") == "numpy-attacks-v2",
-        func.json_extract_string(raw, "$.analysis_components.timbre") == "bounded-summary-v2",
+        func.json_extract_string(raw, "$.analysis_components.rhythm").notin_(EXCERPT_LIGHT_RHYTHM),
         func.octet_length(TrackAnalysis.beats_f32) > 0,
     )
+    zeros = sum(case((value == 0, 1), else_=0) for value in values)
+    measured = func.json_extract_string(raw, "$.analysis_components.timbre").isnot(None)
     stored = sql_select(TrackAnalysis.track_id).where(
         TrackAnalysis.track_id == Track.id,
         func.octet_length(TrackAnalysis.waveform_u8) > 0,
         case((Track.analysis_level == "light", func.coalesce(current_light, False)), else_=True),
+        case((zeros < 3, True), else_=func.coalesce(measured, False)),
     ).exists()
-    zeros = sum(case((value == 0, 1), else_=0) for value in values)
     valid = [Track.bpm > 0, func.isfinite(Track.bpm), Track.duration > 0, func.isfinite(Track.duration),
              *(and_(value >= 0, value <= 1, func.isfinite(value)) for value in values),
-             zeros < 3, stored]
+             stored]
     return func.coalesce(and_(*valid), False)
 
 
@@ -144,7 +164,7 @@ def has_completed_analysis_result(result: Dict[str, Any], existing_embedding: An
     return bool(
         isinstance(bpm, (int, float)) and not isinstance(bpm, bool) and math.isfinite(bpm) and bpm > 0
         and isinstance(duration, (int, float)) and not isinstance(duration, bool) and math.isfinite(duration) and duration > 0
-        and _has_timbre(result) and _has_result_waveform(result)
+        and has_measured_timbre(result, result.get("features_extra")) and _has_result_waveform(result)
         and (result.get("analysis_level") != "light" or _has_light_playback_data(result))
     )
 

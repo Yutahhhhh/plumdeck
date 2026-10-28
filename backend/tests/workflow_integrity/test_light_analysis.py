@@ -134,10 +134,15 @@ def test_light_completion_requires_timbre_and_playback_but_embedding_is_optional
     assert "embedding" not in result and has_completed_analysis_result(result)
     for optional_embedding in [None, [], [0] * 200]:
         assert has_completed_analysis_result(dict(result, embedding=optional_embedding))
+    unmeasured = dict(result, features_extra={**result["features_extra"], "analysis_components": {
+        key: value for key, value in result["features_extra"]["analysis_components"].items() if key != "timbre"}})
     for incomplete in [dict(result, features_extra={}), dict(result, bpm=float("nan")),
-                       dict(result, energy=None), dict(result, energy=0, danceability=0, brightness=0, noisiness=0),
-                       dict(result, danceability=0, brightness=0, noisiness=0)]:
+                       dict(result, energy=None), dict(result, energy=1.2),
+                       dict(unmeasured, energy=0, danceability=0, brightness=0, noisiness=0),
+                       dict(unmeasured, danceability=0, brightness=0, noisiness=0)]:
         assert not has_completed_analysis_result(incomplete)
+    # Measured near-silent or sub-bass audio may sit at 0.00 and still imports.
+    assert has_completed_analysis_result(dict(result, danceability=0, brightness=0, noisiness=0))
     track = SimpleNamespace(title="Title", artist="DJ", duration=60, bpm=126, analysis_level="light",
                             energy=.6, danceability=.7, brightness=.3, noisiness=.2)
     analysis = stored_light_analysis()

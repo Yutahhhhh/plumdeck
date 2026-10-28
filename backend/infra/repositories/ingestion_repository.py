@@ -8,8 +8,12 @@ from domain.models.lyrics import Lyrics
 from utils.array_codec import pack_f32, pack_u8_waveform
 from domain.services import value_sources
 from utils.features_extra import persisted_features_extra
-from utils.ingestion import has_full_analysis
+from utils.ingestion import TIMBRE_FIELDS, has_measured_timbre, is_protected_full_row
 import infra.database.connection as db_connection
+
+# A re-analysed duration further than this from the stored one means the file
+# now holds different audio.
+AUDIO_CHANGE_SECONDS = 1.0
 
 class IngestionRepository:
     def __init__(self):
@@ -27,9 +31,11 @@ class IngestionRepository:
             existing_analysis = session.get(TrackAnalysis, existing_track.id) if existing_track else None
             existing_fx = existing_analysis.features_extra if existing_analysis else {}
             preserve_full_analysis = bool(
-                result.get("analysis_level") == "light"
-                and has_full_analysis(existing_track, analysis=existing_analysis)
-            )
+                result.get("analysis_level") == "light" and is_protected_full_row(existing_track))
+            # A protected row only takes the light timbre when its own is missing.
+            repair_timbre = bool(preserve_full_analysis
+                                 and not has_measured_timbre(existing_track, existing_fx))
+            audio_changed = self._audio_changed(existing_track, result)
             # Only analysis results resolve BPM/key; tag and lyrics updates keep them.
             if isinstance(extras, dict) and "analysis_components" in extras and not preserve_full_analysis:
                 result, sources, own_bpm = self._settle_values(session, result, existing_track, existing_fx)
@@ -63,7 +69,7 @@ class IngestionRepository:
                             "danceability", "brightness", "contrast", "noisiness",
                             "loudness", "loudness_range", "spectral_flux",
                             "spectral_rolloff",
-                        }:
+                        } and not (repair_timbre and k in TIMBRE_FIELDS):
                             continue
                         if isinstance(v, str) and v and v.lower() != "unknown":
                             setattr(existing_track, k, v)
@@ -108,6 +114,8 @@ class IngestionRepository:
                 recorded = {**value_sources.stored_sources(existing_fx), **sources}
                 if recorded:
                     fx = value_sources.with_sources(fx, recorded)
+                if existing_track and not audio_changed:
+                    fx = self._keep_same_audio_components(fx, existing_fx, extras)
                 if own_bpm is not None:
                     fx["analysis_bpm"] = own_bpm
                 elif recorded.get("bpm") not in (None, value_sources.OWN) and "analysis_bpm" in existing_fx:
@@ -126,9 +134,15 @@ class IngestionRepository:
                 if new_beats != analysis.beats_f32:
                     analysis.beats_f32 = new_beats
                     analysis_changed = True
+            if existing_track and audio_changed and not extras.get("beat_positions") and analysis.beats_f32:
+                # The old beats belong to the previous audio; the deck grid is
+                # recomputed on demand instead of pairing them with a new BPM.
+                analysis.beats_f32 = None
+                analysis_changed = True
             if analysis_changed:
                 session.add(analysis)
-                if extras.get("beat_positions") and not (existing_track and preserve_full_analysis):
+                if (existing_track and audio_changed) or (
+                        extras.get("beat_positions") and not (existing_track and preserve_full_analysis)):
                     # A cached automatic grid must not mask freshly analyzed
                     # beats. Saved user cues/loops/grids live in a separate row.
                     session.exec(text("DELETE FROM track_grid_candidates WHERE track_id=:id AND source='analysis'"),
@@ -136,10 +150,10 @@ class IngestionRepository:
                     from infra.repositories.analysis_grid_refresh import refresh_saved_analysis_grid
                     refresh_saved_analysis_grid(session, track_id, extras.get("playback_grid"))
 
-            # A fresh foreground analysis belongs to a new analysis generation.
-            # Do not compare a replaced/reanalysed file with its previous vector.
-            # Metadata-only saves and protected full results keep their embedding.
-            if (existing_track and not preserve_full_analysis and "embedding" not in result
+            # A vector of replaced audio must not be compared with the new file.
+            # Re-analysing the same audio keeps it (embeddings are optional and
+            # filled in the background, so a deleted one may stay missing).
+            if (existing_track and audio_changed and not preserve_full_analysis and "embedding" not in result
                     and isinstance(extras, dict) and "analysis_components" in extras):
                 previous_embedding = session.get(TrackEmbedding, track_id)
                 if previous_embedding is not None:
@@ -166,6 +180,41 @@ class IngestionRepository:
                     ly.updated_at = datetime.now()
                     session.add(ly)
             return int(track_id)
+
+    @staticmethod
+    def _audio_changed(existing_track, result: Dict[str, Any]) -> bool:
+        """Whether an analysis result describes different audio than the row.
+
+        Duration is the cheap, tag-independent signal (size and mtime change
+        when tags or lyrics are written). Unknown durations count as unchanged.
+        """
+        if existing_track is None or "analysis_components" not in (result.get("features_extra") or {}):
+            return False
+        before, after = getattr(existing_track, "duration", None), result.get("duration")
+        valid = all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                    and math.isfinite(value) and value > 0 for value in (before, after))
+        return bool(valid and abs(before - after) > AUDIO_CHANGE_SECONDS)
+
+    @staticmethod
+    def _keep_same_audio_components(fx: Dict[str, Any], existing_fx: Dict[str, Any], extras) -> Dict[str, Any]:
+        """Carry over what this result did not recompute for the same audio:
+        the kept embedding's version and, when rhythm was skipped (rekordbox
+        has the BPM), the stored own grid with its rhythm version."""
+        stored = existing_fx.get("analysis_components") if isinstance(existing_fx, dict) else None
+        components = fx.get("analysis_components")
+        if not isinstance(stored, dict) or not isinstance(components, dict):
+            return fx
+        carried = ["embedding"] + ([] if extras.get("beat_positions") else ["rhythm"])
+        kept = dict(components)
+        for name in carried:
+            if name not in kept and stored.get(name):
+                kept[name] = stored[name]
+        fx = {**fx, "analysis_components": kept}
+        if "rhythm" in carried and kept.get("rhythm") == stored.get("rhythm"):
+            for key in ("playback_grid", "playback_grid_version"):
+                if key in existing_fx and key not in fx:
+                    fx[key] = existing_fx[key]
+        return fx
 
     @staticmethod
     def _settle_values(session: Session, result: Dict[str, Any], existing_track, existing_fx):
