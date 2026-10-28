@@ -1,6 +1,10 @@
 import { apiClient } from "./api-client";
 
-export type GridJobPlan = { selected_tracks: number; matched_tracks: number; already_current: number };
+export type GridJobPlan = {
+  selected_tracks: number; matched_tracks: number; already_current: number;
+  /** Tracks left out because rekordbox has a PQTZ grid for them. */
+  rekordbox_grid_tracks?: number;
+};
 export type GridJob = {
   id?: string; status: string; config?: { features: string[] }; total?: number; remaining?: number;
   elapsed?: number; estimated_remaining_seconds?: number | null;

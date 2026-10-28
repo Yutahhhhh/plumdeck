@@ -17,6 +17,7 @@ from domain.models.track import Track, TrackAnalysis, TrackEmbedding
 from domain.models.setlist import SetlistTrack
 from domain.services import value_sources
 from domain.services.analysis.constants import COMPONENT_VERSIONS, EMBEDDING_MODEL, GRID_COMPONENT_VERSION
+from infra import rekordbox_grid, rekordbox_library
 from infra.database import connection
 from infra.repositories.analysis_job_repository import AnalysisJobRepository
 from app.services.analysis_coordinator import analysis_coordinator
@@ -50,6 +51,25 @@ def analyze_components(filepath, features):
         raise RuntimeError("Audio file changed during analysis; retry this track")
     result["features_extra"]["analysis_source"] = {"size": after.st_size, "mtime_ns": after.st_mtime_ns}
     return result, time.monotonic() - started
+
+
+def _rekordbox_grid_check():
+    """Return path -> whether rekordbox has a readable PQTZ grid for it.
+
+    Grid re-analysis skips those tracks: their PQTZ grid outranks plumdeck's
+    own beats. When master.db cannot be read, no track is skipped.
+    """
+    try:
+        index = rekordbox_library.collection_index()
+        database = rekordbox_grid.master_db_path()
+    except Exception:
+        return lambda path: False
+
+    def has_grid(path):
+        entry = index.get(path)
+        return bool(entry and entry.analysis_path and database
+                    and rekordbox_grid.has_usable_grid(entry.analysis_path, database))
+    return has_grid
 
 
 class AnalysisJobService:
@@ -127,29 +147,37 @@ class AnalysisJobService:
             query = query.where(Track.id.in_(track_ids))
         if genres:
             query = query.where(Track.genre.in_(genres))
+        rekordbox_grids = 0
         with Session(self.engine) as session:
             priority = set(session.exec(select(SetlistTrack.track_id)).all())
             rows = session.exec(query.order_by(Track.id)).all()
             if rhythm_only:
+                has_grid = _rekordbox_grid_check()
+                kept = [row for row in rows if not has_grid(row[1])]
+                rekordbox_grids = len(rows) - len(kept)
                 current_versions = {COMPONENT_VERSIONS["rhythm"], GRID_COMPONENT_VERSION}
                 candidates = [{"id": id, "filepath": path, "title": title, "genre": genre,
                                "features": [] if only_outdated and version in current_versions else features}
-                              for id, path, title, genre, version in rows]
+                              for id, path, title, genre, version in kept]
             else:
                 candidates = [{"id": t.id, "filepath": t.filepath, "title": t.title, "genre": t.genre,
                                "features": self.outdated(features, a, e) if only_outdated else features}
                               for t, a, e in rows]
         eligible = [t for t in candidates if t["features"]]
         eligible.sort(key=lambda t: (t["id"] not in priority, t["id"]))
-        return features, candidates, eligible[:limit] if limit else eligible
+        return features, candidates, eligible[:limit] if limit else eligible, rekordbox_grids
 
     def plan(self, track_ids=None, genres=None, features=None, only_outdated=True, limit=None):
-        features, candidates, selected = self._select(track_ids, genres, features, only_outdated, limit)
+        features, candidates, selected, rekordbox_grids = self._select(track_ids, genres, features, only_outdated, limit)
+        grid_only = features == ["rhythm"]
         return {
-            "features": features, "versions": {f: GRID_COMPONENT_VERSION if features == ["rhythm"] else COMPONENT_VERSIONS[f] for f in features},
+            "features": features, "versions": {f: GRID_COMPONENT_VERSION if grid_only else COMPONENT_VERSIONS[f] for f in features},
             "matched_tracks": len(candidates), "already_current": sum(not t["features"] for t in candidates),
             "selected_tracks": len(selected), "sample": selected[:20],
-            "preserves": ["metadata", "genres", "lyrics", "audio_files", "unselected_features"],
+            # Grid re-analysis leaves tracks with a rekordbox grid out entirely.
+            "rekordbox_grid_tracks": rekordbox_grids,
+            "preserves": ["metadata", "genres", "lyrics", "audio_files", "unselected_features"]
+                         + (["bpm"] if grid_only else []),
             "priority": "tracks used in setlists first", "resumable": True,
         }
 
@@ -162,7 +190,7 @@ class AnalysisJobService:
             if token is None:
                 raise ValueError(f"{analysis_coordinator.owner or '別の'}解析が実行中です")
             try:
-                features, _, tracks = self._select(track_ids, genres, features, only_outdated, limit)
+                features, _, tracks, _ = self._select(track_ids, genres, features, only_outdated, limit)
                 config = {"features": features, "only_outdated": only_outdated, "workers": workers}
                 job_id = self.repository.create(config, tracks)
                 self._launch(job_id, token)
@@ -257,7 +285,7 @@ class AnalysisJobService:
                     if name not in value_sources.FIELDS:
                         setattr(track, name, value)
                         continue
-                    if name == "bpm" and grid_only and value_sources.valid("bpm", track.bpm):
+                    if name == "bpm" and grid_only:
                         update["analysis_bpm"] = value
                         continue
                     if rekordbox is None:

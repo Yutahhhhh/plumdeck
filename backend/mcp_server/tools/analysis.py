@@ -29,6 +29,8 @@ def start_track_analysis(track_ids: Optional[List[int]] = None, genres: Optional
                          limit: Optional[int] = None, workers: int = 2) -> dict:
     """選択した音響項目だけをDBへ再解析する永続ジョブを開始し、すぐにjob idを返す。
     features: embedding（既定）, rhythm, key, timbre, waveform。メタデータ・ジャンル・歌詞・音源ファイルは変更しない。
+    BPMは 手動（CSV）> rekordbox > 解析結果 の順で保存する（キーも、設定 rekordbox_key_source がオンなら同じ）。
+    rhythmだけのジョブはグリッドの更新で、rekordboxのグリッドがある曲を除外し、既存のBPMは変えない。
     only_outdated=Trueで処理済みをスキップ。workersは1〜4（既定2）。MCP切断後もアプリ内で継続する。
     アプリ終了後はresume_track_analysisで再開する。進捗はget_track_analysis_statusで確認。
     """

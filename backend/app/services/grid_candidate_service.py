@@ -33,12 +33,12 @@ def audio_fingerprint(filepath: str) -> str:
     return hashlib.sha256(json.dumps(value).encode()).hexdigest()
 
 
-def analysis_candidate(ticks: list[float], bpm: float, confidence=None) -> BeatGrid | None:
+def analysis_candidate(ticks: list[float], bpm: float | None, confidence=None) -> BeatGrid | None:
     if len(ticks) < 2:
         return None
     # Raw detections remain stored; playback uses a whole-track tempo fit only
     # when its residuals demonstrate a constant tempo.
-    if not math.isfinite(bpm) or not 20 <= bpm <= 300:
+    if bpm is None or not math.isfinite(bpm) or not 20 <= bpm <= 300:
         intervals = [b - a for a, b in zip(ticks, ticks[1:])]
         if not all(math.isfinite(d) and d > 0 for d in intervals):
             raise GridAnalysisError("Stored analysis has invalid beat timestamps")
@@ -133,7 +133,11 @@ class GridCandidateService:
             return None
         prepared = row.features_extra.get("playback_grid")
         if row.features_extra.get("playback_grid_version") == GRID_VERSION and prepared:
-            return self._within_duration(track, BeatGrid.model_validate(prepared))
+            try:
+                grid = BeatGrid.model_validate(prepared)
+            except ValueError as exc:
+                raise GridAnalysisError("Stored analysis has invalid playback grid") from exc
+            return self._within_duration(track, grid)
         grid = analysis_candidate(row.beat_positions, track.bpm,
                                   row.features_extra.get("bpm_confidence"))
         return self._within_duration(track, grid) if grid else None
@@ -154,7 +158,15 @@ class GridCandidateService:
         except GridAnalysisError as exc:
             logger.warning("Analysis grid unavailable for track %s: %s", track.id, exc)
             warnings.append("analysis: " + str(exc))
-            grid = None
+            return None, "; ".join(warnings)
+        if grid is None and Path(track.filepath).is_file():
+            # Tracks registered in rekordbox skip rhythm analysis at import, so
+            # without a readable PQTZ they have no beats yet: analyze them now.
+            try:
+                grid = self.analysis(track, force=False)
+            except GridAnalysisError as exc:
+                logger.warning("On-demand grid analysis failed for track %s: %s", track.id, exc)
+                warnings.append("analysis: " + str(exc))
         return grid, "; ".join(warnings) or None
 
     def analysis(self, track: Track, *, force: bool) -> BeatGrid:

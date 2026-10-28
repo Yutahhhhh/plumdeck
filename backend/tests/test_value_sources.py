@@ -1,5 +1,6 @@
 """BPM/key sources: manual > rekordbox > own, with rekordbox read at save time."""
 import asyncio
+import json
 import sqlite3
 import unicodedata
 
@@ -200,6 +201,23 @@ def _job_save(session, tmp_path, features, result, grid_only=False):
     AnalysisJobService(session.bind, str(tmp_path / "jobs.sqlite3"))._save(
         {"track_id": track_id, "filepath": PATH}, result, features, grid_only=grid_only)
     return saved(session, track_id)
+
+
+@pytest.mark.parametrize("stored_bpm, source", [(None, None), (0.0, None), (125.0, "manual")])
+def test_grid_only_preserves_existing_bpm_and_source(session, mocker, tmp_path, stored_bpm, source):
+    use_rekordbox(mocker, "bpm")
+    track = Track(filepath=PATH, title="Song", artist="Artist", bpm=stored_bpm, duration=180.0)
+    session.add(track)
+    session.flush()
+    extra = value_sources.with_sources({}, {"bpm": source}) if source else {}
+    session.add(TrackAnalysis(track_id=track.id, features_extra_json=json.dumps(extra)))
+    session.commit()
+
+    track, extra = _job_save(session, tmp_path, ["rhythm"], analysis_result(), grid_only=True)
+    assert track.bpm == stored_bpm
+    assert value_sources.stored_sources(extra).get("bpm") == source
+    assert extra["analysis_bpm"] == 64.0
+    assert session.get(TrackAnalysis, track.id).beat_positions
 
 
 def test_analysis_job_save_applies_the_same_rule(session, mocker, tmp_path):

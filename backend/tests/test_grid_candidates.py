@@ -273,3 +273,128 @@ def test_invalid_source_tail_reports_error_without_caching(client, session, sour
     assert "duration" in metadata.json()["grid_warning"]
     assert session.exec(text("SELECT count(*) FROM track_grid_candidates")).one()[0] == 0
     assert session.exec(text("SELECT count(*) FROM track_performance_metadata")).one()[0] == 0
+
+
+@pytest.mark.parametrize("rekordbox", ["missing", "unreadable"])
+def test_get_analyzes_on_demand_without_rekordbox_grid_or_stored_beats(client, session, monkeypatch, tmp_path, rekordbox):
+    # Registered tracks skip rhythm analysis at import; if PQTZ cannot be read
+    # at load time the deck must still get a grid instead of none.
+    def find(_):
+        if rekordbox == "unreadable":
+            raise rekordbox_grid.RekordboxGridError("Could not read the local rekordbox library")
+        return None
+    monkeypatch.setattr(rekordbox_grid, "find_analysis", find)
+    track = _track(session)
+    audio = tmp_path / "track.wav"
+    audio.write_bytes(b"fixture")
+    track.filepath = str(audio)
+    session.add(track)
+    session.commit()
+    import app.services.grid_candidate_service as service
+    calls = []
+    monkeypatch.setattr(service, "analyze_grid", lambda path: calls.append(path) or {
+        "bpm": 120.0, "ticks": [0.3, 0.8, 1.3, 1.8], "confidence": 4.0})
+    url = f"/api/tracks/{track.id}/performance-metadata"
+    first = client.get(url).json()
+    assert first["beat_grid"]["source"] == "analysis" and calls == [str(audio)]
+    assert (first["grid_warning"] is not None) == (rekordbox == "unreadable")
+    # The result is cached like an explicit analysis; the next load is immediate.
+    assert client.get(url).json()["beat_grid"] == first["beat_grid"]
+    assert len(calls) == 1
+    assert session.exec(text("SELECT count(*) FROM track_performance_metadata")).one()[0] == 0
+
+
+def test_grid_plan_leaves_out_tracks_with_a_rekordbox_grid(session, mocker, tmp_path, monkeypatch):
+    from app.services.analysis_job_service import AnalysisJobService
+    from domain.models.track import Track
+    from infra import rekordbox_library
+    from infra.rekordbox_library import CollectionIndex, CollectionValues, RekordboxLibraryUnavailable
+
+    analysis_file = tmp_path / "ANLZ0000.DAT"
+    analysis_file.write_bytes(anlz([(1, 12000, 100), (2, 12000, 600)]))
+    monkeypatch.setenv("PLUMDECK_REKORDBOX_DB", str(tmp_path / "master.db"))
+    for path in ("/lib/registered.mp3", "/lib/no-anlz.mp3", "/lib/unregistered.mp3"):
+        session.add(Track(filepath=path, title="Song", artist="Artist", bpm=120.0, duration=180.0))
+    session.commit()
+    mocker.patch.object(rekordbox_library, "collection_index", return_value=CollectionIndex({
+        "/lib/registered.mp3": CollectionValues(120.0, "Am", str(analysis_file)),
+        "/lib/no-anlz.mp3": CollectionValues(120.0, "Am", str(tmp_path / "missing.DAT")),
+    }))
+    service = AnalysisJobService(session.bind, str(tmp_path / "jobs.sqlite3"))
+    session.rollback()
+    plan = service.plan(features=["rhythm"])
+    assert (plan["rekordbox_grid_tracks"], plan["selected_tracks"]) == (1, 2)
+    assert "/lib/registered.mp3" not in {item["filepath"] for item in plan["sample"]}
+    # Unreadable rekordbox: nothing is left out.
+    mocker.patch.object(rekordbox_library, "collection_index", side_effect=RekordboxLibraryUnavailable("x"))
+    assert service.plan(features=["rhythm"])["selected_tracks"] == 3
+
+
+def test_analysis_file_resolves_share_relative_paths(tmp_path):
+    database = tmp_path / "master.db"
+    stored = tmp_path / "share" / "PIONEER" / "USBANLZ" / "ANLZ0000.DAT"
+    stored.parent.mkdir(parents=True)
+    stored.write_bytes(b"PMAI")
+    assert rekordbox_grid.analysis_file("/PIONEER/USBANLZ/ANLZ0000.DAT", database) == stored
+    assert rekordbox_grid.analysis_file("/PIONEER/USBANLZ/missing.DAT", database) is None
+
+
+@pytest.mark.parametrize("contents", [b"PMAI", anlz([]), struct.pack(">4sII", b"PMAI", 12, 12)])
+def test_grid_plan_includes_tracks_when_anlz_has_no_usable_pqtz(session, mocker, tmp_path, monkeypatch, contents):
+    from app.services.analysis_job_service import AnalysisJobService
+    from domain.models.track import Track
+    from infra import rekordbox_library
+    from infra.rekordbox_library import CollectionIndex, CollectionValues
+
+    path = tmp_path / "ANLZ0000.DAT"
+    path.write_bytes(contents)
+    database = tmp_path / "master.db"
+    monkeypatch.setenv("PLUMDECK_REKORDBOX_DB", str(database))
+    session.add(Track(filepath="/lib/registered.mp3", title="Song", artist="Artist", bpm=120.0, duration=180.0))
+    session.commit()
+    mocker.patch.object(rekordbox_library, "collection_index", return_value=CollectionIndex({
+        "/lib/registered.mp3": CollectionValues(120.0, "Am", str(path)),
+    }))
+    service = AnalysisJobService(session.bind, str(tmp_path / "jobs.sqlite3"))
+    session.rollback()
+    plan = service.plan(features=["rhythm"])
+    assert (plan["rekordbox_grid_tracks"], plan["selected_tracks"]) == (0, 1)
+    assert not rekordbox_grid.has_usable_grid(str(path), database)
+
+
+def test_grid_presence_handles_file_becoming_unreadable(tmp_path, monkeypatch):
+    path = tmp_path / "ANLZ0000.DAT"
+    path.write_bytes(anlz([(1, 12000, 100), (2, 12000, 600)]))
+    assert rekordbox_grid.has_usable_grid(str(path), tmp_path / "master.db")
+    def unreadable(_):
+        raise PermissionError("offline")
+    monkeypatch.setattr(rekordbox_grid, "_read_anlz", unreadable)
+    assert not rekordbox_grid.has_usable_grid(str(path), tmp_path / "master.db")
+
+
+def test_grid_presence_reads_structure_without_full_parse(tmp_path):
+    # A library-wide plan only checks that PQTZ holds two beats or more; the
+    # values are validated when the deck loads the grid.
+    path = tmp_path / "ANLZ0000.DAT"
+    path.write_bytes(anlz([(1, 12000, 600), (2, 12000, 100)]))
+    assert rekordbox_grid.has_usable_grid(str(path), tmp_path / "master.db")
+    with pytest.raises(rekordbox_grid.RekordboxGridError):
+        rekordbox_grid.read_grid(path)
+    path.write_bytes(anlz([(1, 12000, 100)]))
+    assert not rekordbox_grid.has_usable_grid(str(path), tmp_path / "master.db")
+    assert rekordbox_grid.read_grid(path) is None
+
+
+def test_invalid_stored_playback_grid_is_reported_without_failing_metadata_get(client, session, monkeypatch):
+    from domain.services.analysis.beat_grid import VERSION
+    monkeypatch.setattr(rekordbox_grid, "find_analysis", lambda _: None)
+    track = _track(session)
+    row = TrackAnalysis(track_id=track.id, features_extra_json=json.dumps({
+        "playback_grid_version": VERSION, "playback_grid": {"bpm": -1, "first_beat_ms": 100},
+    }))
+    session.add(row)
+    session.commit()
+    response = client.get(f"/api/tracks/{track.id}/performance-metadata")
+    assert response.status_code == 200
+    assert response.json()["beat_grid"] is None
+    assert "invalid playback grid" in response.json()["grid_warning"]

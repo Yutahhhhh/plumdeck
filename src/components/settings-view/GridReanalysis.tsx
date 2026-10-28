@@ -33,11 +33,11 @@ export function GridReanalysis() {
   const done = count ? count.completed + count.skipped + count.failed : 0;
   return <div className="space-y-3 rounded-lg border p-4">
     <div><p className="font-medium">グリッドを一括再解析</p>
-      <p className="mt-1 text-xs text-muted-foreground">BPMと拍の位置だけを更新します。手動・rekordboxの保存済みグリッド、CUE、ループは保持します。完了後はデッキに曲を読み込み直してください。</p></div>
+      <p className="mt-1 text-xs text-muted-foreground">拍の位置だけを更新し、BPMは変更しません。rekordboxで解析済み（グリッドあり）の曲は対象外です。手動の保存済みグリッド、CUE、ループは保持します。完了後はデッキに曲を読み込み直してください。</p></div>
     <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={outdated} disabled={active || busy} onChange={e => { setOutdated(e.target.checked); setPlan(null); }} />未更新の曲だけ</label>
     <div className="flex flex-wrap items-center gap-2">
       <Button size="sm" variant="outline" disabled={active || busy} onClick={() => void run(async () => setPlan(await gridJobs.plan(outdated)))}>対象を確認</Button>
-      {plan && <><span className="text-sm">{plan.selected_tracks.toLocaleString()}曲 / 全{plan.matched_tracks.toLocaleString()}曲</span>
+      {plan && <><span className="text-sm">{plan.selected_tracks.toLocaleString()}曲 / 全{plan.matched_tracks.toLocaleString()}曲{plan.rekordbox_grid_tracks ? `（rekordboxのグリッドがある${plan.rekordbox_grid_tracks.toLocaleString()}曲は対象外）` : ""}</span>
         <Button size="sm" disabled={active || busy || !plan.selected_tracks} onClick={() => void run(async () => { setJob(await gridJobs.start(outdated)); setPlan(null); })}>一括再解析を開始</Button></>}
       {ours && job.id && active && <Button size="sm" variant="outline" disabled={busy || job.status === "pausing"} onClick={() => void run(async () => setJob(await gridJobs.control(job.id!, "pause")))}>一時停止</Button>}
       {ours && job.id && job.status === "paused" && <Button size="sm" disabled={busy} onClick={() => void run(async () => setJob(await gridJobs.control(job.id!, "resume")))}>続きから再開</Button>}
