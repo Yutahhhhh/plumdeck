@@ -15,7 +15,8 @@ import { usePlayPreferences } from "./play-preferences";
 import { DeckWaveform } from "./DeckWaveform";
 import { artworkUrl, useTrackVisuals } from "./useTrackVisuals";
 import { barNumbers, lowerBeat } from "./beat-grid-math";
-import { availablePadModes, PerformancePads, UNBACKED_PAD_MODES, type FxEffect, type PadMode } from "./PerformancePads";
+import { availablePadModes, PerformancePads, UNBACKED_PAD_MODES, type PadMode } from "./PerformancePads";
+import type { PadFxSlot } from "@/services/midi/pad-presets";
 import { PadModeSelect } from "./PadModeSelect";
 import { AutoBeatLoop, type LoopMode } from "./AutoBeatLoop";
 import { beatLoopPress, clampBeats, loopBeats, LOOP_BEATS_RANGE, LOOP_BEATS_RANGE_EXTENDED, resizeLoop, stepBeats } from "./loop-math";
@@ -46,7 +47,8 @@ type Props = {
   syncLeader?: DeckId | null;
   onHotCue: (index: number, clear: boolean) => void; onLoop: (beats: number) => void;
   onBeatJump?: (beats: number) => void; onBeatLoop?: (beats: number) => void; onLoopEnable?: (enabled: boolean) => void;
-  onQuantize?: (enabled: boolean) => void; onFx?: (effect: FxEffect, enabled: boolean, mix: number, depth: number, beats?: number) => void; onSaveLoop?: () => void;
+  fxContext?: string; onFxError?: (error: unknown) => void;
+  onQuantize?: (enabled: boolean) => void; onPadFx?: (slot: PadFxSlot, enabled: boolean) => Promise<unknown>; onSaveLoop?: () => void;
   onLoopIn?: () => void; onLoopOut?: () => void; onReloop?: () => void;
   /** Set and enable a loop (resize keeping IN). */
   onLoopSet?: (startMs: number, endMs: number) => void;
@@ -64,7 +66,7 @@ type Props = {
   onGridEdit: () => void; onGridClose?: () => void; gridEditor?: ReactNode;
 };
 
-export function SoftwareDeck({ id, deck, channel, active, connected, capability, capabilities, tailLock, onActivate, onToggle, onCue, onSeekAbsolute, onTempo, onKeylock, onSync, onMaster, onUnload, syncLeader, onHotCue, onLoop, onBeatJump, onBeatLoop, onLoopEnable, onQuantize, onFx, onSaveLoop, onLoopIn, onLoopOut, onReloop, onLoopSet, pendingLoopIn, onMemory, onMemoryCall, onKeyShift, onKeySync, onKeyReset, onSlip, onReverse, onBend, savedLoops, onRecallLoop, trackKey, cueColors, onGridEdit, onGridClose, gridEditor }: Props) {
+export function SoftwareDeck({ id, deck, channel, active, connected, capability, capabilities, tailLock, onActivate, onToggle, onCue, onSeekAbsolute, onTempo, onKeylock, onSync, onMaster, onUnload, syncLeader, onHotCue, onLoop, onBeatJump, onBeatLoop, onLoopEnable, onQuantize, onPadFx, fxContext, onFxError, onSaveLoop, onLoopIn, onLoopOut, onReloop, onLoopSet, pendingLoopIn, onMemory, onMemoryCall, onKeyShift, onKeySync, onKeyReset, onSlip, onReverse, onBend, savedLoops, onRecallLoop, trackKey, cueColors, onGridEdit, onGridClose, gridEditor }: Props) {
   const deckDrop = usePlayDeckDrop(`play-deck-controls-${id}`, id);
   const left = id === "A" || id === "C";
   const [autoBeats, setAutoBeats] = useState(4);
@@ -131,7 +133,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
   const hotCueReason = unavailable("deck.hotcue", "HOT CUE", Boolean(onHotCue));
   const loopReason = available("deck.loop", "LOOP", Boolean(onBeatLoop || onLoop));
   const jumpReason = unavailable("deck.beatjump", "BEAT JUMP", Boolean(onBeatJump));
-  const fxReason = unavailable("mixer.fx", "PAD FX", Boolean(onFx));
+  const fxReason = unavailable("mixer.fx", "PAD FX", Boolean(onPadFx));
   const quantizeReason = unavailable("deck.quantize", "QUANTIZE", Boolean(onQuantize), false);
   const gridReason = unavailable("deck.beatgrid", "GRID EDIT", true);
   const memoryReason = unavailable("deck.transport", "MEMORY CUE", Boolean(onMemory && onMemoryCall));
@@ -253,9 +255,9 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
               void (async () => { await djEngineClient.keyShift(id, semitones);
                 if (keyboard && generation === djEngineClient.getDeckGeneration(id)) { const cue = deck?.hotCues[keyboardCue]; if (cue == null) throw new Error("KEYBOARDにはホットキューを設定してください"); await djEngineClient.seek(id,cue); if(generation === djEngineClient.getDeckGeneration(id)) await djEngineClient.play(id); }
               })().catch(e=>setPadError(String(e)));
-            }} mode={padMode} hotCues={deck?.hotCues} formatTime={formatTime} describeCue={describeCue} selectedLoopBeats={activeBeats ?? undefined} fxBeats={capabilities.includes(DJ_ENGINE_CAPABILITIES.mixerFxBeats)}
+            }} mode={padMode} hotCues={deck?.hotCues} formatTime={formatTime} describeCue={describeCue} selectedLoopBeats={activeBeats ?? undefined} capabilities={capabilities}
               hotCueDisabledReason={hotCueReason} beatLoopDisabledReason={loopReason} beatJumpDisabledReason={jumpReason} padFxDisabledReason={fxReason}
-              onHotCue={onHotCue} onBeatLoop={pressBeatLoop} onBeatJump={onBeatJump} onFx={onFx}
+              onHotCue={onHotCue} onBeatLoop={pressBeatLoop} onBeatJump={onBeatJump} onPadFx={onPadFx} fxContext={fxContext} onFxError={onFxError}
               memoryCues={memoryPoints} selectedMemory={memorySelected} memoryDisabledReason={memoryReason} onMemoryCall={onMemoryCall} />}
             {padMode === "memorycue" && <div className="dj-memory-actions" role="group" aria-label={`Deck ${id} MEMORY CUE`}>
               <button type="button" disabled={Boolean(memoryReason) || !memoryPoints.length} title={memoryReason ?? "前のメモリーキューへ"} aria-label="前のメモリーキュー" onClick={() => onMemory?.("previous")}>◀</button>

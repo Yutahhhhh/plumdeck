@@ -16,8 +16,12 @@ export type LoopSpan = { startMs: number; endMs: number };
 export function formatBeats(beats: number): string {
   if (!Number.isFinite(beats) || beats <= 0) return "—";
   if (beats >= 1) return String(Number(beats.toFixed(3)));
-  const denominator = Math.round(1 / beats);
-  return Math.abs(1 / denominator - beats) < 1e-6 ? `1/${denominator}` : String(Number(beats.toFixed(4)));
+  // Smallest denominator up to 64 that represents it exactly (1/2, 3/4, 3/16 …).
+  for (let denominator = 2; denominator <= 64; denominator++) {
+    const numerator = Math.round(beats * denominator);
+    if (numerator > 0 && Math.abs(numerator / denominator - beats) < 1e-6) return `${numerator}/${denominator}`;
+  }
+  return String(Number(beats.toFixed(4)));
 }
 
 export const clampBeats = (beats: number, range: BeatRange) => Math.max(range.min, Math.min(range.max, beats));

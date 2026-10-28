@@ -1,7 +1,9 @@
 import { junctionLeaseKey, junctionState } from '../junction/state.ts';
-import { padFxParams, padPreset, BEAT_LOOP_PAGES, BEAT_JUMP_PAGES, keyPad } from "./pad-presets.ts";
+import { padPreset, BEAT_LOOP_PAGES, BEAT_JUMP_PAGES, keyPad, type PadFxSlot } from "./pad-presets.ts";
+import { createPadFxSender, padFxGroup, type PadFxGroup } from "./pad-fx-send.ts";
+import { pressFx, releaseFx, releaseAllFx, type PadFxActiveState } from "../../components/play/pad-fx-stack.ts";
 import { getPadSelection, selectPads, subscribePads } from "./pad-state.ts";
-import { BEAT_FX, beatFxMaxBeats } from "./beat-fx.ts";
+import { BEAT_FX, beatFxMaxBeats, beatFxMinBeats } from "./beat-fx.ts";
 import type { DjEngineClient } from "../dj-engine/client";
 import type { BeatFxState, DeckId, PadEffect } from "../../types/dj-engine";
 import type { MidiAction } from "./ddj1000";
@@ -18,6 +20,9 @@ export type ControllerActions = {
   cueColors?: Partial<Record<DeckId,(string|null)[]>>;
   error: (message: string) => void;
 };
+type HeldPadFx = { id: string; slot: PadFxSlot };
+/** Held pads per engine slot (deck chain, channel Color FX). */
+type HeldFx = Record<PadFxGroup, PadFxActiveState<HeldPadFx>> & { session: string | null; track: string };
 type Jog = { id: string; displacement: number; session: string | null; track: string; last: number;
   speedTime: number; speedPosition: number; speed: number; releaseTimer?: ReturnType<typeof setTimeout> };
 /** Device gestures use the same acknowledged client and persistence callbacks as
@@ -30,7 +35,8 @@ export class Ddj1000Runtime {
   private bends = new Map<DeckId, { rate: number; timer: ReturnType<typeof setTimeout>; session: string | null; track: string }>();
   private cuePreview = new Map<DeckId, { session: string | null; track: string }>();
   private heldReverse = new Map<DeckId, {session: string | null; track: string}>();
-  private heldFx = new Map<DeckId, { effect: PadEffect; session: string | null; track: string }>();
+  private heldFx = new Map<DeckId, HeldFx>();
+  private padFx: ReturnType<typeof createPadFxSender>;
   private padPresses = new Map<string, MidiAction>();
   private releaseFxHeld = false;
   private keyboardCues = new Map<DeckId,number>();
@@ -82,6 +88,7 @@ export class Ddj1000Runtime {
   private actions: () => ControllerActions;
   constructor(client: DjEngineClient, actions: () => ControllerActions) {
     this.client = client; this.actions = actions;
+    this.padFx = createPadFxSender(client);
     this.unsubscribeJunction = junctionState.subscribe(() => {
       const next = junctionLeaseKey();
       if (next === this.junctionKey) return;
@@ -102,8 +109,8 @@ export class Ddj1000Runtime {
         const next=(this.queues.get(deck)??Promise.resolve()).then(async()=>{
           const held=this.heldFx.get(deck);
           if(!held) return;
+          if(this.valid(deck,held.session,held.track)) await this.releasePadFx(deck,held);
           this.heldFx.delete(deck);
-          if(this.valid(deck,held.session,held.track)) await this.client.setFx(deck,held.effect,false,0.5);
         }).catch(e=>this.actions().error(String(e)));
         this.queues.set(deck,next);
       });
@@ -319,7 +326,8 @@ export class Ddj1000Runtime {
         if (control === "fxRelease") params={release:Boolean(pressed)};
         if (control === "fxBeatDown" || control === "fxBeatUp") {
           const current=this.client.getState().snapshot?.mixer.beatFx??this.nativeFx;
-          params={beats:clamp(current.beats*(control === "fxBeatDown"?0.5:2),0.125,beatFxMaxBeats(current.effect))};
+          const capabilities=this.client.getState().snapshot?.engine.capabilities;
+          params={beats:clamp(current.beats*(control === "fxBeatDown"?0.5:2),beatFxMinBeats(current.effect,capabilities),beatFxMaxBeats(current.effect,capabilities))};
         }
         const result = await this.client.send("mixer.beatfx.set",params) as {beatFx?:BeatFxState};
         if(result?.beatFx) this.nativeFx={...result.beatFx};
@@ -539,22 +547,34 @@ export class Ddj1000Runtime {
         case "reloop": if (d.loopRegion) await this.client.enableLoop(deck, !d.loopRegion.enabled); break;
         case "loopHalf": case "loopDouble":
           if (d.loopRegion) {
-            const { startMs, endMs } = d.loopRegion;
+            const { startMs, endMs, enabled: loopEnabled } = d.loopRegion;
             const end = Math.min(d.track!.durationMs, startMs + (endMs - startMs) * (control === "loopHalf" ? 0.5 : 2));
-            if (end > startMs) await this.client.setLoop(deck, startMs, end);
+            if (end > startMs) {
+              await this.client.setLoop(deck, startMs, end);
+              // Setting bounds disables the native loop; preserve the previous
+              // enabled state without affecting a newly loaded track.
+              if (loopEnabled && this.valid(deck, session, track)) await this.client.enableLoop(deck, true);
+            }
           } break;
         case "jumpRangeDown": case "jumpRangeUp": break; // Absolute page selection is handled before track gating.
         case "beatJumpPad": await this.client.beatJump(deck, BEAT_JUMP_PAGES[(action.slot!>>3)&1][action.slot!&7]); break;
         case "beatLoopPad": await this.client.beatLoop(deck, BEAT_LOOP_PAGES[(action.slot! >> 3) & 1][action.slot! & 7]); break;
         case "padFx": {
           // Same slot values as the on-screen pads (one preset table).
-          const preset = padPreset(action.mode, action.slot);
-          const effect = preset.effect;
-          const params = padFxParams(preset, Boolean(this.client.getState().snapshot?.engine.capabilities.includes("mixer.fx.beats")));
-          if (pressed) this.heldFx.set(deck, { effect, session, track });
-          else if (this.heldFx.get(deck)?.effect !== effect || !this.valid(deck, this.heldFx.get(deck)!.session, this.heldFx.get(deck)!.track)) break;
-          else this.heldFx.delete(deck);
-          await this.client.setFx(deck, effect, Boolean(pressed), params.mix, params.depth, params.beats); break;
+          const preset = padPreset(action.mode, action.slot, this.client.getState().snapshot?.engine.capabilities);
+          let held = this.held(this.heldFx, deck);
+          if (!held) {
+            // Nothing of ours sounds on this deck: a knob value captured for an older track is stale.
+            this.padFx.forget(deck);
+            held = { chain: { pads: [], sounding: null }, color: { pads: [], sounding: null }, session, track };
+          }
+          this.heldFx.set(deck, held);
+          const pad: HeldPadFx = { id: `${action.mode ?? 1}:${action.slot ?? 0}`, slot: preset };
+          const same = (a: HeldPadFx, b: HeldPadFx) => a.id === b.id;
+          const send = (item: HeldPadFx, enabled: boolean) => this.padFx.send(deck, item.slot, enabled);
+          if (pressed) await pressFx(held[padFxGroup(preset)], pad, same, send);
+          else for (const group of ["chain", "color"] as const) await releaseFx(held[group], pad, same, send);
+          if (!held.chain.pads.length && !held.chain.sounding && !held.color.pads.length && !held.color.sounding) this.heldFx.delete(deck); break;
         }
         case "cuePrevious": case "cueNext": {
           await this.actions().memory?.(deck, control === "cueNext" ? "next" : "previous"); break;
@@ -564,6 +584,11 @@ export class Ddj1000Runtime {
       if (this.valid(deck, session, track)) await this.client.refreshSnapshot();
     }).catch(e => this.actions().error(e instanceof Error ? e.message : String(e)));
     this.queues.set(key, next);
+  }
+  private async releasePadFx(deck: DeckId, held: HeldFx) {
+    const send = (pad: HeldPadFx, enabled: boolean) => this.padFx.send(deck, pad.slot, enabled);
+    try { await releaseAllFx(held.chain, send); }
+    finally { await releaseAllFx(held.color, send); }
   }
   private releaseJog(deck: DeckId) {
     const jog = this.jogs.get(deck); this.jogs.delete(deck);
@@ -600,11 +625,16 @@ export class Ddj1000Runtime {
       const reverse=this.heldReverse.get(deck);this.heldReverse.delete(deck);
       if(reverse && this.valid(deck,reverse.session,reverse.track)) this.perform(()=>this.client.send("deck.slipReverse.set",{deck,enabled:false}));
       const cue = this.cuePreview.get(deck); this.cuePreview.delete(deck);
-      const fx = this.heldFx.get(deck); this.heldFx.delete(deck);
-      // Wait for an in-flight press before releasing it, including on teardown.
+      // Wait for an in-flight press before reading and releasing its state.
+      // An acknowledgement may arrive after reset starts.
       const release = (this.queues.get(deck) ?? Promise.resolve()).then(async () => {
-        if (cue && this.valid(deck, cue.session, cue.track)) { await this.client.pause(deck); if (this.valid(deck, cue.session, cue.track)) await this.client.seek(deck, this.actions().cuePoints[deck]); }
-        if (fx && this.valid(deck, fx.session, fx.track)) await this.client.setFx(deck, fx.effect, false, 0.5);
+        try {
+          if (cue && this.valid(deck, cue.session, cue.track)) { await this.client.pause(deck); if (this.valid(deck, cue.session, cue.track)) await this.client.seek(deck, this.actions().cuePoints[deck]); }
+        } finally {
+          const fx = this.heldFx.get(deck);
+          if (fx && this.valid(deck, fx.session, fx.track)) await this.releasePadFx(deck, fx);
+          this.heldFx.delete(deck);
+        }
       }).catch(e => this.actions().error(String(e)));
       this.queues.set(deck, release);
     }

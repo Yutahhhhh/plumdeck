@@ -1,5 +1,6 @@
-import { padFxParams, padPreset, BEAT_LOOP_PAGES, BEAT_JUMP_PAGES, keyPad } from "@/services/midi/pad-presets";
-import { emptyPadFxStack, pressPad, releaseAll, releasePad, type PadFxCommand, type PadFxStack } from "./pad-fx-stack";
+import { padPreset, BEAT_LOOP_PAGES, BEAT_JUMP_PAGES, keyPad, PAD_FX_EXTENDED, type PadFxSlot } from "@/services/midi/pad-presets";
+import { padFxGroup, type PadFxGroup } from "@/services/midi/pad-fx-send";
+import { emptyPadFxStack, pressPad, releaseAll, releasePad, pressFx, releaseFx, releaseAllFx, enqueuePadFx, type PadFxCommand, type PadFxStack, type PadFxActiveState } from "./pad-fx-stack";
 import { padColor } from "@/services/midi/pad-colors";
 export { CUE_COLORS } from "@/services/midi/pad-colors";
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
@@ -73,9 +74,12 @@ type Props = {
   onHotCue?: (index: number, clear: boolean) => void;
   onBeatLoop?: (beats: number) => void;
   onBeatJump?: (beats: number) => void;
-  onFx?: (effect: FxEffect, enabled: boolean, mix: number, depth: number, beats?: number) => void;
-  /** The host takes per-pad beats (`mixer.fx.beats`): send and show them. */
-  fxBeats?: boolean;
+  /** Sends one PAD FX slot on or off; resolves once the engine acknowledged it. */
+  onPadFx?: (slot: PadFxSlot, enabled: boolean) => Promise<unknown>;
+  onFxError?: (error: unknown) => void;
+  /** Engine capabilities: choose each PAD FX slot and show beats when the host takes them. */
+  capabilities?: readonly string[];
+  fxContext?: string;
   memoryCues?: readonly MemoryCue[];
   /** Position of the memory cue last called; DELETE removes it. */
   selectedMemory?: number | null;
@@ -96,31 +100,53 @@ function DeadPad({ text, reason, muted }: { text: string; reason: string; muted?
 
 /** Held pads are keyed per bank so a release after a bank switch still targets the right effect. */
 const fxKey = (mode: 1 | 5, slot: number) => (mode === 5 ? 16 : 0) + (slot & 15);
-const fxSlot = (key: number) => padPreset(key >= 16 ? 5 : 1, key & 15);
+type UiFxPad = { key: number; send: (enabled: boolean) => Promise<unknown> };
+const emptyActive = (): Record<PadFxGroup, PadFxActiveState<UiFxPad>> => ({ chain: { pads: [], sounding: null }, color: { pads: [], sounding: null } });
 
 export function PerformancePads(props: Props) {
   const fxStack = useRef<PadFxStack>(emptyPadFxStack);
   const [fxHeld, setFxHeld] = useState<readonly number[]>([]);
-  const onFxRef = useRef(props.onFx);
-  const fxBeatsRef = useRef(Boolean(props.fxBeats));
-  useEffect(() => { onFxRef.current = props.onFx; fxBeatsRef.current = Boolean(props.fxBeats); });
-  // One effect slot per deck on this host: the last pressed pad sounds and
-  // releasing it hands the slot back to a pad still held.
+  const fxActive = useRef(emptyActive());
+  const fxQueue = useRef({ tail: Promise.resolve() as Promise<unknown> });
+  const capabilities = props.capabilities ?? [];
+  const fxSlot = (key: number) => padPreset(key >= 16 ? 5 : 1, key & 15, capabilities);
+  const groupOf = (key: number) => padFxGroup(fxSlot(key));
+  // Each engine slot (deck chain, channel Color FX) holds one effect: within a
+  // slot the last pressed pad sounds and releasing it hands the slot back to a
+  // pad still held. Pads on different slots sound together.
+  const sendFx = (pad: UiFxPad, enabled: boolean) => pad.send(enabled);
+  const enqueueFx = (task: () => Promise<void>) => {
+    // Report after bounded retries, then keep the queue usable for cleanup.
+    enqueuePadFx(fxQueue.current, task, props.onFxError);
+  };
   const applyFx = (step: { stack: PadFxStack; commands: PadFxCommand[] }) => {
     fxStack.current = step.stack;
     setFxHeld(step.stack.held);
-    for (const command of step.commands) {
-      const preset = fxSlot(command.slot);
-      const params = padFxParams(preset, fxBeatsRef.current);
-      onFxRef.current?.(preset.effect, command.enabled, params.mix, params.depth, params.beats);
+  };
+  const sameFx = (a: UiFxPad, b: UiFxPad) => a.key === b.key;
+  const startFx = (key: number) => {
+    if (props.padFxDisabledReason || fxStack.current.held.includes(key)) return;
+    const preset = fxSlot(key);
+    const onPadFx = props.onPadFx;
+    const pad: UiFxPad = { key, send: enabled => onPadFx?.(preset, enabled) ?? Promise.reject(new Error("PAD FX unavailable")) };
+    const active = fxActive.current[padFxGroup(preset)];
+    applyFx(pressPad(fxStack.current, key));
+    enqueueFx(() => pressFx(active, pad, sameFx, sendFx));
+  };
+  const stopFx = (key: number) => {
+    if (fxStack.current.held.includes(key)) applyFx(releasePad(fxStack.current, key));
+    // Release from whichever slot holds the pad (its preset may have changed since).
+    for (const active of Object.values(fxActive.current)) {
+      enqueueFx(() => releaseFx(active, { key, send: () => Promise.resolve() }, sameFx, sendFx));
     }
   };
-  const startFx = (key: number) => { if (!props.padFxDisabledReason) applyFx(pressPad(fxStack.current, key)); };
-  const stopFx = (key: number) => applyFx(releasePad(fxStack.current, key));
   const stopAllFx = useRef(() => {});
-  stopAllFx.current = () => applyFx(releaseAll(fxStack.current));
+  stopAllFx.current = () => {
+    applyFx(releaseAll(fxStack.current));
+    for (const active of Object.values(fxActive.current)) enqueueFx(() => releaseAllFx(active, sendFx));
+  };
   useEffect(() => () => stopAllFx.current(), []);
-  useEffect(() => { stopAllFx.current(); }, [props.mode, props.padFxDisabledReason]);
+  useEffect(() => { stopAllFx.current(); }, [props.mode, props.padFxDisabledReason, props.fxContext]);
   useEffect(() => {
     const releaseEverything = () => stopAllFx.current();
     const onVisibility = () => { if (document.hidden) releaseEverything(); };
@@ -163,21 +189,23 @@ export function PerformancePads(props: Props) {
 
   if (props.mode === "padfx" || props.mode === "padfx2") {
     const bank = props.mode === "padfx2" ? 5 : 1;
-    const sounding = fxHeld.length ? fxHeld[fxHeld.length - 1] : null;
+    // The pad sounding in each engine slot is the last one held there.
+    const sounding = new Set((["chain", "color"] as const).map((group) => [...fxHeld].reverse().find((key) => groupOf(key) === group)));
+    const beatsShown = capabilities.includes(PAD_FX_EXTENDED);
     return <PadGrid label="Momentary pad effects">{Array.from({ length: 8 }, (_, index) => {
       const slot = index + (props.page ?? 0) * 8;
       const key = fxKey(bank, slot);
-      const preset = padPreset(bank, slot);
-      const beats = props.fxBeats && preset.beats ? formatBeats(preset.beats) : null;
+      const preset = padPreset(bank, slot, capabilities);
+      const beats = beatsShown && preset.beats ? formatBeats(preset.beats) : null;
       const disabledReason = props.padFxDisabledReason;
       const pointerStart = (event: PointerEvent<HTMLButtonElement>) => { if (event.button === 0) { event.currentTarget.setPointerCapture(event.pointerId); startFx(key); } };
       const keyStart = (event: KeyboardEvent<HTMLButtonElement>) => { if (!event.repeat && (event.key === " " || event.key === "Enter")) { event.preventDefault(); startFx(key); } };
       const keyStop = (event: KeyboardEvent<HTMLButtonElement>) => { if (event.key === " " || event.key === "Enter") stopFx(key); };
       const describe = `${preset.label}${preset.variant ? ` ${preset.variant}` : ""}${beats ? ` ${beats} 拍` : ""}`;
-      return <button key={`${bank}:${slot}`} type="button" style={{ "--pad-color": padColor(bank, slot) } as CSSProperties}
-        className={cn("dj-performance-pad dj-performance-pad--fx", sounding === key && "is-on", fxHeld.includes(key) && sounding !== key && "is-held")}
+      return <button key={`${bank}:${slot}`} type="button" style={{ "--pad-color": padColor(bank, slot, null, capabilities) } as CSSProperties}
+        className={cn("dj-performance-pad dj-performance-pad--fx", sounding.has(key) && "is-on", fxHeld.includes(key) && !sounding.has(key) && "is-held")}
         aria-pressed={fxHeld.includes(key)} disabled={Boolean(disabledReason)}
-        title={disabledReason ?? `${describe}（押している間だけ有効。同時に押すと最後に押したものが鳴り、離すと押したままのものに戻ります）`}
+        title={disabledReason ?? `${describe}（押している間だけ有効。${preset.kind === "color" ? "COLOR FX を借りて鳴らし、離すとつまみの位置に戻ります。" : ""}同時押しはチェーン系と COLOR 系なら両方鳴り、同じ系統では最後に押したものが鳴ります）`}
         onPointerDown={pointerStart} onPointerUp={() => stopFx(key)} onPointerCancel={() => stopFx(key)} onLostPointerCapture={() => stopFx(key)} onBlur={() => stopFx(key)} onKeyDown={keyStart} onKeyUp={keyStop}>
         {beats ? <><strong className="dj-fx-pad-beats dj-num">{beats}</strong><small>{preset.label}</small></> : <><strong className="dj-fx-pad-name">{preset.label}</strong>{preset.variant && <small>{preset.variant}</small>}</>}
       </button>;
