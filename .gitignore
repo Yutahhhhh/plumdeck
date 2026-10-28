@@ -24,26 +24,14 @@ dist-ssr
 *.sw?
 
 db_data/
-backend/.venv
-backend/**/__pycache__/
-backend/venv
 **/__pycache__/
 
-# Backend build artifacts
-backend/build/
-backend/dist/
-
-# Backend models
-backend/models/*.pb
-backend/models/*.onnx
-
-# Tauri sidecar binaries
+# Staged Tauri externalBin (FFmpeg)
 src-tauri/bin/
 keys/
 
 # Coverage
 .coverage
-backend/.coverage
 htmlcov/
 coverage.xml
 
@@ -58,6 +46,5 @@ backup/*
 !**/.env.example
 !**/.env.*.example
 
-# Rust port: sandbox copies for parity runs and the helper venv
+# Rust port: sandbox copies for parity runs
 target-tmp/
-tools/parity/.venv/

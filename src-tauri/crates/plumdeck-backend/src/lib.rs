@@ -8,9 +8,9 @@
 //! layers in [`middleware`] (panic → 500, loopback Host/Origin, CORS, HEAD).
 //! S1 opens the library before serving and closes it after ([`startup`]).
 //! Startup progress lines (`PLUMDECK_STARTUP:{...}`) and the managed-sidecar
-//! stdin shutdown line keep the desktop's and scripts/smoke-backend.py's
-//! contracts with the Python sidecar. Logs go where Python's go
-//! ([`logging`]).
+//! stdin shutdown line keep the contracts the desktop and
+//! scripts/smoke-backend.mjs had with the former Python sidecar. Logs go
+//! where Python's went ([`logging`]).
 
 pub mod body;
 pub mod lax;

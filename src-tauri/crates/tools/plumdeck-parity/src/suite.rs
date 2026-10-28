@@ -64,7 +64,7 @@ fn pin_times(db: &Path, media: &Path, built_at: chrono::NaiveDateTime) -> Result
     let Ok(conn) = duckdb::Connection::open(db) else { return Ok(()) };
     let columns: Vec<(String, String)> = match conn.prepare(
         "SELECT table_name, column_name FROM duckdb_columns() WHERE schema_name = 'main' AND data_type LIKE 'TIMESTAMP%'
-           AND (lower(column_default) LIKE '%current_timestamp%' OR lower(column_default) LIKE '%now()%')",
+           AND (lower(column_default) LIKE '%current_timestamp%' OR lower(column_default) LIKE '%now()%')", // allow-engine-clock: finds the defaults
     ) {
         Ok(mut statement) => statement.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?,
         Err(_) => return Ok(()),

@@ -2,7 +2,7 @@
 
 `tools/junction-spec/baseline.mjs --write` が TESTMAP.json から生成する。手で編集しない。状態を変えるときは TESTMAP.json の `port.status`（と `port.rust`、`port.note`）を書き換えてから `--write` する。
 
-テスト 213 件：kept 54、todo 159。
+テスト 198 件：kept 54、todo 144。
 
 | 項目 | 層 | ファイル | スイート | 方針 | 件数 | 状態 |
 |---|---|---|---|---|---|---|
@@ -11,8 +11,6 @@
 | — | signaling | `services/junction-signaling/test/rate-limit.test.ts` |  | keep | 8 | kept 8 |
 | — | signaling | `services/junction-signaling/test/rooms.test.ts` |  | keep | 19 | kept 19 |
 | — | signaling | `services/junction-signaling/test/server.test.ts` |  | keep | 13 | kept 13 |
-| S12 | mcp | `backend/tests/test_mcp_junction.py` |  | port | 14 | todo 14 |
-| S12 | mcp | `backend/tests/test_mcp_server.py` |  | port | 1 | todo 1 |
 | S12 | bridge | `src-tauri/src/junction_mcp_bridge.rs` |  | port | 4 | todo 4 |
 | S12 | bridge | `src-tauri/src/share_musics.rs` |  | port | 1 | todo 1 |
 | W2-33 | core | `native/mixxx-engine-host/tests/junction/authority_test.cpp` | `authority` | port | 2 | todo 2 |

@@ -35,7 +35,6 @@ export default defineConfig(async () => ({
     watch: {
       ignored: [
         "**/src-tauri/target/**",
-        "**/backend/**",
         "**/node_modules/**",
         "**/.git/**",
         "**/db_data/**",

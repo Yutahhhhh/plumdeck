@@ -140,7 +140,7 @@
 | S4〜S12 バックエンドの主要スライス | 完了（全スライスにパリティシナリオ。D-17〜D-23、D-50、D-51） | `plumdeck-backend/src/routes/{setlists,recommendations,performance,assist,set_planner,play,waveform_detail,mcp,workflows,junction,metadata_jobs,file_tags,csv_io}.rs`、`tasks.rs`、`plumdeck-domain/src/assist.rs` |
 | W1-08 / S11 解析 | 完了（`plumdeck-analysis`：テンポ・拍・キー・音色・波形の v1、MusiCNN の埋め込み（同梱の TensorFlow グラフを tract で実行。TensorFlow と 1e-5 以内で一致）、`--analysis-worker` の V1 プロトコル。ingest、grid-jobs、選択解析、Play 取り込み、WS 2 本、MCP の analysis、埋め込みの自動キューと起動時のバックフィル。D-24 / D-25） | `src-tauri/crates/plumdeck-analysis`（`musicnn.rs`、`models/msd-musicnn-1.pb`）、`plumdeck-backend/src/analysis.rs`、`routes/ingest.rs` |
 | S13 Tauri 統合 | 完了・実機未確認（Rust バックエンドを既定で in-process 起動。サイドカーと feature は削除。FFmpeg は externalBin として同梱） | `plumdeck-backend/src/embed.rs`、`src-tauri/src/{lib,main}.rs`、`scripts/packaging-ffmpeg.mjs` |
-| S14 Python 撤去 | 完了（`backend/`、`tools/parity/*.py`、Python のスクリプトと CI を削除。ビルド補助は Node に移植。保守コマンドは `plumdeck-maintenance`。パリティは記録済みの Python 応答（ゴールデン）と比較。`rekordbox-mcp/` は独立したツールなので残す） | `contracts/parity/golden/`、`plumdeck-parity suite --golden`、`plumdeck-backend/src/bin/plumdeck-maintenance.rs`、`scripts/*.mjs` |
+| S14 Python 撤去 | 完了（`backend/`、`tools/parity/*.py`、Python のスクリプトと CI を削除。ビルド補助は Node に移植。保守コマンドは `plumdeck-maintenance`。パリティは記録済みの Python 応答（ゴールデン）と比較：32 シナリオ・1073 ステップで説明のつかない差分 0、db-diff 0。`rekordbox-mcp/` は独立したツールなので残す） | `contracts/parity/golden/`、`plumdeck-parity suite --golden`、`plumdeck-backend/src/bin/plumdeck-maintenance.rs`、`scripts/*.mjs` |
 | RB-03〜RB-06 キー表示 | 実装済み（表記の設定、Traffic Light、MASTER 基準の色、推薦のキー相性フィルタ。D-26） | `src/lib/key-display.ts`、各ビュー、`routes/mcp.rs` の `camelot` |
 | `plumdeck-rekordbox` | RB-10（master.db）と RB-11（ANLZ）完了 | `src-tauri/crates/plumdeck-rekordbox`（DuckDB 非依存） |
 | `plumdeck-decode` | W1-04 / W1-05 相当完了（HE-AAC と Opus は型付きの Unsupported） | `src-tauri/crates/plumdeck-decode`（`spec.rs` にクリーンルーム仕様） |
@@ -149,7 +149,9 @@
 
 ### 3.3 未着手（主なもの）
 
-- バックエンド：台帳の差分（proposed）の承認と、S14 で直す予定だった既知のバグの修正。WebSocket（`/ws/*`）と、実 rekordbox・ネットワーク・実デバイスが要る経路のパリティ。
+- バックエンド：台帳の差分（proposed）の承認と、S14 で直す予定だった既知のバグの修正。WebSocket（`/ws/*`）と、実 rekordbox・ネットワーク・実デバイスが要る経路のパリティ（ゴールデンに無い）。Junction の MCP ツールは bridge が要るので未カバー（Python のツールテスト 15 件は削除。ツールと bridge 操作の対応は `tools/junction-spec/baseline.mjs` が `routes/junction.rs` から検査する）。
+- 開発ツール：`tools/real-music-grid-test.mjs` と `native/mixxx-engine-host/tests/real-music-grid.mjs` は Python の `real_music_grid_probe.py` の出力を前提にしていたので、Rust の解析で作り直す必要がある（オーナーの実音源でのみ使う手動テスト）。
+- `rekordbox-mcp/` は独立した Python の MCP サーバーとして残している（アプリ本体は使わない）。Rust 化するかはオーナー判断。
 - rekordbox 同等化：RB-01 の残り（HOT CUE マーカーの色の食い違いは要確認。Setlist 自動生成のキー変換の部分一致バグは修正済み）、RB-13（3 層モデル）、RB-20（PDW3）、RB-21（フレーズ表示）、RB-40、MEMORY CUE の DB 化など。
 - 解析：評価ハーネス RB-30 と精度の評価、フレーズ検出。
 - エンジンと Junction：W2-01 以降すべて、切替 W3-01〜W3-04。
@@ -219,7 +221,7 @@
 ### 5.1 環境
 
 - Linux、オーナーの Mac にはアクセスできない前提。オーナーの音源・DB・rekordbox データは**クラウドに一切置かない**。
-- Rust は stable（`rust-version = "1.91"` 以上）。DuckDB と SQLCipher は C/C++ からビルドされるので、初回ビルドは重い。
+- Rust は stable（`rust-version = "1.91"` 以上）。DuckDB と SQLCipher は C/C++ からビルドされるので、初回ビルドは重い。Linux で Tauri 本体（`cargo check -p plumdeck`）を確かめるには `libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev librsvg2-dev libasound2-dev` が要る。ディスクが小さいので、§5.3 の一括リスト以外でビルドしない（DuckDB が別にもう一つビルドされて 2GB 増える）。
 - Python のオラクルは S14 で削除した。パリティは `contracts/parity/golden/` に記録した Python の応答と比較する（下の §5.4）。以下は記録時の条件の記録：オラクルには Python 3.12 の venv が要った（`backend/requirements-pr.txt` を基準に、`contracts/oracle.json` に記録された版に合わせる。パッチ版まで合わせること：3.12.3 と 3.12.13 では float の divmod のベクタが変わる。`uv python install 3.12.13` で入る）。`PLUMDECK_ORACLE_PYTHON` でその python を指定する。`backend/main.py` が aiohttp を import するので venv に入れる。互換ベクタ（`contracts/compat-vectors`）は darwin（arm64）で作ったもので、x86 で作り直すと NaN の符号だけが変わる。作り直さない。
 
 ### 5.2 ブランチと PR

@@ -1,5 +1,5 @@
-//! Private loopback bridge between the Python MCP sidecar and the one native
-//! audio engine owned by Tauri.
+//! Private loopback bridge between the backend's MCP server and the one
+//! native audio engine owned by Tauri.
 //!
 //! The public MCP endpoint never receives an engine command name. This bridge
 //! accepts a fixed Junction action allowlist, authenticates every request with

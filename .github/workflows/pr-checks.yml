@@ -12,7 +12,7 @@ on:
       - 'native/**'
       - 'services/junction-signaling/**'
       - 'scripts/**'
-      - 'tools/parity/**'
+      - 'tools/**'
       - 'package.json'
       - 'pnpm-lock.yaml'
       - 'tsconfig*.json'
