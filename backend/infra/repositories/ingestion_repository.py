@@ -48,11 +48,16 @@ class IngestionRepository:
             existing_track = session.exec(select(Track).where(Track.filepath == filepath)).first()
             existing_analysis = session.get(TrackAnalysis, existing_track.id) if existing_track else None
             existing_fx = existing_analysis.features_extra if existing_analysis else {}
+            # A light result does not replace a detailed row of the same audio
+            # (a changed duration proves other audio). It only fills the
+            # components that row is missing: timbre, waveform and beats.
             preserve_full_analysis = bool(
-                result.get("analysis_level") == "light" and is_protected_full_row(existing_track))
-            # A protected row only takes the light timbre when its own is missing.
+                result.get("analysis_level") == "light" and is_protected_full_row(existing_track)
+                and not self._duration_changed(existing_track, result))
             repair_timbre = bool(preserve_full_analysis
                                  and not has_measured_timbre(existing_track, existing_fx))
+            fill_waveform = bool(preserve_full_analysis and not getattr(existing_analysis, "waveform_u8", None))
+            fill_beats = bool(preserve_full_analysis and not getattr(existing_analysis, "beats_f32", None))
             # A protected row keeps its analysis, so it has nothing to drop.
             audio_changed = not preserve_full_analysis and not self._same_audio(
                 session, existing_track, existing_fx, result, audio_hash)
@@ -128,7 +133,14 @@ class IngestionRepository:
             if analysis is None:
                 analysis = TrackAnalysis(track_id=track_id)
 
-            if extras and not (existing_track and preserve_full_analysis):
+            if extras and preserve_full_analysis:
+                if fill_beats:
+                    fx = self._with_light_grid(existing_fx, persisted_features_extra(extras))
+                    new_fx = json.dumps(fx)
+                    if new_fx != (analysis.features_extra_json or "{}"):
+                        analysis.features_extra_json = new_fx
+                        analysis_changed = True
+            elif extras:
                 # Persist an allow-listed copy; callers still validate the full result.
                 fx = persisted_features_extra(extras)
                 recorded = {**value_sources.stored_sources(existing_fx), **sources}
@@ -148,12 +160,12 @@ class IngestionRepository:
                 if new_fx != (analysis.features_extra_json or "{}"):
                     analysis.features_extra_json = new_fx
                     analysis_changed = True
-            if extras.get("waveform_peaks") and not (existing_track and preserve_full_analysis):
+            if extras.get("waveform_peaks") and (fill_waveform or not preserve_full_analysis):
                 new_wave = pack_u8_waveform(extras["waveform_peaks"])
                 if new_wave != analysis.waveform_u8:
                     analysis.waveform_u8 = new_wave
                     analysis_changed = True
-            if extras.get("beat_positions") and not (existing_track and preserve_full_analysis):
+            if extras.get("beat_positions") and (fill_beats or not preserve_full_analysis):
                 new_beats = pack_f32(extras["beat_positions"])
                 if new_beats != analysis.beats_f32:
                     analysis.beats_f32 = new_beats
@@ -166,7 +178,7 @@ class IngestionRepository:
             if analysis_changed:
                 session.add(analysis)
                 if (existing_track and audio_changed) or (
-                        extras.get("beat_positions") and not (existing_track and preserve_full_analysis)):
+                        extras.get("beat_positions") and (fill_beats or not preserve_full_analysis)):
                     # A cached automatic grid must not mask freshly analyzed
                     # beats. Saved user cues/loops/grids live in a separate row.
                     session.exec(text("DELETE FROM track_grid_candidates WHERE track_id=:id AND source='analysis'"),
@@ -183,7 +195,8 @@ class IngestionRepository:
                 if previous_embedding is not None:
                     session.delete(previous_embedding)
 
-            if "embedding" in result and result["embedding"] and not (existing_track and preserve_full_analysis):
+            # A missing vector of a protected row is left to the background job.
+            if "embedding" in result and result["embedding"] and not preserve_full_analysis:
                 emb = session.get(TrackEmbedding, track_id)
                 new_emb_json = json.dumps(result["embedding"])
                 new_model = result.get("embedding_model") or (emb.model_name if emb else "musicnn")
@@ -252,6 +265,19 @@ class IngestionRepository:
             for key in ("playback_grid", "playback_grid_version"):
                 if key in existing_fx and key not in fx:
                     fx[key] = existing_fx[key]
+        return fx
+
+    @staticmethod
+    def _with_light_grid(existing_fx: Dict[str, Any], light_fx: Dict[str, Any]) -> Dict[str, Any]:
+        """A protected row's features_extra plus the grid of the light result
+        that fills its missing beats; everything else stays."""
+        fx = dict(existing_fx) if isinstance(existing_fx, dict) else {}
+        for key in ("playback_grid", "playback_grid_version"):
+            if key in light_fx:
+                fx[key] = light_fx[key]
+        rhythm = (light_fx.get("analysis_components") or {}).get("rhythm")
+        if rhythm:
+            fx["analysis_components"] = {**(fx.get("analysis_components") or {}), "rhythm": rhythm}
         return fx
 
     @staticmethod

@@ -143,3 +143,52 @@ def test_light_import_keeps_a_full_row_and_repairs_only_default_timbre(session):
     assert session.get(TrackEmbedding, track.id) is not None
     assert (track.danceability, track.brightness, track.noisiness) == pytest.approx((.4, .3, .1))
     assert has_completed_analysis(track, None, analysis)
+
+
+def _full_row(session, path, beats=True, waveform=True):
+    track = Track(filepath=path, title="Full", artist="Artist", genre="House", **ready(analysis_level="full"))
+    session.add(track)
+    session.flush()
+    analysis = stored({"rhythm": "rhythm-attacks-v4", "timbre": "timbre-v1"}, beats=beats, waveform=waveform)
+    analysis.track_id = track.id
+    session.add(analysis)
+    session.add(TrackEmbedding(track_id=track.id, embedding_json=json.dumps([.1] * 200)))
+    session.commit()
+    return track
+
+
+def _light(path, **changes):
+    grid = {"bpm": 127.0, "first_beat_ms": 100.0, "beat_times_ms": None, "source": "analysis"}
+    return {**ready(analysis_level="light", bpm=127.0, energy=.5), "filepath": path, **changes, "features_extra": {
+        "analysis_components": dict(LIGHT_COMPONENTS), "playback_grid": grid, "playback_grid_version": 2,
+        "beat_positions": [.1, .6], "waveform_peaks": [.9, .9]}}
+
+
+def test_light_import_fills_the_waveform_and_beats_a_full_row_is_missing(session):
+    from infra.repositories.ingestion_repository import IngestionRepository
+    track = _full_row(session, "/ready/incomplete.mp3", beats=False, waveform=False)
+    assert not has_completed_analysis(track, None, session.get(TrackAnalysis, track.id))
+    IngestionRepository()._prepare_track_models(session, _light(track.filepath))
+    session.commit()
+    session.expire_all()
+    track, analysis = session.get(Track, track.id), session.get(TrackAnalysis, track.id)
+    # The full row's own values and embedding stay; only the gaps are filled.
+    assert (track.analysis_level, track.bpm) == ("full", 128.0) and track.energy == pytest.approx(.7)
+    assert analysis.beat_positions == pytest.approx([.1, .6]) and analysis.waveform_peaks
+    extra = analysis.features_extra
+    assert extra["analysis_components"] == {"rhythm": "numpy-attacks-v2", "timbre": "timbre-v1"}
+    assert extra["playback_grid"]["bpm"] == 127.0
+    assert session.get(TrackEmbedding, track.id) is not None
+    assert has_completed_analysis(track, None, analysis)
+
+
+def test_light_import_of_other_audio_replaces_a_full_row(session):
+    from infra.repositories.ingestion_repository import IngestionRepository
+    track = _full_row(session, "/ready/replaced.mp3")
+    IngestionRepository()._prepare_track_models(session, _light(track.filepath, duration=241.0))
+    session.commit()
+    session.expire_all()
+    track, analysis = session.get(Track, track.id), session.get(TrackAnalysis, track.id)
+    assert (track.analysis_level, track.bpm, track.duration) == ("light", 127.0, 241.0)
+    assert analysis.beat_positions == pytest.approx([.1, .6])
+    assert session.get(TrackEmbedding, track.id) is None

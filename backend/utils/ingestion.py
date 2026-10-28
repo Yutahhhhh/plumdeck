@@ -90,8 +90,9 @@ def _current_light_analysis(analysis: Any) -> bool:
 
 
 def is_protected_full_row(track: Any) -> bool:
-    """A detailed (non-light) row with core BPM/duration: a light import must
-    not overwrite its beats, waveform or embedding, only repair its timbre."""
+    """A detailed (non-light) row with core BPM/duration: a light import of
+    the same audio must not overwrite its timbre, beats, waveform or
+    embedding, only fill missing timbre, beats and waveform."""
     return bool(_has_audio_analysis_core(track) and getattr(track, "analysis_level", None) != "light")
 
 
