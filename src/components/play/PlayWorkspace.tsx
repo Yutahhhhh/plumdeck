@@ -14,6 +14,9 @@ import { jogWeight } from "@/services/dj-engine/jog-weight";
 import { sampler } from "@/services/dj-engine/sampler";
 import "./sampler.css";
 import { useDdj1000 } from "@/hooks/useDdj1000";
+import type { ControllerActions } from "@/services/midi/ddj1000-runtime";
+import { usePlayKeyboard } from "./usePlayKeyboard";
+import { createPadFxSender } from "@/services/midi/pad-fx-send";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { AlertTriangle, Circle, Columns3, Disc3, Keyboard, Loader2, Mic, Power, Rows3, Settings2, Square, Volume2 } from "lucide-react";
 import { useDjEngine } from "@/hooks/useDjEngine";
@@ -34,6 +37,9 @@ import { Fader, SoftwareDeck, formatTime } from "./SoftwareDeck";
 import { MixerPanel } from "./MixerPanel";
 import { chooseSyncLeader } from "./sync-leader";
 import { manualLoopOut, snapToBeat } from "./loop-math";
+import { CROSSFADER_CURVE_OPTIONS, FADER_CURVES, FADER_CURVE_LABELS, nextDropouts, readCrossfaderCurve, readFaderCurve, type ColorFxEffect, type DropoutState } from "./mixer-math";
+import { readShortcutPreset, SHORTCUT_PRESETS, shortcutHelp } from "./keyboard-shortcuts";
+import { RotaryKnob } from "./RotaryKnob";
 import { setPlayPreference, usePlayPreferences } from "./play-preferences";
 import { readKeyNotation } from "@/services/dj-engine/musical-key";
 import { PanelToolbar, PANEL_DEFAULTS, type PanelId, type PanelVisibility } from "./PanelToolbar";
@@ -546,20 +552,6 @@ export function PlayWorkspace() {
     void run(() => client.seek(deck, Math.max(-60_000, Math.min(durationMs, current.positionMs + delta)), durationMs));
   }, [client, run, snapshot]);
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (event.defaultPrevented || document.querySelector('[role="dialog"]') || target?.closest("input,textarea,select,button,[role=slider],[contenteditable=true]")) return;
-      const select = ({ "1": "A", "2": "B", "3": "C", "4": "D" } as Record<string, DeckId>)[event.key];
-      if (select && visibleDecks.includes(select)) { setActiveDeck(select); return; }
-      if (event.repeat && event.code === "Space") return;
-      if (event.code === "Space") { event.preventDefault(); togglePlay(activeDeck); }
-      if (event.key.toLowerCase() === "q") seekRelative(activeDeck, -5_000);
-      if (event.key.toLowerCase() === "e") seekRelative(activeDeck, 5_000);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [activeDeck, seekRelative, togglePlay, visibleDecks]);
 
   const applyAudioOutput = async (device: string, microphone?: MicrophoneSettings, routing?: OutputRouting) => {
     if (junctionState.active()) throw new Error("Junction中の配信先はセッション設定から変更してください。");
@@ -724,6 +716,56 @@ export function PlayWorkspace() {
     [trackMetadata],
   );
 
+  // Color FX type is shared by every channel (Single mode). Switching it
+  // re-sends each channel's COLOR position with the new type.
+  const colorFxSelectable = capabilities.includes(DJ_ENGINE_CAPABILITIES.mixerColorFx);
+  const changeColorFx = (effect: ColorFxEffect) => {
+    setPlayPreference("colorFx", effect);
+    void run(async () => {
+      for (const deck of visibleDecks) {
+        const channel = client.getState().snapshot?.mixer.channels[deck];
+        const amount = channel?.colorFx?.amount ?? channel?.filter ?? 0;
+        if (Math.abs(amount) > 0.005) await client.setColorFx(deck, effect, amount);
+      }
+    });
+  };
+
+  // Crossfader curve (H-12): applied on every new session and on change.
+  const crossfaderCurveSupported = capabilities.includes(DJ_ENGINE_CAPABILITIES.mixerCrossfaderCurve);
+  const sessionId = snapshot?.sessionId;
+  useEffect(() => {
+    if (!connected || !crossfaderCurveSupported || junctionState.active()) return;
+    void client.setCrossfaderCurve(preferences.crossfaderCurve).catch((cause) => setCommandError(cause instanceof Error ? cause.message : String(cause)));
+  }, [client, connected, crossfaderCurveSupported, preferences.crossfaderCurve, sessionId]);
+
+  // Dropouts (audio callback overruns) since this session started. Hosts
+  // without engine.audioHealth hide the indicator.
+  const [dropouts, setDropouts] = useState<DropoutState | null>(null);
+  const [dropoutUnsupported, setDropoutUnsupported] = useState(false);
+  useEffect(() => {
+    if (!connected || !sessionId || dropoutUnsupported) return;
+    let live = true;
+    const poll = () => void client.audioHealth().then((health) => {
+      if (live && typeof health?.xruns === "number") setDropouts((old) => nextDropouts(old, sessionId, health.xruns!, Date.now()));
+    }).catch((cause) => {
+      const code = (cause as { code?: string } | null)?.code;
+      if (live && (code === "unsupported_operation" || code === "unknown_op")) setDropoutUnsupported(true);
+    });
+    poll();
+    const timer = window.setInterval(poll, 2000);
+    return () => { live = false; window.clearInterval(timer); };
+  }, [client, connected, dropoutUnsupported, sessionId]);
+  const recentDropout = Boolean(dropouts?.lastAt && Date.now() - dropouts.lastAt < 10_000);
+
+  // Channel meters while the mixer is open, on hosts that publish them (H-1).
+  const metersSupported = capabilities.includes(DJ_ENGINE_CAPABILITIES.meters);
+  useEffect(() => {
+    if (!connected || !metersSupported || !panels.mixer) return;
+    void client.subscribeMeters(true, 33).catch(() => undefined);
+    return () => { void client.subscribeMeters(false).catch(() => undefined); };
+  }, [client, connected, metersSupported, panels.mixer, sessionId]);
+  const headphoneSupported = capabilities.includes(DJ_ENGINE_CAPABILITIES.mixerHeadphone);
+
   // A toggle exists only when its panel has something to operate.
   const panelAvailable: Record<PanelId, boolean> = {
     fx: capabilities.includes(DJ_ENGINE_CAPABILITIES.mixerBeatFx),
@@ -810,8 +852,12 @@ export function PlayWorkspace() {
     if (session === client.getSessionId() && generation === client.getDeckGeneration(id) && client.getState().snapshot?.decks[id]?.syncEnabled) await client.setSync(id, true, id);
   });
 
+  // Shared by every on-screen deck; color pads remember the COLOR knob per deck.
+  const padFx = useMemo(() => createPadFxSender(client), [client]);
   const cueColorsFor = (id:DeckId) => Array.from({length:16},(_,slot)=>trackMetadata[(localTrackId(snapshot?.decks[id]?.track) ?? -1)]?.cue_points.find(cue=>cue.slot===slot)?.color??null);
-  const softwareDeck = (id: DeckId) => <SoftwareDeck key={id} id={id} deck={displayedDeck(id)} active={activeDeck === id} connected={connected}
+  const softwareDeck = (id: DeckId) => {
+    const fxSession = client.getSessionId(), fxGeneration = client.getDeckGeneration(id), fxLease = junctionLeaseKey();
+    return <SoftwareDeck key={id} id={id} deck={displayedDeck(id)} active={activeDeck === id} connected={connected}
     tailLock={tailLock(id)}
     cueColors={cueColorsFor(id)}
     onGridEdit={() => openGridEditor(id)}
@@ -823,7 +869,13 @@ export function PlayWorkspace() {
     onBeatLoop={(beats) => void run(() => client.beatLoop(id, beats))}
     onLoopEnable={(enabled) => void run(() => client.enableLoop(id, enabled))}
     onQuantize={(enabled) => void run(() => client.setQuantize(id, enabled))}
-    onFx={(effect, enabled, mix, depth, beats) => void run(() => client.setFx(id, effect, enabled, mix, depth, beats))}
+    fxContext={`${fxSession}:${fxGeneration}:${fxLease}`}
+    onPadFx={(slot, enabled) => {
+      // A release after a load or reconnect has nothing left to stop.
+      if (client.getSessionId() !== fxSession || client.getDeckGeneration(id) !== fxGeneration || junctionLeaseKey() !== fxLease) { padFx.forget(id); return Promise.resolve(); }
+      return padFx.send(id, slot, enabled);
+    }}
+    onFxError={(e) => setCommandError(e instanceof Error ? e.message : String(e))}
     onSaveLoop={() => void saveCurrentLoop(id)}
     savedLoops={trackMetadata[(localTrackId(snapshot?.decks[id]?.track) ?? -1)]?.loops}
     trackKey={trackKeys[(localTrackId(snapshot?.decks[id]?.track) ?? -1)]}
@@ -861,8 +913,9 @@ export function PlayWorkspace() {
     onReloop={() => void reloop(id)}
     onLoopSet={(startMs, endMs) => void setActiveLoop(id, startMs, endMs)}
     onLoop={(beats) => void run(() => client.getState().snapshot?.decks[id]?.loopRegion?.enabled ? client.enableLoop(id, false) : client.beatLoop(id, beats))} />;
+  };
 
-  const midi = useDdj1000({
+  const controllerActions: ControllerActions = {
     activate: (deck) => { setActiveDeck(deck); if (deck === "C" || deck === "D") changeDeckCount(4); },
     library: (action) => { window.dispatchEvent(new CustomEvent("plumdeck:controller-library", { detail: action })); },
     hotcue: editHotCue,
@@ -870,6 +923,16 @@ export function PlayWorkspace() {
     cuePoints: cuePoints.current,
     cueColors: {A:cueColorsFor("A"),B:cueColorsFor("B"),C:cueColorsFor("C"),D:cueColorsFor("D")},
     error: setCommandError,
+  };
+  const midi = useDdj1000(controllerActions);
+  usePlayKeyboard({
+    client, preset: preferences.keyboard, actions: controllerActions,
+    activeDeck, visibleDecks, togglePlay, seekRelative,
+    toggleLayout: () => setCompactDecks(value => {
+      localStorage.setItem("plumdeck.compactDecks", String(!value));
+      return !value;
+    }),
+    loop: { loopIn, loopOut: (id) => void loopOut(id), reloop: (id) => void reloop(id) },
   });
 
   return <PlayDragDropProvider onLoad={loadTrack}><main style={{'--wave-contrast':waveContrast,'--wave-grayscale':waveMonochrome?1:0} as CSSProperties} className={cn("dj-workspace", expandedPair&&"dj-workspace--wave-expanded", compactDecks && "dj-workspace--compact", deckCount === 4 && "dj-workspace--four", waveformLayout === "vertical" && "dj-workspace--vertical")}>
@@ -881,12 +944,19 @@ export function PlayWorkspace() {
       <details className="dj-wave-settings"><summary>表示設定</summary><div>
         <label>波形コントラスト <input type="range" min="1" max="2" step="0.1" value={waveContrast} onChange={event=>{setWaveContrast(Number(event.target.value));localStorage.setItem('plumdeck.waveContrast',event.target.value);}} /></label>
         <label><input type="checkbox" checked={waveMonochrome} onChange={event=>{setWaveMonochrome(event.target.checked);localStorage.setItem('plumdeck.waveMonochrome',String(event.target.checked));}} />波形を単色で表示</label>
+        <label>チャンネルフェーダーのカーブ <select aria-label="チャンネルフェーダーのカーブ" value={preferences.faderCurve} onChange={event => setPlayPreference("faderCurve", readFaderCurve(event.target.value))}>
+          {FADER_CURVES.map(curve => <option key={curve} value={curve}>{FADER_CURVE_LABELS[curve]}</option>)}</select></label>
         <label>キー表記 <select aria-label="キー表記" value={preferences.keyNotation} onChange={event => setPlayPreference("keyNotation", readKeyNotation(event.target.value))}>
           <option value="camelot">Camelot（8A）</option><option value="classic">Classic（Am）</option></select></label>
+        <label>キーボード配列 <select aria-label="キーボード配列" value={preferences.keyboard} onChange={event => setPlayPreference("keyboard", readShortcutPreset(event.target.value))}>
+          {SHORTCUT_PRESETS.map(preset => <option key={preset.id} value={preset.id}>{preset.label}</option>)}</select></label>
         <label title="音より波形が先行する場合は増やします。">波形の表示遅延（ms） <input type="number" min="-50" max="500" step="1" value={waveDelay} onChange={event=>{const value=Math.max(-50,Math.min(500,Number(event.target.value)||0));setWaveDelay(value);localStorage.setItem('plumdeck.waveDelay',String(value));}} /></label>
       </div></details>
       <div className="dj-segmented" aria-label="波形レイアウト">{(["horizontal", "vertical"] as const).map((layout) => <button key={layout} title={layout === "horizontal" ? "横波形（デッキ上部に重ねて表示）" : "縦波形（デッキ中央に並べて表示）"} aria-label={layout === "horizontal" ? "横波形" : "縦波形（デッキ中央）"} aria-pressed={waveformLayout === layout} className={waveformLayout === layout ? "is-on" : ""} onClick={() => { setWaveformLayout(layout); localStorage.setItem("plumdeck.waveformLayout", layout); }}>{layout === "horizontal" ? <Rows3 /> : <Columns3 />}</button>)}</div>
       <div className="dj-engine-status"><i className={connected && snapshot?.audio.applied ? "is-connected" : ""} /><span>{connected ? snapshot?.engine.simulated ? "SIMULATOR · 音声出力なし" : snapshot?.audio.applied ? "AUDIO CONNECTED" : "音声出力を確認中" : busy ? "音声エンジンを起動中…" : "AUDIO OFFLINE"}</span></div>
+      {connected && dropouts && !dropoutUnsupported && <span className={cn("dj-dropout", dropouts.count > 0 && "has-dropouts", recentDropout && "is-recent")} role="status"
+        title={dropouts.count ? `このセッションで音切れ（オーディオ処理の遅れ）が ${dropouts.count} 回ありました。バッファを大きくするか、他のアプリを閉じてください。` : "音切れは起きていません"}>
+        {dropouts.count ? `DROPOUT ${dropouts.count}` : "DROPOUT 0"}</span>}
       <div className="dj-global-actions">
         <details className="dj-midi-settings">
           <summary className="dj-button" title={midi.status.error ?? "DDJ-1000 コントローラー設定"}>
@@ -920,9 +990,24 @@ export function PlayWorkspace() {
       </div>
     </header>
     {(error || commandError || snapshot?.recording?.error) && <div role="alert" className="dj-error"><AlertTriangle />{commandError || error || snapshot?.recording?.error}</div>}
-    {shortcuts && <div className="dj-shortcuts"><b>1–4</b> デッキ選択　<b>Space</b> 再生 / 一時停止　<b>Q / E</b> 5秒戻る / 進む　<b>ドラッグ</b> 曲を波形またはデッキへ　<b>波形ドラッグ</b> スクラブ</div>}
+    {shortcuts && <div className="dj-shortcuts" role="region" aria-label="キーボード操作">
+      <label>配列 <select aria-label="キーボード配列" value={preferences.keyboard} onChange={event => setPlayPreference("keyboard", readShortcutPreset(event.target.value))}>
+        {SHORTCUT_PRESETS.map(preset => <option key={preset.id} value={preset.id}>{preset.label}</option>)}</select></label>
+      {(() => {
+        const rows = shortcutHelp(preferences.keyboard);
+        const decks = rows.filter(row => Array.isArray(row.keys)), others = rows.filter(row => !Array.isArray(row.keys));
+        return <>
+          {[decks.slice(0, Math.ceil(decks.length / 2)), decks.slice(Math.ceil(decks.length / 2))].filter(part => part.length).map((part, index) =>
+            <table key={index}><thead><tr><th>操作</th><th>Deck 1</th><th>Deck 2</th></tr></thead>
+              <tbody>{part.map(row => <tr key={row.label}><td>{row.label}</td>{(row.keys as [string | null, string | null]).map((key, side) => <td key={side}><kbd>{key ?? "—"}</kbd></td>)}</tr>)}</tbody></table>)}
+          <dl>{others.map(row => <div key={row.label}><dt><kbd>{row.keys as string}</kbd></dt><dd>{row.label}</dd></div>)}
+            <div><dt>ドラッグ</dt><dd>曲を波形またはデッキへ</dd></div><div><dt>波形ドラッグ</dt><dd>スクラブ</dd></div></dl>
+        </>;
+      })()}
+      <small>文字入力中は無効です。</small>
+    </div>}
     {panels.fx && panelAvailable.fx && <BeatFxPanel state={snapshot?.mixer.beatFx} decks={visibleDecks} releaseSupported={capabilities.includes(DJ_ENGINE_CAPABILITIES.mixerBeatFxRelease)}
-      micAvailable={Boolean(snapshot?.audio.microphone?.available)} samplerAvailable={capabilities.includes(DJ_ENGINE_CAPABILITIES.sampler)}
+      micAvailable={Boolean(snapshot?.audio.microphone?.available)} samplerAvailable={capabilities.includes(DJ_ENGINE_CAPABILITIES.sampler)} capabilities={capabilities}
       disabledReason={!connected ? "未接続" : !capabilities.includes(DJ_ENGINE_CAPABILITIES.mixerBeatFx) ? "この音声エンジンは BEAT FX 非対応" : undefined}
       send={(params) => client.setBeatFx(params)} />}
     {panels.sampler && panelAvailable.sampler && <SamplerPanel enabled={connected && capabilities.includes(DJ_ENGINE_CAPABILITIES.sampler)} cueAvailable={capabilities.includes(DJ_ENGINE_CAPABILITIES.mixerPfl)} />}
@@ -949,12 +1034,16 @@ export function PlayWorkspace() {
           {waveformLayout === "vertical" && <div className="dj-center-waves" aria-label="中央縦波形">{lane(left, "vertical")}{lane(right, "vertical")}</div>}
           {panels.mixer && <MixerPanel decks={[left, right]}
             channelState={(deck) => snapshot?.mixer.channels[deck]}
+            colorFx={preferences.colorFx} colorFxSelectable={colorFxSelectable} faderCurve={preferences.faderCurve}
+            meters={metersSupported ? state.meters : null}
+            onColorFx={changeColorFx}
             handlers={(deck) => ({
               onTrim: (gain) => void run(() => client.setTrim(deck, gain)),
               onEq: (band, gain) => void run(() => client.setEq(deck, band, gain)),
-              onFilter: (value) => void run(() => client.setFilter(deck, value)),
+              onColor: (amount) => void run(() => colorFxSelectable ? client.setColorFx(deck, preferences.colorFx, amount) : client.setFilter(deck, amount)),
               onGain: (gain) => void run(() => client.setChannelGain(deck, gain)),
               onPfl: (enabled) => void run(() => client.setPfl(deck, enabled)),
+              onOrientation: (orientation) => void run(() => client.setOrientation(deck, orientation)),
             })}
             reason={(deck, capability, feature, controller) =>
               capability !== "mixer.pfl" && tailLock(deck) ? tailLock(deck)
@@ -977,7 +1066,16 @@ export function PlayWorkspace() {
         title={snapshot.audio.microphone.deviceId ? "マイクをMasterへ出力 / ミュート" : "オーディオ設定でマイクを選択してください"}
         onClick={() => void run(async () => { const applied = await client.setMicrophone({ enabled: !client.getState().snapshot?.audio.microphone?.enabled }); if (applied.microphone) saveMicrophoneSettings(applied.microphone); })}>
         <Mic />MIC {snapshot.audio.microphone.enabled ? "ON" : "OFF"}</button>}
-      <div className="dj-crossfader"><span>A{deckCount === 4 ? "/C" : ""}</span><Fader label="クロスフェーダー" min={-1} max={1} value={snapshot?.mixer.crossfader ?? 0} disabled={Boolean(outgoing) || !connected || !capabilities.includes("mixer.basic") && !capabilities.includes("mixer.crossfader")} onChange={(value) => void run(() => client.setCrossfader(value))} /><span>B{deckCount === 4 ? "/D" : ""}</span></div>
+      <div className="dj-crossfader"><span>A{deckCount === 4 ? "/C" : ""}</span><Fader label="クロスフェーダー" min={-1} max={1} value={snapshot?.mixer.crossfader ?? 0} disabled={Boolean(outgoing) || !connected || !capabilities.includes("mixer.basic") && !capabilities.includes("mixer.crossfader")} onChange={(value) => void run(() => client.setCrossfader(value))} /><span>B{deckCount === 4 ? "/D" : ""}</span>
+        {crossfaderCurveSupported && <select className="dj-crossfader-curve" aria-label="クロスフェーダーのカーブ" value={preferences.crossfaderCurve} disabled={Boolean(outgoing) || !connected}
+          title={CROSSFADER_CURVE_OPTIONS.find(option => option.curve === preferences.crossfaderCurve)?.title} onChange={(event) => setPlayPreference("crossfaderCurve", readCrossfaderCurve(event.target.value))}>
+          {CROSSFADER_CURVE_OPTIONS.map(option => <option key={option.curve} value={option.curve}>{option.label}</option>)}</select>}</div>
+      {headphoneSupported && <div className="dj-headphone" role="group" aria-label="ヘッドホン">
+        <RotaryKnob label="HP MIX" min={-1} max={1} step={.02} fineStep={.005} defaultValue={0} value={snapshot?.mixer.headphoneMix ?? 0} disabled={!connected}
+          valueText={(value) => Math.abs(value) < .01 ? "CUE＝MASTER" : value < 0 ? `CUE ${Math.round(-value * 100)}%` : `MASTER ${Math.round(value * 100)}%`} onChange={(value) => void run(() => client.setHeadphoneMix(value))} />
+        <RotaryKnob label="HP LEVEL" min={0} max={1} step={.02} fineStep={.005} defaultValue={.5} value={snapshot?.mixer.headphoneGain ?? .5} disabled={!connected}
+          valueText={(value) => `${Math.round(value * 100)}%`} onChange={(value) => void run(() => client.setHeadphoneGain(value))} />
+      </div>}
       <span className={cn("dj-master-note", snapshot?.recording?.active && "is-recording")}>{snapshot?.recording?.active ? `● REC ${formatTime(snapshot.recording.elapsedMs)}` : `DECK ${activeDeck} SELECTED`}</span>
     </div>
     <PlayLibrary activeDeck={activeDeck} seedTrackId={Number.isFinite(seed) && seed > 0 ? seed : null} onLoad={loadTrack} cueOverrides={listCueOverrides} cueRevision={cueRevision} cueImportControl={<RekordboxCueImportButton onImport={importRekordboxCues} />} />

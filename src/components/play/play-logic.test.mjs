@@ -2,10 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { beatLoopPress, formatBeats, loopBeats, manualLoopOut, resizeLoop, snapToBeat, stepBeats, LOOP_BEATS_RANGE, LOOP_BEATS_RANGE_EXTENDED } from "./loop-math.ts";
 import { formatBpm, formatTempoPercent, stepTempo, tempoStep, TEMPO_RANGES } from "./tempo-math.ts";
-import { faderGain, faderPosition, formatColorAmount, formatDb, FADER_CURVES, isKilled } from "./mixer-math.ts";
-import { resolveShortcut, shortcutTable, isMomentary } from "./keyboard-shortcuts.ts";
+import { faderGain, faderPosition, formatColorAmount, formatDb, FADER_CURVES, isKilled, nextDropouts, readCrossfaderCurve } from "./mixer-math.ts";
+import { beatFxMaxBeats, beatFxMinBeats, beatFxHasBeats, BEAT_FX_MENU } from "../../services/midi/beat-fx.ts";
+import { readFileSync, readdirSync } from "node:fs";
+import { readShortcutPreset, resolveShortcut, shortcutHelp, shortcutTable, isMomentary } from "./keyboard-shortcuts.ts";
 import { currentKey, formatKey, formatKeyDelta, formatLibraryKey, parseKey, shiftKey } from "../../services/dj-engine/musical-key.ts";
-import { padFxParams, padPreset, INSERT_EFFECTS } from "../../services/midi/pad-presets.ts";
+import { padFxParams, padPreset, INSERT_EFFECTS, PAD_FX_EXTENDED } from "../../services/midi/pad-presets.ts";
+import { createPadFxSender, padFxGroup, padFxSounding } from "../../services/midi/pad-fx-send.ts";
+
+/** Capabilities the Mixxx host declares today that PAD FX look at. */
+const CURRENT_HOST = ["mixer.fx", "mixer.filter", "mixer.colorfx"];
 import { pressPad, releasePad, emptyPadFxStack } from "./pad-fx-stack.ts";
 import { chooseSyncLeader } from "./sync-leader.ts";
 
@@ -40,10 +46,12 @@ test("tempo ± follows the range resolution and stays inside the range", () => {
 
 test("beat fractions are shown as fractions", () => {
   assert.equal(formatBeats(0.5), "1/2");
+  assert.equal(formatBeats(0.75), "3/4");
   assert.equal(formatBeats(1 / 64), "1/64");
   assert.equal(formatBeats(0.125), "1/8");
   assert.equal(formatBeats(16), "16");
-  assert.equal(formatBeats(0.75), "0.75");
+  assert.equal(formatBeats(0.3), "3/10");
+  assert.equal(formatBeats(0.123456), "0.1235");
 });
 
 test("loop 1/2X and 2X keep the IN point", () => {
@@ -149,20 +157,82 @@ test("Performance 1 table maps every key to its op", () => {
   assert.equal(new Set(codes).size, codes.length, "no key is bound twice");
 });
 
+test("Performance 1 is the default preset; help pairs Deck 1 and Deck 2 keys", () => {
+  assert.equal(readShortcutPreset(null), "performance1");
+  assert.equal(readShortcutPreset("bogus"), "performance1");
+  assert.equal(readShortcutPreset("classic"), "classic");
+  const help = shortcutHelp("performance1");
+  assert.deepEqual(help.find((row) => row.label === "BEAT SYNC")?.keys, ["Q", "Y"]);
+  assert.deepEqual(help.find((row) => row.label === "HOT CUE A")?.keys, ["1", "6"]);
+  assert.deepEqual(help.find((row) => row.label === "RELOOP / EXIT")?.keys, ["G", ";"]);
+  assert.equal(help.find((row) => row.label === "レイアウト切替（ブラウザを広く）")?.keys, "Space");
+  assert.ok(shortcutHelp("classic").every((row) => !Array.isArray(row.keys)));
+});
+
 test("classic preset keeps the previous keys", () => {
   assert.deepEqual(resolveShortcut("classic", { code: "Digit2" }), { kind: "selectDeck", deck: 1 });
   assert.deepEqual(resolveShortcut("classic", { code: "Space" }), { kind: "togglePlayActive" });
   assert.deepEqual(resolveShortcut("classic", { code: "KeyQ" }), { kind: "seekActive", deltaMs: -5000 });
 });
 
-test("PAD FX presets: no tremolo, inserts at full wet, one source for mouse and MIDI", () => {
-  for (const mode of [1, 5]) for (let slot = 0; slot < 16; slot++) {
-    const preset = padPreset(mode, slot);
-    assert.notEqual(preset.effect, "tremolo");
+test("PAD FX presets: no sine tremolo, inserts at full wet, one source for mouse and MIDI", () => {
+  for (const caps of [[], CURRENT_HOST, [...CURRENT_HOST, PAD_FX_EXTENDED]]) for (const mode of [1, 5]) for (let slot = 0; slot < 16; slot++) {
+    const preset = padPreset(mode, slot, caps);
+    for (const name of preset.requires ?? []) assert.ok(caps.includes(name), `${mode}:${slot} needs ${name}`);
+    if (preset.kind !== "beat") continue;
+    // The generic tremolo is a near-silent sine; only the extended host turns it into the TRANS gate.
+    if (!caps.includes(PAD_FX_EXTENDED)) assert.notEqual(preset.effect, "tremolo");
     if (INSERT_EFFECTS.includes(preset.effect)) assert.equal(padFxParams(preset, false).mix, 1);
     assert.equal(padFxParams(preset, false).beats, undefined, "no beats without the capability");
+    assert.equal(padFxParams(preset, false).params, undefined, "no params without the capability");
     if (preset.beats) assert.equal(padFxParams(preset, true).beats, preset.beats);
   }
+});
+
+test("PAD FX banks follow the redesign once the host declares the slots", () => {
+  const extended = [...CURRENT_HOST, PAD_FX_EXTENDED];
+  const names = (mode, caps) => Array.from({ length: 16 }, (_, slot) => {
+    const preset = padPreset(mode, slot, caps);
+    return `${preset.label}${preset.beats ? ` ${formatBeats(preset.beats)}` : preset.variant ? ` ${preset.variant}` : ""}`;
+  });
+  assert.deepEqual(names(1, extended).slice(0, 7), ["ECHO 1/2", "ECHO 3/4", "ROLL 1/4", "ROLL 1/8", "TRANS 1/4", "TRANS 1/8", "FILTER HPF"]);
+  assert.deepEqual(names(1, extended).slice(8, 15), ["ECHO 1", "SPIRAL 1/2", "SLIP ROLL 1/8", "SLIP ROLL 1/16", "REVERB 60%", "FLANGER 16", "FILTER LPF"]);
+  assert.deepEqual(names(5, extended).slice(0, 7), ["ECHO 1/4", "PING PONG 1/2", "ROLL 1/16", "TRANS 1/16", "NOISE", "CRUSH", "PITCH +"]);
+  assert.equal(padPreset(5, 13, extended).label, "DELAY");
+  assert.deepEqual(padFxParams(padPreset(5, 13, extended), true).params, { feedback_amount: 0 });
+  // Today's host: color pads work (Color FX), processor pads keep a working fallback.
+  assert.equal(padPreset(1, 6, CURRENT_HOST).kind, "color");
+  assert.equal(padPreset(1, 2, CURRENT_HOST).effect, "reverb");
+  // Without Color FX either, the color pads fall back too.
+  assert.equal(padPreset(1, 6, []).kind, "beat");
+});
+
+test("color pads borrow the COLOR FX and give the knob back after the last release", async () => {
+  const calls = [];
+  const channel = { deck: "A", gain: 1, eqLow: 1, eqMid: 1, eqHigh: 1, pfl: false, filter: 0.2, colorFx: { effect: "echo", amount: 0.2 } };
+  const snapshot = { engine: { capabilities: CURRENT_HOST }, mixer: { channels: { A: channel } } };
+  const client = {
+    getState: () => ({ snapshot }),
+    setFx: async (...args) => { calls.push(["fx", ...args.slice(0, 3)]); },
+    setColorFx: async (deck, effect, amount) => { calls.push(["color", deck, effect, amount]); channel.colorFx = { effect, amount }; },
+    setFilter: async (deck, value) => { calls.push(["filter", deck, value]); },
+  };
+  const sender = createPadFxSender(client);
+  const hpf = padPreset(1, 6, CURRENT_HOST), noise = padPreset(5, 4, CURRENT_HOST);
+  assert.equal(padFxGroup(hpf), "color");
+  await sender.send("A", hpf, true);
+  await sender.send("A", noise, true);
+  assert.ok(padFxSounding(noise, channel));
+  await sender.send("A", hpf, false);
+  assert.deepEqual(calls, [["color", "A", "filter", 0.6], ["color", "A", "whitenoise", 0.5], ["color", "A", "echo", 0.2]]);
+  const echo = padPreset(1, 0, CURRENT_HOST);
+  assert.equal(padFxGroup(echo), "chain");
+  await sender.send("A", echo, true);
+  assert.deepEqual(calls.at(-1), ["fx", "A", "echo", true]);
+  // A host with FILTER only drives the filter knob.
+  const filterOnly = createPadFxSender({ ...client, getState: () => ({ snapshot: { ...snapshot, engine: { capabilities: ["mixer.filter"] } } }) });
+  await filterOnly.send("A", padPreset(1, 14, ["mixer.filter"]), true);
+  assert.deepEqual(calls.at(-1), ["filter", "A", -0.6]);
 });
 
 test("PAD FX presses stack: last pressed wins, release falls back to a held pad", () => {
@@ -189,4 +259,42 @@ test("sync leader: MASTER first, then a playing deck, never an empty deck", () =
   assert.equal(chooseSyncLeader("A", ["A", "B", "C", "D"], decks({ D: { track: {}, status: "paused", syncLeader: "D", syncEnabled: true } })), "D");
   assert.equal(chooseSyncLeader("C", ["A", "B", "C", "D"], decks({})), "A");
   assert.equal(chooseSyncLeader("A", ["A", "B"], decks({})), undefined);
+});
+
+test("crossfader curve and dropout counting", () => {
+  assert.equal(readCrossfaderCurve(null), "standard");
+  assert.equal(readCrossfaderCurve("sharp"), "sharp");
+  assert.equal(readCrossfaderCurve("steep"), "standard");
+  let state = nextDropouts(null, "s1", 7, 1000);
+  assert.deepEqual(state, { session: "s1", baseline: 7, count: 0, lastAt: null }, "counts start at the first reading");
+  state = nextDropouts(state, "s1", 7, 2000);
+  assert.equal(state.lastAt, null);
+  state = nextDropouts(state, "s1", 9, 3000);
+  assert.deepEqual([state.count, state.lastAt], [2, 3000]);
+  state = nextDropouts(state, "s1", 9, 4000);
+  assert.deepEqual([state.count, state.lastAt], [2, 3000], "no new dropout keeps the last time");
+  assert.equal(nextDropouts(state, "s2", 9, 5000).count, 0, "a new session starts over");
+  assert.equal(nextDropouts(state, "s1", 1, 5000).count, 0, "a restarted host starts over");
+});
+
+test("BEAT FX beat range follows the host and hides MOBIUS", () => {
+  assert.equal(beatFxMaxBeats("echo"), 2);
+  assert.equal(beatFxMinBeats("echo"), 1 / 8);
+  assert.equal(beatFxMaxBeats("echo", ["mixer.beatfx.range.v2"]), 16);
+  assert.equal(beatFxMinBeats("roll", ["mixer.beatfx.range.v2"]), 1 / 16);
+  assert.equal(beatFxHasBeats("reverb"), false);
+  assert.equal(beatFxHasBeats("pitchshift"), false);
+  assert.ok(BEAT_FX_MENU.every(([effect]) => !effect.startsWith("mobius")));
+});
+
+test("Play styles keep text at 10px or larger", () => {
+  const dir = new URL(".", import.meta.url);
+  const small = [];
+  for (const file of readdirSync(dir).filter((name) => name.endsWith(".css"))) {
+    readFileSync(new URL(file, dir), "utf8").split("\n").forEach((line, index) => {
+      for (const match of line.matchAll(/font-size:\s*([\d.]+)px/g)) if (Number(match[1]) < 10) small.push(`${file}:${index + 1} ${match[0]}`);
+      for (const match of line.matchAll(/font:[^;]*?\b([\d.]+)px/g)) if (Number(match[1]) < 10) small.push(`${file}:${index + 1} ${match[0]}`);
+    });
+  }
+  assert.deepEqual(small, []);
 });

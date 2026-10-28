@@ -74,3 +74,23 @@ export function formatColorAmount(effect: ColorFxEffect, amount: number): string
   if (effect === "filter") return `${amount > 0 ? "HPF" : "LPF"} ${percent}`;
   return `${amount > 0 ? "+" : "−"}${percent}`;
 }
+
+/** Crossfader curves the host maps onto its mixer profile (H-12). */
+export const CROSSFADER_CURVE_OPTIONS = [
+  { curve: "smooth", label: "なめらか", title: "ロングミックス向け：中央でも両方が大きく残ります" },
+  { curve: "standard", label: "標準", title: "中央で両方が少し下がる標準のカーブ" },
+  { curve: "sharp", label: "カット", title: "スクラッチ向け：端を少し動かしただけで立ち上がります" },
+] as const;
+export type CrossfaderCurveOption = (typeof CROSSFADER_CURVE_OPTIONS)[number]["curve"];
+export const CROSSFADER_CURVE_STORAGE = "plumdeck.crossfaderCurve";
+export function readCrossfaderCurve(value: string | null | undefined): CrossfaderCurveOption {
+  return CROSSFADER_CURVE_OPTIONS.some((entry) => entry.curve === value) ? value as CrossfaderCurveOption : "standard";
+}
+
+/** Audio dropouts: xruns counted since the first reading of this session. */
+export type DropoutState = { session: string; baseline: number; count: number; lastAt: number | null };
+export function nextDropouts(previous: DropoutState | null, session: string, xruns: number, now: number): DropoutState {
+  if (!previous || previous.session !== session || xruns < previous.baseline) return { session, baseline: xruns, count: 0, lastAt: null };
+  const count = xruns - previous.baseline;
+  return { session, baseline: previous.baseline, count, lastAt: count > previous.count ? now : previous.lastAt };
+}
