@@ -1,0 +1,23 @@
+[package]
+name = "plumdeck-decode"
+version = "0.1.0"
+description = "Header probing and gapless-aware audio decoding shared by analysis, media tools and the audio engine"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# No DuckDB here: this crate is shared with the Tauri side and the engine and
+# must not pull a second DuckDB build into the workspace.
+[dependencies]
+# symphonia and all its sub-crates are MPL-2.0. Its own gapless trimming is
+# disabled at runtime; trimming comes from this crate's probe (spec.rs).
+# opt-simd pulls rustfft (MIT OR Apache-2.0).
+symphonia = { version = "=0.6.1", default-features = false, features = [
+    "mp3", "aac", "alac", "flac", "pcm", "vorbis",
+    "isomp4", "wav", "aiff", "ogg", "caf",
+    "id3v1", "id3v2", "ape", "opt-simd",
+] }
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "=3.23.0"
