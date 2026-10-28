@@ -22,12 +22,14 @@ MANUAL, REKORDBOX, OWN = "manual", "rekordbox", "own"
 FIELDS = ("bpm", "key")
 
 # Owner decision: rekordbox replaces plumdeck's own key detection only after a
-# replay evaluation shows no regression. The settings row overrides this default.
-# Replay over 600 HISTORY transitions x emotional/bright/wordplay (BPM synced in
-# both arms): pooled MRR .0453 -> .0455, hard@5 .054 -> .047; emotional alone
-# dips (.053 -> .050, CI includes 0) while bright gains (.083 -> .087).
+# replay evaluation shows no regression for emotional, bright and wordplay. The
+# rule fixed before the run (no MRR or hit@5 drop for emotional or bright) fails:
+# over 600 HISTORY transitions (BPM synced in both arms) emotional dips (MRR
+# .053 -> .050, hit@5 .077 -> .072), bright gains (MRR .083 -> .087), wordplay
+# has no signal and pooled hit@5 drops (.0650 -> .0633). So the default stays
+# off until the owner decides; the settings row overrides it.
 KEY_SOURCE_SETTING = "rekordbox_key_source"
-KEY_SOURCE_DEFAULT = True
+KEY_SOURCE_DEFAULT = False
 
 
 @dataclass(frozen=True)
