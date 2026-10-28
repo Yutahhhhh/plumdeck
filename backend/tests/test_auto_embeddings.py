@@ -220,19 +220,38 @@ def test_enqueue_at_previous_worker_exit_is_not_stranded(session, tmp_path, monk
 def test_reanalysis_keeps_the_embedding_unless_the_audio_changed(session, tmp_path):
     from infra.repositories.ingestion_repository import IngestionRepository
     ids = add_tracks(session, 1)
-    old = TrackEmbedding(track_id=ids[0], embedding_json=json.dumps([.1] * 200), model_name=EMBEDDING_MODEL)
-    session.add(old)
+    audio = tmp_path / "0.mp3"
+    audio.write_bytes(b"first audio")
+    track = session.get(Track, ids[0])
+    track.filepath = str(audio)
+    session.add(track)
     session.commit()
+
+    def embed():
+        session.merge(TrackEmbedding(track_id=ids[0], embedding_json=json.dumps([.1] * 200), model_name=EMBEDDING_MODEL))
+        session.commit()
+    embed()
     repository = IngestionRepository()
-    repository.save_track_result(session, {"filepath": "/auto/0.mp3", "title": "Renamed"})
+    repository.save_track_result(session, {"filepath": str(audio), "title": "Renamed"})
     assert session.get(TrackEmbedding, ids[0]) is not None
-    analysed = {"filepath": "/auto/0.mp3", "title": "Renamed", "bpm": 129,
+    analysed = {"filepath": str(audio), "title": "Renamed", "bpm": 129,
                 "duration": 180.4, "energy": .8, "danceability": .7, "brightness": .6, "noisiness": .3,
                 "features_extra": {"analysis_components": {"timbre": "timbre-v1"}}}
-    # Same audio (tags or lyrics rewritten, or an incomplete row repaired).
+    # No identity was recorded yet: nothing proves the vector belongs to this file.
+    repository.save_track_result(session, analysed)
+    assert session.get(TrackEmbedding, ids[0]) is None
+    embed()
+    # Same audio, proven by the hash this save recorded.
     repository.save_track_result(session, analysed)
     assert session.get(TrackEmbedding, ids[0]) is not None
-    # The file now holds different audio: the old vector must not be compared.
+    # The file now holds different audio of the same length: the old vector must not be compared.
+    audio.write_bytes(b"other audio")
+    repository.save_track_result(session, analysed)
+    assert session.get(TrackEmbedding, ids[0]) is None
+    embed()
+    repository.save_track_result(session, analysed)
+    assert session.get(TrackEmbedding, ids[0]) is not None
+    # Different duration: different audio.
     repository.save_track_result(session, {**analysed, "duration": 241.0})
     assert session.get(TrackEmbedding, ids[0]) is None
     session.rollback()

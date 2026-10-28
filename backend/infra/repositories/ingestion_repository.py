@@ -1,3 +1,4 @@
+import hashlib
 import json
 import math
 from typing import Dict, Any
@@ -14,6 +15,20 @@ import infra.database.connection as db_connection
 # A re-analysed duration further than this from the stored one means the file
 # now holds different audio.
 AUDIO_CHANGE_SECONDS = 1.0
+# features_extra key holding the sha256 of the file an analysis was saved from.
+AUDIO_SHA256 = "audio_sha256"
+
+
+def file_sha256(filepath: str) -> str | None:
+    """sha256 of the file's bytes, or None when it cannot be read."""
+    digest = hashlib.sha256()
+    try:
+        with open(filepath, "rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.hexdigest()
 
 class IngestionRepository:
     def __init__(self):
@@ -24,6 +39,9 @@ class IngestionRepository:
         extras = result.get("features_extra", {})
         sources: Dict[str, str] = {}
         own: Dict[str, Any] = {}
+        is_analysis = isinstance(extras, dict) and "analysis_components" in extras
+        # Hash before the first query so no transaction is open while reading.
+        audio_hash = file_sha256(filepath) if is_analysis else None
         # PRAGMA foreign_keys は DuckDB で未サポートのため削除
         # 代わりに no_autoflush で ORM レベルの整合性チェックタイミングを調整
         with session.no_autoflush:
@@ -35,7 +53,9 @@ class IngestionRepository:
             # A protected row only takes the light timbre when its own is missing.
             repair_timbre = bool(preserve_full_analysis
                                  and not has_measured_timbre(existing_track, existing_fx))
-            audio_changed = self._audio_changed(existing_track, result)
+            # A protected row keeps its analysis, so it has nothing to drop.
+            audio_changed = not preserve_full_analysis and not self._same_audio(
+                session, existing_track, existing_fx, result, audio_hash)
             # Only analysis results resolve BPM/key; tag and lyrics updates keep them.
             if isinstance(extras, dict) and "analysis_components" in extras and not preserve_full_analysis:
                 result, sources, own = self._settle_values(session, result, existing_track, existing_fx)
@@ -116,6 +136,8 @@ class IngestionRepository:
                     fx = value_sources.with_sources(fx, recorded)
                 if existing_track and not audio_changed:
                     fx = self._keep_same_audio_components(fx, existing_fx, extras)
+                if audio_hash:
+                    fx[AUDIO_SHA256] = audio_hash
                 for field in value_sources.FIELDS:
                     kept = f"analysis_{field}"
                     if own.get(field) is not None:
@@ -184,18 +206,32 @@ class IngestionRepository:
             return int(track_id)
 
     @staticmethod
-    def _audio_changed(existing_track, result: Dict[str, Any]) -> bool:
-        """Whether an analysis result describes different audio than the row.
-
-        Duration is the cheap, tag-independent signal (size and mtime change
-        when tags or lyrics are written). Unknown durations count as unchanged.
-        """
-        if existing_track is None or "analysis_components" not in (result.get("features_extra") or {}):
-            return False
+    def _duration_changed(existing_track, result: Dict[str, Any]) -> bool:
+        """Whether the durations alone prove different audio (unknown: no)."""
         before, after = getattr(existing_track, "duration", None), result.get("duration")
         valid = all(isinstance(value, (int, float)) and not isinstance(value, bool)
                     and math.isfinite(value) and value > 0 for value in (before, after))
         return bool(valid and abs(before - after) > AUDIO_CHANGE_SECONDS)
+
+    @classmethod
+    def _same_audio(cls, session: Session, existing_track, existing_fx, result: Dict[str, Any],
+                    audio_hash: str | None) -> bool:
+        """Whether derived data of the row (embedding, kept grid) may be
+        retained for this result. Saves that are not analysis results do not
+        touch it. An analysis result needs proof: the file's sha256 must equal
+        the one recorded at the last analysis save or by media verification.
+        Without a recorded or readable identity nothing is retained (a
+        rewritten tag also counts as changed; the data is recomputed)."""
+        if existing_track is None or "analysis_components" not in (result.get("features_extra") or {}):
+            return True
+        if cls._duration_changed(existing_track, result) or not audio_hash:
+            return False
+        recorded = existing_fx.get(AUDIO_SHA256) if isinstance(existing_fx, dict) else None
+        if recorded == audio_hash:
+            return True
+        media = session.exec(text("SELECT sha256 FROM track_media WHERE track_id=:id"),
+                             params={"id": existing_track.id}).first()
+        return bool(media and media[0] == audio_hash)
 
     @staticmethod
     def _keep_same_audio_components(fx: Dict[str, Any], existing_fx: Dict[str, Any], extras) -> Dict[str, Any]:

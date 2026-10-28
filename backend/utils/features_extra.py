@@ -20,6 +20,9 @@ PERSISTED_KEYS = (
     "bpm_confidence",
     "key_strength",
     "bpm_raw",
+    # sha256 of the analysed file: re-analysis keeps derived data only when
+    # it still matches.
+    "audio_sha256",
 )
 
 
