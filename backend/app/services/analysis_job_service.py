@@ -22,7 +22,7 @@ from infra.database import connection
 from infra.repositories.analysis_job_repository import AnalysisJobRepository
 from app.services.analysis_coordinator import analysis_coordinator
 from utils.features_extra import persisted_features_extra
-from utils.ingestion import completed_analysis_condition
+from utils.ingestion import completed_analysis_condition, pending_embedding_ids
 
 # Same per-track deadline as AnalysisExecutor.
 BACKGROUND_TASK_TIMEOUT = 570
@@ -156,6 +156,18 @@ class AnalysisJobService:
             job_id = self.repository.create(config, tracks, status="queued")
             self._launch_next_queued()
             return self.repository.get(job_id)
+
+    def enqueue_missing_embeddings(self):
+        """Startup backfill: analyzed tracks without a vector of the current
+        model, e.g. after an enqueue that failed. One projected query; queued
+        or running items are not added twice. Never raises."""
+        try:
+            with Session(self.engine) as session:
+                ids = session.exec(pending_embedding_ids()).all()
+            return self.enqueue_embedding(track_ids=list(ids)) if ids else {"status": "idle"}
+        except Exception as error:
+            print(f"WARNING: Embedding backfill was not queued: {error}", flush=True)
+            return {"status": "idle"}
 
     def startup(self):
         with self._lock:

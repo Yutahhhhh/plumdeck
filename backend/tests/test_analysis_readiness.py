@@ -112,6 +112,8 @@ def test_sql_and_python_readiness_agree_and_every_screen_uses_it(session, client
     # Dashboard.
     stats = client.get("/api/dashboard").json()
     assert (stats["analyzed_tracks"], stats["unanalyzed_tracks"]) == (len(expected), len(cases) - len(expected))
+    # Only the first case has a vector (of a legacy model name): every analyzed track is pending.
+    assert stats["embedding_pending_tracks"] == len(expected)
 
 
 def test_light_import_keeps_a_full_row_and_repairs_only_default_timbre(session):

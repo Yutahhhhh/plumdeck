@@ -304,3 +304,18 @@ def test_backup_pauses_the_background_job_and_resumes_it_afterwards(session, tmp
         assert runs == ["/auto/0.mp3", "/auto/0.mp3"]
     finally:
         service.shutdown()
+
+
+def test_startup_backfill_queues_only_analyzed_tracks_missing_a_current_vector(session, tmp_path):
+    ids = add_tracks(session, 3)
+    session.add(TrackEmbedding(track_id=ids[0], embedding_json=json.dumps([.1] * 200), model_name=EMBEDDING_MODEL))
+    session.add(TrackEmbedding(track_id=ids[1], embedding_json=json.dumps([.1] * 200), model_name="musicnn"))
+    session.add(Track(filepath="/auto/unanalyzed.mp3", title="U", artist="A", genre="House", duration=180))
+    session.commit()
+    service = AnalysisJobService(session.bind, str(tmp_path / "jobs.sqlite3"), lambda *args: result())
+    calls = []
+    service.enqueue_embedding = lambda **kwargs: calls.append(kwargs) or {"status": "queued"}
+    assert service.enqueue_missing_embeddings() == {"status": "queued"}
+    assert [sorted(call["track_ids"]) for call in calls] == [[ids[1], ids[2]]]
+    service.enqueue_embedding = lambda **kwargs: (_ for _ in ()).throw(RuntimeError("queue locked"))
+    assert service.enqueue_missing_embeddings() == {"status": "idle"}  # startup goes on

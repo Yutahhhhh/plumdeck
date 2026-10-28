@@ -143,6 +143,17 @@ def completed_analysis_condition():
     return func.coalesce(and_(*valid), False)
 
 
+def pending_embedding_ids():
+    """Select analyzed track ids without a vector of the current model (the
+    background job's queue; invalid vectors are caught when it runs)."""
+    from models import TrackEmbedding
+    from domain.services.analysis.constants import EMBEDDING_MODEL
+    return select(Track.id).outerjoin(TrackEmbedding, Track.id == TrackEmbedding.track_id).where(
+        completed_analysis_condition(),
+        (TrackEmbedding.track_id == None) | (TrackEmbedding.model_name != EMBEDDING_MODEL),  # noqa: E711
+    )
+
+
 def analyzed_track_ids(session: Session, track_ids: List[int]) -> set:
     """Ids among ``track_ids`` that meet the analyzed rule (one small query)."""
     ids = [track_id for track_id in track_ids if track_id is not None]

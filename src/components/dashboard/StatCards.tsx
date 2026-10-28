@@ -69,6 +69,11 @@ export function StatCards({
               </div>
             </div>
           </div>
+          {!!stats.embedding_pending_tracks && (
+            <p className="mb-2 text-xs text-muted-foreground">
+              音色計算待ち {stats.embedding_pending_tracks.toLocaleString()}曲
+            </p>
+          )}
           {stats.unanalyzed_tracks > 0 && (
             <Button
               size="sm"
