@@ -4,6 +4,8 @@
 //! - `plumdeck-parity run --a URL --b URL --scenario FILE` sends each step to
 //!   both sides in order, normalizes (N1, N2, N7, N12) and prints a report.
 //! - `plumdeck-parity db-diff A.duckdb B.duckdb` compares two databases.
+//! - `plumdeck-parity db-stats FILE` prints read-only aggregates of a
+//!   library, to compare with tools/parity/db_stats.py (plan R2).
 //! - `plumdeck-parity startup --work DIR` starts both backends on copies of
 //!   each fixture library, stops them, and compares the files they leave.
 //! - `plumdeck-parity suite --work DIR SCENARIO...` starts both backends on
@@ -14,6 +16,7 @@
 
 mod compare;
 mod dbdiff;
+mod dbstats;
 mod fixture;
 mod scenario;
 mod startup;
@@ -82,6 +85,9 @@ enum Command {
         #[arg(required = true)]
         scenarios: Vec<PathBuf>,
     },
+    /// Print per-table row counts and column checksums of a library opened
+    /// read-only (compare with tools/parity/db_stats.py).
+    DbStats { file: PathBuf },
     /// Start A and B on copies of each fixture library, stop them with
     /// SIGINT and compare startup output, files, databases and job queues.
     Startup {
@@ -133,6 +139,10 @@ fn run_command(command: Command) -> Result<bool> {
                 println!("{line}");
             }
             Ok(result.differences == 0)
+        }
+        Command::DbStats { file } => {
+            println!("{}", serde_json::to_string_pretty(&dbstats::stats(&file)?)?);
+            Ok(true)
         }
         Command::Suite { work, python, oracle, backend, report, scenarios } => {
             let programs = startup::Programs { python, oracle, backend: backend_or_sibling(backend)? };

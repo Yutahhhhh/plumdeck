@@ -4286,13 +4286,17 @@ name = "plumdeck-parity"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "duckdb",
+ "hex",
+ "plumdeck-core",
  "plumdeck-db",
  "reqwest",
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "tokio",
 ]
 
