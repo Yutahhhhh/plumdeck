@@ -10,6 +10,7 @@ export interface Track {
   subgenre?: string;
   year?: number;
   duration: number;
+  is_analyzed?: boolean | null;
   analysis_level?: "light" | "full" | null;
   energy: number;
   danceability: number;

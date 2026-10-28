@@ -14,11 +14,18 @@ from sqlalchemy import text
 
 import infra.database.connection as db
 from infra.database.schema import init_raw_db
-from domain.models.track import Track, TrackEmbedding
+from domain.models.track import Track, TrackAnalysis, TrackEmbedding
 from domain.models.setlist import Setlist
 from app.services.play_import_service import PlayImportService, process_batch
 from app.services import workflow_service as workflow
 from infra.repositories.analysis_job_repository import AnalysisJobRepository
+
+
+@pytest.fixture(autouse=True)
+def defer_optional_embeddings(monkeypatch):
+    # Queue/model integration has dedicated coverage; these fixtures use fake audio.
+    from app.services.analysis_job_service import analysis_job_service
+    monkeypatch.setattr(analysis_job_service, "enqueue_embedding", lambda **_kwargs: None)
 
 
 @pytest.fixture
@@ -37,7 +44,8 @@ def library(tmp_path, monkeypatch):
 def track(session, tmp_path):
     path = tmp_path / "song.wav"
     path.write_bytes(b"audio content")
-    value = Track(filepath=str(path), title="Song", artist="DJ", album="", genre="House", duration=60, bpm=120)
+    value = Track(filepath=str(path), title="Song", artist="DJ", album="", genre="House", duration=60, bpm=120,
+                  energy=.6, danceability=.7, brightness=.3, noisiness=.2)
     session.add(value)
     session.flush()
     session.add(TrackEmbedding(
@@ -45,9 +53,16 @@ def track(session, tmp_path):
         embedding_json=json.dumps([0.1] * 200),
         model_name="musicnn",
     ))
+    add_waveform(session, value.id)
     session.commit()
     session.refresh(value)
     return value
+
+
+def add_waveform(session, track_id):
+    analysis = TrackAnalysis(track_id=track_id)
+    analysis.waveform_peaks = [.2, .7]
+    session.add(analysis)
 
 
 def test_only_completed_analysis_is_marked_and_failed_files_remain_retryable(library, tmp_path):
@@ -56,15 +71,20 @@ def test_only_completed_analysis_is_marked_and_failed_files_remain_retryable(lib
     complete_path = tmp_path / "complete.mp3"
     missing_bpm_path = tmp_path / "missing-bpm.mp3"
     missing_embedding_path = tmp_path / "missing-embedding.mp3"
-    for path in (complete_path, missing_bpm_path, missing_embedding_path):
+    missing_timbre_path = tmp_path / "missing-timbre.mp3"
+    for path in (complete_path, missing_bpm_path, missing_embedding_path, missing_timbre_path):
         path.touch()
-    complete = Track(filepath=str(complete_path), title="Complete", artist="DJ", genre="House", duration=60, bpm=120)
-    missing_bpm = Track(filepath=str(missing_bpm_path), title="Retry BPM", artist="DJ", genre="House", duration=60)
-    missing_embedding = Track(filepath=str(missing_embedding_path), title="Retry embedding", artist="DJ", genre="House", duration=60, bpm=120)
-    library.add_all([complete, missing_bpm, missing_embedding])
+    timbre = dict(energy=.6, danceability=.7, brightness=.3, noisiness=.2)
+    complete = Track(filepath=str(complete_path), title="Complete", artist="DJ", genre="House", duration=60, bpm=120, **timbre)
+    missing_bpm = Track(filepath=str(missing_bpm_path), title="Retry BPM", artist="DJ", genre="House", duration=60, **timbre)
+    missing_embedding = Track(filepath=str(missing_embedding_path), title="Embedding pending", artist="DJ", genre="House", duration=60, bpm=120, **timbre)
+    missing_timbre = Track(filepath=str(missing_timbre_path), title="Retry timbre", artist="DJ", genre="House", duration=60, bpm=120)
+    library.add_all([complete, missing_bpm, missing_embedding, missing_timbre])
     library.flush()
-    for value in (complete, missing_bpm):
+    for value in (complete, missing_bpm, missing_timbre):
         library.add(TrackEmbedding(track_id=value.id, embedding_json=json.dumps([0.1] * 200)))
+    for value in (complete, missing_bpm, missing_embedding, missing_timbre):
+        add_waveform(library, value.id)
     library.add(TrackEmbedding(track_id=missing_embedding.id, embedding_json="[]"))
     library.commit()
 
@@ -72,10 +92,11 @@ def test_only_completed_analysis_is_marked_and_failed_files_remain_retryable(lib
     files = {row["name"]: row for row in rows if not row["is_dir"]}
     assert files["complete.mp3"]["is_analyzed"] is True
     assert files["missing-bpm.mp3"]["is_analyzed"] is False
-    assert files["missing-embedding.mp3"]["is_analyzed"] is False
+    assert files["missing-embedding.mp3"]["is_analyzed"] is True
+    assert files["missing-timbre.mp3"]["is_analyzed"] is False
     # This is the exact set left visible by Hide Analyzed.
     assert {name for name, row in files.items() if not row["is_analyzed"]} == {
-        "missing-bpm.mp3", "missing-embedding.mp3",
+        "missing-bpm.mp3", "missing-timbre.mp3",
     }
 
 
@@ -189,7 +210,8 @@ def test_tagless_audio_is_registered_with_filename_fallback(library, tmp_path, m
     monkeypatch.setattr(ingestion_module, "analyze_track_file", lambda *_args: {
         "filepath": str(path), "title": "Terrace Conga II", "artist": "Unknown",
         "duration": 60, "bpm": 120, "analysis_level": "full",
-        "embedding": [0.1] * 200,
+        "energy": .6, "danceability": .7, "brightness": .3, "noisiness": .2,
+        "features_extra": {"waveform_peaks": [.2, .7]},
     })
 
     async def run():
@@ -207,7 +229,7 @@ def test_tagless_audio_is_registered_with_filename_fallback(library, tmp_path, m
     assert saved.title == "Terrace Conga II"
     assert saved.artist == "Unknown"
     from utils.ingestion import has_completed_analysis
-    assert has_completed_analysis(saved, embedding)
+    assert has_completed_analysis(saved, embedding, library.get(TrackAnalysis, saved.id))
 
 
 def test_forced_retry_combines_fresh_audio_with_existing_metadata_and_embedding(library, tmp_path, monkeypatch):
@@ -226,6 +248,8 @@ def test_forced_retry_combines_fresh_audio_with_existing_metadata_and_embedding(
     monkeypatch.setattr(ingestion_module, "analyze_track_file", lambda *_args: {
         "filepath": str(path), "title": "plain", "artist": "Unknown",
         "duration": 60, "bpm": 120,
+        "energy": .6, "danceability": .7, "brightness": .3, "noisiness": .2,
+        "features_extra": {"waveform_peaks": [.2, .7]},
     })
 
     async def run():
@@ -410,7 +434,8 @@ def test_cancel_during_analysis_prevents_membership_until_explicit_retry(library
             PlayImportService(other).set_state(batch["id"], "cancel")
         return {
             "filepath": str(path), "title": "New", "artist": "DJ", "duration": 60,
-            "bpm": 120, "embedding": [0.1] * 200,
+            "bpm": 120, "energy": .6, "danceability": .7, "brightness": .3, "noisiness": .2,
+            "features_extra": {"waveform_peaks": [.2, .7]},
         }
     monkeypatch.setattr(IngestionDomainService, "process_track_ingestion", analyze)
     library.commit()  # End the request snapshot before background work.

@@ -24,18 +24,42 @@ class AnalysisJobRepository:
 
     def recover(self):
         with self.connect() as con:
-            con.execute("UPDATE jobs SET status='paused' WHERE status IN ('running','pausing')")
+            # Automatic embedding jobs resume by themselves; user jobs wait
+            # for an explicit resume, including ones queued behind the
+            # background job before the restart.
+            for row in con.execute("SELECT id,config FROM jobs WHERE status IN ('running','pausing','queued')").fetchall():
+                status = "queued" if json.loads(row["config"]).get("background") else "paused"
+                con.execute("UPDATE jobs SET status=? WHERE id=?", (status, row["id"]))
             con.execute("UPDATE items SET status='pending' WHERE status='running'")
 
-    def create(self, config, tracks):
+    def create(self, config, tracks, status="paused"):
         job_id = uuid.uuid4().hex
         now = time.time()
         with self.connect() as con:
             con.execute("INSERT INTO jobs (id,status,config,created,updated) VALUES (?,?,?,?,?)",
-                        (job_id, "paused", json.dumps(config), now, now))
+                        (job_id, status, json.dumps(config), now, now))
             con.executemany("INSERT INTO items (job_id,track_id,filepath) VALUES (?,?,?)",
                             [(job_id, t["id"], t["filepath"]) for t in tracks])
         return job_id
+
+    def _ids(self, status=None):
+        # Looking for work must not create the queue (restore relies on that).
+        if not os.path.exists(self.path):
+            return []
+        with self.connect() as con:
+            where = "WHERE status=? " if status else ""
+            rows = con.execute(f"SELECT id,config FROM jobs {where}ORDER BY created", (status,) if status else ()).fetchall()
+        return [(row["id"], bool(json.loads(row["config"]).get("background"))) for row in rows]
+
+    def next_queued(self, background=None):
+        """Oldest queued job; user jobs before automatic background ones."""
+        rows = [(job_id, bg) for job_id, bg in self._ids("queued") if background is None or bg == background]
+        rows.sort(key=lambda row: row[1])
+        return rows[0][0] if rows else None
+
+    def latest_id(self, background=None):
+        rows = [job_id for job_id, bg in self._ids() if background is None or bg == background]
+        return rows[-1] if rows else None
 
     def get(self, job_id=None):
         with self.connect() as con:

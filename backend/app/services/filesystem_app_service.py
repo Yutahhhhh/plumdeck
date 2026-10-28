@@ -7,7 +7,8 @@ from sqlmodel import Session, select
 from domain.constants import SUPPORTED_EXTENSIONS
 from utils.filesystem import resolve_path
 from utils.metadata import extract_full_metadata, update_file_metadata
-from utils.ingestion import has_completed_analysis
+from utils.ingestion import completed_analysis_condition, has_completed_analysis, has_valid_embedding
+from domain.services.analysis.constants import EMBEDDING_MODEL
 from domain.models.track import Track, TrackAnalysis, TrackEmbedding
 
 def _is_supported_file(filename: str) -> bool:
@@ -26,23 +27,15 @@ class FilesystemAppService:
         if not resolved_path:
             return None
         
+        # Beat positions are served by the grid endpoints; no client read them
+        # here, and they cost ~8KB per Play list row.
         analysis = self.session.get(TrackAnalysis, track_id)
-        if analysis:
-            db_metadata = {
-                "bpm": track.bpm,
-                "key": track.key,
-                "beat_positions": analysis.beat_positions,
-                "waveform_peaks": analysis.waveform_peaks,
-                "analyzed": True
-            }
-        else:
-            db_metadata = {
-                "bpm": track.bpm,
-                "key": track.key,
-                "beat_positions": [],
-                "waveform_peaks": [],
-                "analyzed": False
-            }
+        db_metadata = {
+            "bpm": track.bpm,
+            "key": track.key,
+            "waveform_peaks": analysis.waveform_peaks if analysis else [],
+            "analyzed": has_completed_analysis(track, analysis=analysis),
+        }
 
         tag_metadata = extract_full_metadata(resolved_path)
 
@@ -84,28 +77,32 @@ class FilesystemAppService:
             file_paths = [item['path'] for item in items if not item['is_dir']]
             
             analyzed_files: Dict[str, str] = {}
+            embedded_files: Set[str] = set()
             if file_paths:
                 # A Track row can be created before expensive audio analysis starts
                 # (for example by Play mode's fast import).  Its mere presence does
-                # not mean analysis succeeded.  Keep this definition aligned with
-                # utils.ingestion.filter_and_prioritize_files so partially imported
-                # and failed tracks remain visible and can be retried.
+                # not mean analysis succeeded.  The shared analyzed rule keeps
+                # partially imported and failed tracks visible for a retry.
                 statement = (
-                    select(Track, TrackEmbedding)
+                    select(Track.filepath, Track.analysis_level, TrackEmbedding.model_name,
+                           TrackEmbedding.embedding_json)
                     .outerjoin(TrackEmbedding, Track.id == TrackEmbedding.track_id)
-                    .where(Track.filepath.in_(file_paths), Track.bpm > 0)
+                    .where(Track.filepath.in_(file_paths), completed_analysis_condition())
                 )
-                analyzed_files = {
-                    track.filepath: (track.analysis_level or "full")
-                    for track, embedding in self.session.exec(statement).all()
-                    if has_completed_analysis(track, embedding)
-                }
+                for filepath, level, model, vector in self.session.exec(statement).all():
+                    analyzed_files[filepath] = level or "full"
+                    # The background job's rule: a vector of another model or an
+                    # invalid one is still pending.
+                    if model == EMBEDDING_MODEL and has_valid_embedding(vector):
+                        embedded_files.add(filepath)
 
             final_result = []
             for item in items:
                 if not item['is_dir']:
                     item['is_analyzed'] = item['path'] in analyzed_files
                     item['analysis_level'] = analyzed_files.get(item['path'])
+                    # Similarity vectors are optional and filled in the background.
+                    item['embedding_ready'] = item['path'] in embedded_files
                 final_result.append(item)
                 
             return final_result

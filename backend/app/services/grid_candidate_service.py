@@ -8,6 +8,8 @@ import math
 from pathlib import Path
 import statistics
 import sys
+import threading
+import time
 
 from sqlalchemy import text
 from sqlmodel import Session
@@ -22,6 +24,15 @@ from infra import rekordbox_timing
 
 logger = logging.getLogger(__name__)
 
+# On-demand analysis at deck load: how long to wait for the analysis slot
+# (the background embedding job yields at once; an import may not).
+ON_DEMAND_WAIT_SECONDS = 3.0
+# track id -> (audio fingerprint, error) of a failed on-demand analysis. A GET
+# does not retry it until the file changes (or the app restarts); explicit
+# re-analysis still runs.
+_failed_on_demand: dict[int, tuple[str, str]] = {}
+_failed_lock = threading.Lock()
+
 
 def audio_fingerprint(filepath: str) -> str:
     path = Path(filepath)
@@ -33,12 +44,12 @@ def audio_fingerprint(filepath: str) -> str:
     return hashlib.sha256(json.dumps(value).encode()).hexdigest()
 
 
-def analysis_candidate(ticks: list[float], bpm: float, confidence=None) -> BeatGrid | None:
+def analysis_candidate(ticks: list[float], bpm: float | None, confidence=None) -> BeatGrid | None:
     if len(ticks) < 2:
         return None
     # Raw detections remain stored; playback uses a whole-track tempo fit only
     # when its residuals demonstrate a constant tempo.
-    if not math.isfinite(bpm) or not 20 <= bpm <= 300:
+    if bpm is None or not math.isfinite(bpm) or not 20 <= bpm <= 300:
         intervals = [b - a for a, b in zip(ticks, ticks[1:])]
         if not all(math.isfinite(d) and d > 0 for d in intervals):
             raise GridAnalysisError("Stored analysis has invalid beat timestamps")
@@ -133,7 +144,11 @@ class GridCandidateService:
             return None
         prepared = row.features_extra.get("playback_grid")
         if row.features_extra.get("playback_grid_version") == GRID_VERSION and prepared:
-            return self._within_duration(track, BeatGrid.model_validate(prepared))
+            try:
+                grid = BeatGrid.model_validate(prepared)
+            except ValueError as exc:
+                raise GridAnalysisError("Stored analysis has invalid playback grid") from exc
+            return self._within_duration(track, grid)
         grid = analysis_candidate(row.beat_positions, track.bpm,
                                   row.features_extra.get("bpm_confidence"))
         return self._within_duration(track, grid) if grid else None
@@ -154,8 +169,42 @@ class GridCandidateService:
         except GridAnalysisError as exc:
             logger.warning("Analysis grid unavailable for track %s: %s", track.id, exc)
             warnings.append("analysis: " + str(exc))
-            grid = None
+            return None, "; ".join(warnings)
+        if grid is None and Path(track.filepath).is_file():
+            # Tracks registered in rekordbox skip rhythm analysis at import, so
+            # without a readable PQTZ they have no beats yet: analyze them now.
+            try:
+                grid = self._on_demand(track)
+            except GridAnalysisError as exc:
+                logger.warning("On-demand grid analysis failed for track %s: %s", track.id, exc)
+                warnings.append("analysis: " + str(exc))
         return grid, "; ".join(warnings) or None
+
+    def _on_demand(self, track: Track) -> BeatGrid:
+        fingerprint = audio_fingerprint(track.filepath)
+        with _failed_lock:
+            failed = _failed_on_demand.get(track.id)
+        if failed and failed[0] == fingerprint:
+            raise GridAnalysisError(failed[1])
+        # Share the native analysis slot with imports and the background job
+        # instead of overlapping them while the DJ is playing.
+        from app.services.analysis_coordinator import analysis_coordinator
+        token = None
+        with analysis_coordinator.foreground_request():
+            deadline = time.monotonic() + ON_DEMAND_WAIT_SECONDS
+            while (token := analysis_coordinator.acquire("グリッド解析")) is None:
+                if time.monotonic() >= deadline:
+                    raise GridAnalysisError("Another analysis is running; the grid is analyzed on a later load", 409)
+                time.sleep(0.05)
+        try:
+            return self.analysis(track, force=False)
+        except GridAnalysisError as exc:
+            if exc.status_code not in (409, 503):  # busy or changed file: retry later
+                with _failed_lock:
+                    _failed_on_demand[track.id] = (fingerprint, str(exc))
+            raise
+        finally:
+            analysis_coordinator.release(token)
 
     def analysis(self, track: Track, *, force: bool) -> BeatGrid:
         if not force:

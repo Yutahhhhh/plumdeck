@@ -6,6 +6,7 @@ import unicodedata
 from typing import List, Dict, Any, Tuple
 from sqlmodel import Session, select
 from domain.models.track import Track, TrackAnalysis
+from domain.services import value_sources
 from api.schemas.settings import (
     CsvImportRow, ImportAnalysisResult, ImportExecuteRequest,
     MetadataImportRow, MetadataImportAnalysisResult, MetadataImportExecuteRequest
@@ -70,11 +71,24 @@ class CsvAppService:
                 filepath = data.get("filepath")
                 norm_path = self._normalize_path(filepath)
                 track = self.session.exec(select(Track).where(Track.filepath == norm_path)).first()
+                before = (track.bpm, track.key) if track else None
                 if track and self._apply_track_metadata_safely(track, data):
                     self.session.add(track)
+                    edited = [field for field, old in zip(value_sources.FIELDS, before)
+                              if getattr(track, field) != old]
+                    if edited:
+                        self._mark_manual(track.id, edited)
                     updated_count += 1
         self.session.commit()
         return updated_count
+
+    def _mark_manual(self, track_id: int, fields: List[str]) -> None:
+        """A BPM/key edited here outranks rekordbox and re-analysis from now on."""
+        analysis = self.session.get(TrackAnalysis, track_id) or TrackAnalysis(track_id=track_id)
+        extra = analysis.features_extra if isinstance(analysis.features_extra, dict) else {}
+        updated = value_sources.with_sources(extra, {field: value_sources.MANUAL for field in fields})
+        analysis.features_extra_json = json.dumps(updated)
+        self.session.add(analysis)
 
     def execute_import(self, data: ImportExecuteRequest) -> Tuple[int, int]:
         import_count, update_count = 0, 0
@@ -87,13 +101,12 @@ class CsvAppService:
                     if track_data and self._apply_track_metadata_safely(track, track_data):
                         self.session.add(track)
                         analysis = self.session.get(TrackAnalysis, track.id) or TrackAnalysis(track_id=track.id)
-                        analysis.features_extra_json = json.dumps({
-                            "bpm_confidence": track_data.get("bpm_confidence", 0.0),
-                            "key_strength": track_data.get("key_strength", 0.0),
-                            "bpm_raw": track_data.get("bpm_raw", 0.0)
-                        })
-                        if "beat_positions" in track_data: analysis.beat_positions = track_data["beat_positions"]
-                        if "waveform_peaks" in track_data: analysis.waveform_peaks = track_data["waveform_peaks"]
+                        # Merge into the existing analysis: keep features_extra (grid,
+                        # component versions, BPM sync marker) and stored arrays when the
+                        # CSV row has none. The CSV's bpm_confidence / key_strength /
+                        # bpm_raw columns have no reader and are not persisted.
+                        if track_data.get("beat_positions"): analysis.beat_positions = track_data["beat_positions"]
+                        if track_data.get("waveform_peaks"): analysis.waveform_peaks = track_data["waveform_peaks"]
                         self.session.add(analysis)
                     update_count += 1
                     
@@ -101,12 +114,10 @@ class CsvAppService:
                 norm_path = self._normalize_path(row.filepath)
                 if self.session.exec(select(Track).where(Track.filepath == norm_path)).first(): continue
                 t_dict = row.model_dump()
+                for legacy in ("bpm_confidence", "key_strength", "bpm_raw"):
+                    t_dict.pop(legacy, None)
                 analysis_info = {
-                    "extras": json.dumps({
-                        "bpm_confidence": t_dict.pop("bpm_confidence", 0.0),
-                        "key_strength": t_dict.pop("key_strength", 0.0),
-                        "bpm_raw": t_dict.pop("bpm_raw", 0.0)
-                    }),
+                    "extras": "{}",
                     "beats": t_dict.pop("beat_positions", []), "peaks": t_dict.pop("waveform_peaks", [])
                 }
                 if not t_dict.get("title"): t_dict["title"] = "Unknown"

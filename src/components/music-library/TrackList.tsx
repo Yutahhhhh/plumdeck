@@ -64,7 +64,7 @@ export function TrackList({
             <tbody>
               <TooltipProvider>
                 {tracks.map((track, index) => {
-                  const isUnanalyzed = !track.bpm || track.bpm === 0;
+                  const isUnanalyzed = track.is_analyzed == null ? !track.bpm || track.bpm === 0 : !track.is_analyzed;
 
                   return (
                     <TrackRow

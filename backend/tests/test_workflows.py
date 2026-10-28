@@ -8,17 +8,21 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
-from models import Setlist, Track, TrackEmbedding
+from models import Setlist, Track, TrackAnalysis, TrackEmbedding
 from app.services.play_import_service import PlayImportService, process_batch
 from domain.services.set_duration import SetTimingError, calculate_set_duration
 
 
 def _track(session: Session, path: Path, title: str, duration: float = 300, bpm: float | None = 126.25):
     path.write_bytes((title.encode("utf-8") + b"\0") * 20)
-    track = Track(filepath=str(path), title=title, artist="DJ", album="", genre="House", bpm=bpm, duration=duration)
+    track = Track(filepath=str(path), title=title, artist="DJ", album="", genre="House", bpm=bpm, duration=duration,
+                  energy=.7, danceability=.6, brightness=.4, noisiness=.2)
     session.add(track)
     session.flush()
     session.add(TrackEmbedding(track_id=track.id, embedding_json=json.dumps([0.1] * 200)))
+    analysis = TrackAnalysis(track_id=track.id)
+    analysis.waveform_peaks = [.2, .7]
+    session.add(analysis)
     session.commit()
     session.refresh(track)
     return track
@@ -276,3 +280,51 @@ def test_play_import_is_idempotent_and_preserves_source(client: TestClient, sess
     count = session.exec(__import__("sqlalchemy").text(
         "SELECT count(*) FROM setlist_tracks WHERE setlist_id=:id"), params={"id": playlist.id}).one()[0]
     assert count == 1
+
+
+def test_rekordbox_xml_writes_the_saved_beat_grid(tmp_path: Path):
+    from xml.etree import ElementTree as ET
+    from app.services.workflow_service import UsbHandoffService, _tempo_markers
+
+    def entry(track_id, grid):
+        return {"track_id": track_id, "title": f"T{track_id}", "artist": "A", "filepath": str(tmp_path / f"{track_id}.wav"),
+                "bpm": 126.0, "duration": 300, "beat_grid_json": json.dumps(grid) if grid else None}
+
+    constant = {"bpm": 128.0, "first_beat_ms": 250.0, "source": "analysis"}
+    rekordbox = {"bpm": 120.0, "first_beat_ms": 100.0, "beat_times_ms": [100.0, 600.0, 1100.0],
+                 "beat_numbers": [3, 4, 1], "source": "rekordbox"}
+    xml, _ = UsbHandoffService(None)._xml({"setlist": {"name": "Grid"}, "entries": [
+        entry(1, constant), entry(2, rekordbox), entry(3, None)]})
+    tracks = {t.get("Name"): t.findall("TEMPO") for t in ET.fromstring(xml).find("COLLECTION")}
+
+    assert [(t.get("Inizio"), t.get("Bpm"), t.get("Battito")) for t in tracks["T1"]] == [("0.250000", "128.00", "1")]
+    # One marker per tempo segment, not one per beat.
+    assert [(t.get("Inizio"), t.get("Bpm"), t.get("Battito")) for t in tracks["T2"]] == [("0.100000", "120.00", "3")]
+    # Without a saved grid the track BPM is still handed over.
+    assert [(t.get("Inizio"), t.get("Bpm")) for t in tracks["T3"]] == [("0.000000", "126.00")]
+    # A constant grid that starts before 0 moves to its first audible beat.
+    assert _tempo_markers({"bpm": 120.0, "first_beat_ms": -100.0}) == [(400.0, 120.0, 2, 4)]
+    assert _tempo_markers({"bpm": "x", "first_beat_ms": 0}) == []
+
+
+def test_rekordbox_xml_merges_per_beat_grids_into_tempo_segments():
+    import pytest
+    from app.services.workflow_service import _tempo_markers
+
+    def grid(times):
+        return {"bpm": 113.0, "first_beat_ms": times[0], "beat_times_ms": times, "source": "rekordbox"}
+
+    # ms rounding jitter on a constant tempo: one marker.
+    jitter = [round(100 + n * 60_000 / 113 + (0.4 if n % 3 else -0.4)) for n in range(400)]
+    [(start, bpm, number, bar)] = _tempo_markers(grid(jitter))
+    assert (start, number, bar) == (100.0, 1, 4) and bpm == pytest.approx(113.0, abs=.05)
+    # A real tempo change (120 -> 124 BPM after 64 beats): two markers, beat numbers kept.
+    first = [n * 500.0 for n in range(65)]
+    second = [first[-1] + n * 60_000 / 124 for n in range(1, 64)]
+    markers = _tempo_markers(grid(first + second))
+    assert [(round(m[0]), round(m[1], 2), m[2]) for m in markers] == [(0, 120.0, 1), (32000, 124.0, 1)]
+    # An irregular grid (tempo ratio far beyond a real track) falls back to one constant marker.
+    irregular = [0.0]
+    for n in range(200):
+        irregular.append(irregular[-1] + (260.0 if n % 2 else 670.0))
+    assert _tempo_markers(grid(irregular)) == [(0.0, 113.0, 1, 4)]

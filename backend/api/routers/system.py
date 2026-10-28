@@ -78,10 +78,12 @@ def get_dashboard_stats(session: Session = Depends(get_session)):
     """
     
     # 1. Basic Counts
-    # 解析済み = bpm > 0
+    from utils.ingestion import completed_analysis_condition, pending_embedding_ids
     total_tracks = session.exec(select(func.count()).select_from(Track)).one()
-    analyzed_tracks = session.exec(select(func.count()).select_from(Track).where(Track.bpm > 0)).one()
+    analyzed_tracks = session.exec(select(func.count()).select_from(Track).where(completed_analysis_condition())).one()
     unanalyzed_tracks = total_tracks - analyzed_tracks
+    # Analyzed tracks whose similarity vector the background job still computes.
+    embedding_pending = session.exec(select(func.count()).select_from(pending_embedding_ids().subquery())).one()
     
     # 2. Genre Distribution (All)
     # 大文字小文字を区別せず集計
@@ -121,6 +123,7 @@ def get_dashboard_stats(session: Session = Depends(get_session)):
         "total_tracks": total_tracks,
         "analyzed_tracks": analyzed_tracks,
         "unanalyzed_tracks": unanalyzed_tracks,
+        "embedding_pending_tracks": embedding_pending,
         "genre_distribution": genre_distribution,
         "unverified_genres_count": unverified_count,
         "lyrics_tracks_count": lyrics_count,

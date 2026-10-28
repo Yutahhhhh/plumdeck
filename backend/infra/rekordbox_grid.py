@@ -78,14 +78,8 @@ def find_analysis(filepath: str, database: Path | None = None) -> tuple[Path, st
             raise RekordboxGridError("Multiple rekordbox grids match this audio path")
         if not paths:
             return None
-        raw = next(iter(paths)).replace("\\", "/")
-        analysis = Path(raw)
-        # Rekordbox stores /share/... paths relative to the library directory.
-        if not analysis.is_file():
-            candidates = [database.parent / "share" / raw.lstrip("/"),
-                          database.parent / raw.lstrip("/")]
-            analysis = next((p for p in candidates if p.is_file()), candidates[0])
-        if not analysis.is_file():
+        analysis = analysis_file(next(iter(paths)), database)
+        if analysis is None:
             return None
         return analysis, str(rows[0][0])
     except RekordboxGridError:
@@ -94,7 +88,19 @@ def find_analysis(filepath: str, database: Path | None = None) -> tuple[Path, st
         raise RekordboxGridError("Could not read the local rekordbox library") from exc
 
 
-def parse_pqtz(data: bytes) -> BeatGrid | None:
+def analysis_file(analysis_data_path: str, database: Path) -> Path | None:
+    """The existing ANLZ file for a djmdContent.AnalysisDataPath, or None."""
+    raw = analysis_data_path.replace("\\", "/")
+    analysis = Path(raw)
+    if analysis.is_file():
+        return analysis
+    # Rekordbox stores /share/... paths relative to the library directory.
+    candidates = [database.parent / "share" / raw.lstrip("/"), database.parent / raw.lstrip("/")]
+    return next((path for path in candidates if path.is_file()), None)
+
+
+def _pqtz_section(data: bytes) -> tuple[int, int, int] | None:
+    """(offset, size, beat count) of the PQTZ section, or None without one."""
     if len(data) < 12 or len(data) > MAX_ANLZ_BYTES or data[:4] != b"PMAI":
         raise RekordboxGridError("Invalid ANLZ header")
     header_size, file_size = struct.unpack_from(">II", data, 4)
@@ -113,21 +119,49 @@ def parse_pqtz(data: bytes) -> BeatGrid | None:
             count = struct.unpack_from(">I", data, offset + 20)[0]
             if count > 100000 or 24 + count * 8 != size:
                 raise RekordboxGridError("Invalid PQTZ beat count")
-            if count < 2:
-                return None
-            entries = list(struct.iter_unpack(">HHI", data[offset + 24:offset + size]))
-            numbers, tempos, times = map(list, zip(*entries))
-            try:
-                return BeatGrid(bpm=statistics.median(tempos) / 100,
-                                first_beat_ms=times[0], beats_per_bar=max(numbers),
-                                beat_times_ms=times, beat_numbers=numbers,
-                                source="rekordbox", confidence=None)
-            except ValueError as exc:
-                raise RekordboxGridError("Invalid PQTZ beat values") from exc
+            return offset, size, count
         offset += size
     return None
 
 
-def read_grid(path: Path) -> BeatGrid | None:
+def parse_pqtz(data: bytes) -> BeatGrid | None:
+    section = _pqtz_section(data)
+    if section is None or section[2] < 2:
+        return None
+    offset, size, _ = section
+    entries = list(struct.iter_unpack(">HHI", data[offset + 24:offset + size]))
+    numbers, tempos, times = map(list, zip(*entries))
+    try:
+        return BeatGrid(bpm=statistics.median(tempos) / 100,
+                        first_beat_ms=times[0], beats_per_bar=max(numbers),
+                        beat_times_ms=times, beat_numbers=numbers,
+                        source="rekordbox", confidence=None)
+    except ValueError as exc:
+        raise RekordboxGridError("Invalid PQTZ beat values") from exc
+
+
+def _read_anlz(path: Path) -> bytes:
     with path.open("rb") as source:
-        return parse_pqtz(source.read(MAX_ANLZ_BYTES + 1))
+        # Size the read to the file: read(MAX + 1) would allocate 32 MiB per call.
+        size = min(os.fstat(source.fileno()).st_size, MAX_ANLZ_BYTES)
+        return source.read(size + 1)
+
+
+def read_grid(path: Path) -> BeatGrid | None:
+    return parse_pqtz(_read_anlz(path))
+
+
+def has_usable_grid(analysis_data_path: str, database: Path) -> bool:
+    """Whether the ANLZ file holds a PQTZ grid of at least two beats.
+
+    Checks the section structure only (a library-wide scan stays fast); a grid
+    whose beat values turn out invalid at load time falls back to analysis.
+    """
+    try:
+        path = analysis_file(analysis_data_path, database)
+        if path is None:
+            return False
+        section = _pqtz_section(_read_anlz(path))
+        return section is not None and section[2] >= 2
+    except (RekordboxGridError, OSError):
+        return False

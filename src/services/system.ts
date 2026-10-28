@@ -5,6 +5,8 @@ export interface DashboardStats {
   total_tracks: number;
   analyzed_tracks: number;
   unanalyzed_tracks: number;
+  /** Analyzed tracks whose similarity vector is still computed in the background. */
+  embedding_pending_tracks?: number;
   genre_distribution: {
     name: string;
     count: number;

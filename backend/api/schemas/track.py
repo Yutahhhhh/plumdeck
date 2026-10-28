@@ -13,6 +13,7 @@ class TrackRead(SQLModel):
     year: Optional[int] = None
     duration: float
     bpm: Optional[float] = None
+    is_analyzed: Optional[bool] = None
     analysis_level: Optional[Literal["light", "full"]] = None
     
     key: str

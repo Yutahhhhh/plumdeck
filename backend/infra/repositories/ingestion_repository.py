@@ -1,14 +1,19 @@
 import json
-import asyncio
 import math
-from typing import List, Dict, Any
+from typing import Dict, Any
 from datetime import datetime
 from sqlmodel import Session, select, text
 from domain.models.track import Track, TrackAnalysis, TrackEmbedding
 from domain.models.lyrics import Lyrics
 from utils.array_codec import pack_f32, pack_u8_waveform
-from utils.ingestion import has_valid_embedding
+from domain.services import value_sources
+from utils.features_extra import persisted_features_extra
+from utils.ingestion import TIMBRE_FIELDS, has_measured_timbre, is_protected_full_row
 import infra.database.connection as db_connection
+
+# A re-analysed duration further than this from the stored one means the file
+# now holds different audio.
+AUDIO_CHANGE_SECONDS = 1.0
 
 class IngestionRepository:
     def __init__(self):
@@ -16,7 +21,25 @@ class IngestionRepository:
 
     def _prepare_track_models(self, session: Session, result: Dict[str, Any], update_metadata: bool = True) -> int:
         filepath = result["filepath"]
-        
+        extras = result.get("features_extra", {})
+        sources: Dict[str, str] = {}
+        own: Dict[str, Any] = {}
+        # PRAGMA foreign_keys は DuckDB で未サポートのため削除
+        # 代わりに no_autoflush で ORM レベルの整合性チェックタイミングを調整
+        with session.no_autoflush:
+            existing_track = session.exec(select(Track).where(Track.filepath == filepath)).first()
+            existing_analysis = session.get(TrackAnalysis, existing_track.id) if existing_track else None
+            existing_fx = existing_analysis.features_extra if existing_analysis else {}
+            preserve_full_analysis = bool(
+                result.get("analysis_level") == "light" and is_protected_full_row(existing_track))
+            # A protected row only takes the light timbre when its own is missing.
+            repair_timbre = bool(preserve_full_analysis
+                                 and not has_measured_timbre(existing_track, existing_fx))
+            audio_changed = self._audio_changed(existing_track, result)
+            # Only analysis results resolve BPM/key; tag and lyrics updates keep them.
+            if isinstance(extras, dict) and "analysis_components" in extras and not preserve_full_analysis:
+                result, sources, own = self._settle_values(session, result, existing_track, existing_fx)
+
         track_update_data = {
             "title": result.get("title"), "artist": result.get("artist"),
             "album": result.get("album"), "genre": result.get("genre"), "year": result.get("year"),
@@ -31,22 +54,11 @@ class IngestionRepository:
             "spectral_rolloff": float(result.get("spectral_rolloff", 0.0)),
         }
 
-        # PRAGMA foreign_keys は DuckDB で未サポートのため削除
-        # 代わりに no_autoflush で ORM レベルの整合性チェックタイミングを調整
         with session.no_autoflush:
-            existing_track = session.exec(select(Track).where(Track.filepath == filepath)).first()
             track_id = None
 
             if existing_track:
                 track_id = existing_track.id
-                existing_embedding = session.get(TrackEmbedding, track_id)
-                preserve_full_analysis = bool(
-                    result.get("analysis_level") == "light"
-                    and existing_track.analysis_level != "light"
-                    and isinstance(existing_track.bpm, (int, float))
-                    and existing_track.bpm > 0
-                    and has_valid_embedding(existing_embedding)
-                )
                 if update_metadata:
                     for k, v in track_update_data.items():
                         # Partial metadata updates must not erase absent audio features.
@@ -57,7 +69,7 @@ class IngestionRepository:
                             "danceability", "brightness", "contrast", "noisiness",
                             "loudness", "loudness_range", "spectral_flux",
                             "spectral_rolloff",
-                        }:
+                        } and not (repair_timbre and k in TIMBRE_FIELDS):
                             continue
                         if isinstance(v, str) and v and v.lower() != "unknown":
                             setattr(existing_track, k, v)
@@ -91,14 +103,26 @@ class IngestionRepository:
 
             # DuckDB は UPDATE で空き領域を OS に返さないため、値が実際に変わった時だけ
             # 行を書き換える (再解析/一括処理での無駄な UPDATE によるファイル肥大化を防ぐ)。
-            extras = result.get("features_extra", {})
             analysis = session.get(TrackAnalysis, track_id)
             analysis_changed = analysis is None
             if analysis is None:
                 analysis = TrackAnalysis(track_id=track_id)
 
             if extras and not (existing_track and preserve_full_analysis):
-                new_fx = json.dumps(extras)
+                # Persist an allow-listed copy; callers still validate the full result.
+                fx = persisted_features_extra(extras)
+                recorded = {**value_sources.stored_sources(existing_fx), **sources}
+                if recorded:
+                    fx = value_sources.with_sources(fx, recorded)
+                if existing_track and not audio_changed:
+                    fx = self._keep_same_audio_components(fx, existing_fx, extras)
+                for field in value_sources.FIELDS:
+                    kept = f"analysis_{field}"
+                    if own.get(field) is not None:
+                        fx[kept] = own[field]
+                    elif recorded.get(field) not in (None, value_sources.OWN) and kept in existing_fx:
+                        fx[kept] = existing_fx[kept]
+                new_fx = json.dumps(fx)
                 if new_fx != (analysis.features_extra_json or "{}"):
                     analysis.features_extra_json = new_fx
                     analysis_changed = True
@@ -112,15 +136,30 @@ class IngestionRepository:
                 if new_beats != analysis.beats_f32:
                     analysis.beats_f32 = new_beats
                     analysis_changed = True
+            if existing_track and audio_changed and not extras.get("beat_positions") and analysis.beats_f32:
+                # The old beats belong to the previous audio; the deck grid is
+                # recomputed on demand instead of pairing them with a new BPM.
+                analysis.beats_f32 = None
+                analysis_changed = True
             if analysis_changed:
                 session.add(analysis)
-                if extras.get("beat_positions") and not (existing_track and preserve_full_analysis):
+                if (existing_track and audio_changed) or (
+                        extras.get("beat_positions") and not (existing_track and preserve_full_analysis)):
                     # A cached automatic grid must not mask freshly analyzed
                     # beats. Saved user cues/loops/grids live in a separate row.
                     session.exec(text("DELETE FROM track_grid_candidates WHERE track_id=:id AND source='analysis'"),
                                  params={"id": track_id})
                     from infra.repositories.analysis_grid_refresh import refresh_saved_analysis_grid
                     refresh_saved_analysis_grid(session, track_id, extras.get("playback_grid"))
+
+            # A vector of replaced audio must not be compared with the new file.
+            # Re-analysing the same audio keeps it (embeddings are optional and
+            # filled in the background, so a deleted one may stay missing).
+            if (existing_track and audio_changed and not preserve_full_analysis and "embedding" not in result
+                    and isinstance(extras, dict) and "analysis_components" in extras):
+                previous_embedding = session.get(TrackEmbedding, track_id)
+                if previous_embedding is not None:
+                    session.delete(previous_embedding)
 
             if "embedding" in result and result["embedding"] and not (existing_track and preserve_full_analysis):
                 emb = session.get(TrackEmbedding, track_id)
@@ -144,6 +183,80 @@ class IngestionRepository:
                     session.add(ly)
             return int(track_id)
 
+    @staticmethod
+    def _audio_changed(existing_track, result: Dict[str, Any]) -> bool:
+        """Whether an analysis result describes different audio than the row.
+
+        Duration is the cheap, tag-independent signal (size and mtime change
+        when tags or lyrics are written). Unknown durations count as unchanged.
+        """
+        if existing_track is None or "analysis_components" not in (result.get("features_extra") or {}):
+            return False
+        before, after = getattr(existing_track, "duration", None), result.get("duration")
+        valid = all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                    and math.isfinite(value) and value > 0 for value in (before, after))
+        return bool(valid and abs(before - after) > AUDIO_CHANGE_SECONDS)
+
+    @staticmethod
+    def _keep_same_audio_components(fx: Dict[str, Any], existing_fx: Dict[str, Any], extras) -> Dict[str, Any]:
+        """Carry over what this result did not recompute for the same audio:
+        the kept embedding's version and, when rhythm was skipped (rekordbox
+        has the BPM), the stored own grid with its rhythm version."""
+        stored = existing_fx.get("analysis_components") if isinstance(existing_fx, dict) else None
+        components = fx.get("analysis_components")
+        if not isinstance(stored, dict) or not isinstance(components, dict):
+            return fx
+        carried = ["embedding"] + ([] if extras.get("beat_positions") else ["rhythm"])
+        kept = dict(components)
+        for name in carried:
+            if name not in kept and stored.get(name):
+                kept[name] = stored[name]
+        fx = {**fx, "analysis_components": kept}
+        if "rhythm" in carried and kept.get("rhythm") == stored.get("rhythm"):
+            for key in ("playback_grid", "playback_grid_version"):
+                if key in existing_fx and key not in fx:
+                    fx[key] = existing_fx[key]
+        return fx
+
+    @staticmethod
+    def _settle_values(session: Session, result: Dict[str, Any], existing_track, existing_fx):
+        """Apply manual > rekordbox > own to bpm/key on a copy of ``result``.
+
+        Returns the copy, the chosen source per field and the own value per
+        field that another source replaced (kept as features_extra.analysis_bpm
+        / analysis_key): this result's own value, or the row's own key when
+        detection was skipped because rekordbox has one.
+        """
+        fields = [field for field in value_sources.FIELDS if field in result]
+        if not fields:
+            return result, {}, {}
+        components = result["features_extra"].get("analysis_components") or {}
+        incoming_sources = components.get("sources") if isinstance(components.get("sources"), dict) else {}
+        stored = value_sources.stored_sources(existing_fx)
+        rekordbox = value_sources.lookup(
+            result["filepath"], keys=value_sources.key_source_enabled(session))
+        settled, sources, own = dict(result), {}, {}
+        for field in fields:
+            incoming_source = incoming_sources.get(field, value_sources.OWN)
+            value, source = value_sources.choose(
+                field, result.get(field), incoming_source,
+                getattr(existing_track, field, None), stored.get(field), rekordbox)
+            if source is None:
+                continue
+            sources[field] = source
+            settled[field] = value
+            if field == "key":
+                settled["scale"] = value_sources.scale_of(value) or result.get("scale", "")
+            if source == value_sources.OWN:
+                continue
+            if incoming_source == value_sources.OWN and value_sources.valid(field, result.get(field)):
+                own[field] = result[field]
+            elif (field == "key" and stored.get(field) in (None, value_sources.OWN)
+                  and value_sources.valid(field, getattr(existing_track, field, None))
+                  and existing_track.key != value):
+                own[field] = existing_track.key
+        return settled, sources, own
+
     def save_track(self, result: Dict[str, Any], update_metadata: bool = True):
         # Callers use success to advance the progress counter. Propagate a DB
         # failure so a track cannot be reported as analyzed without being saved.
@@ -158,18 +271,3 @@ class IngestionRepository:
         track_id = self._prepare_track_models(session, result, update_metadata)
         session.commit()
         return {"status": "updated" if existing else "created", "track_id": track_id}
-
-    async def batch_save_tracks(self, results: List[Dict[str, Any]]):
-        if not results: return
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._batch_save_tracks_sync, results)
-
-    def _batch_save_tracks_sync(self, results: List[Dict[str, Any]]):
-        try:
-            with Session(db_connection.engine) as session:
-                for result in results:
-                    self._prepare_track_models(session, result, update_metadata=True)
-                session.commit()
-                print(f"INFO: Batch saved {len(results)} tracks.")
-        except Exception as e:
-            print(f"ERROR: Batch save failed: {e}")

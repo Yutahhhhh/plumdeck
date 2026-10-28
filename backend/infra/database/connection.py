@@ -43,6 +43,24 @@ def exclusive_database():
             _maintenance_owner = None
 
 
+@contextmanager
+def background_analysis_paused():
+    """Let backup/restore run while the automatic embedding job is active.
+
+    Enter this before database_activity/db_lock: the job thread needs those
+    locks to return its track to the queue before it stops.
+    """
+    service = getattr(sys.modules.get("app.services.analysis_job_service"), "analysis_job_service", None)
+    if service is None:
+        yield
+        return
+    service.suspend_background()
+    try:
+        yield
+    finally:
+        service.resume_background()
+
+
 # エンジン初期化 (設定を固定)
 connect_args = {'config': {'worker_threads': 4, 'access_mode': 'READ_WRITE'}}
 def create_library_engine(database_url):

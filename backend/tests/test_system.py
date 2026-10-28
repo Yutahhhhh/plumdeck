@@ -1,5 +1,5 @@
 from sqlmodel import Session
-from models import Track
+from models import Track, TrackAnalysis
 
 def test_health_check(client):
     """APIが生存しているか確認"""
@@ -28,7 +28,7 @@ def test_dashboard_stats_with_data(client, session: Session):
         album="Album X",
         genre="Techno",
         bpm=128.0,
-        duration=300.0,
+        duration=300.0, energy=.7, danceability=.6, brightness=.4, noisiness=.2,
         is_genre_verified=True
     )
     track2 = Track(
@@ -43,6 +43,10 @@ def test_dashboard_stats_with_data(client, session: Session):
     )
     session.add(track1)
     session.add(track2)
+    session.flush()
+    analysis = TrackAnalysis(track_id=track1.id)
+    analysis.waveform_peaks = [0.2, 0.7]
+    session.add(analysis)
     session.commit()
 
     response = client.get("/api/dashboard")

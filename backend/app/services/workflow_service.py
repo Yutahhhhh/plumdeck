@@ -499,6 +499,64 @@ class PresetService:
         return {**definition, "revision": int(saved[0])}
 
 
+# A per-beat grid becomes tempo segments: a segment continues while each beat
+# stays this close to its fitted period, so ms rounding jitter gives one marker.
+TEMPO_SEGMENT_TOLERANCE_MS = 10.0
+# Segments of a real track stay within this tempo ratio; a grid that does not
+# (an irregular manual grid) is handed over as one constant marker instead.
+TEMPO_SEGMENT_MAX_RATIO = 1.5
+
+
+def _tempo_markers(grid: Any) -> list[tuple[float, float, int, int]]:
+    """Rekordbox TEMPO markers (start ms, BPM, beat in bar, beats per bar) for a saved BeatGrid.
+
+    A constant grid is one marker at its first non-negative beat. A per-beat
+    grid gets one marker per tempo segment (see TEMPO_SEGMENT_TOLERANCE_MS).
+    """
+    if not isinstance(grid, dict):
+        return []
+    try:
+        bpm, first = float(grid["bpm"]), float(grid["first_beat_ms"])
+        bar = int(grid.get("beats_per_bar") or 4)
+    except (KeyError, TypeError, ValueError):
+        return []
+    if not (math.isfinite(bpm) and bpm > 0 and math.isfinite(first) and 1 <= bar <= 16):
+        return []
+    times = grid.get("beat_times_ms") or []
+    numbers = grid.get("beat_numbers") or []
+
+    def number_at(index):
+        return int(numbers[index]) if index < len(numbers) else index % bar + 1
+
+    def constant():
+        period = 60_000 / bpm
+        skipped = max(0, math.ceil(-first / period))
+        return [(first + skipped * period, bpm, (number_at(0) - 1 + skipped) % bar + 1, bar)]
+
+    times = [float(value) for value in times[:100_000]]
+    start = next((index for index, value in enumerate(times) if value >= 0), None)
+    if len(times) < 2 or start is None or start == len(times) - 1:
+        return constant()
+    if any(not math.isfinite(b - a) or b <= a for a, b in zip(times, times[1:])):
+        return constant()
+    markers, end = [], start + 1
+    while end < len(times):
+        # Grow the segment while the next beat stays on the fitted period.
+        while end + 1 < len(times):
+            period = (times[end] - times[start]) / (end - start)
+            predicted = times[start] + (end + 1 - start) * period
+            if abs(times[end + 1] - predicted) > TEMPO_SEGMENT_TOLERANCE_MS:
+                break
+            end += 1
+        period = (times[end] - times[start]) / (end - start)
+        markers.append((times[start], 60_000 / period, number_at(start), bar))
+        start, end = end, end + 1
+    tempos = [marker[1] for marker in markers]
+    if max(tempos) / min(tempos) > TEMPO_SEGMENT_MAX_RATIO:
+        return constant()
+    return markers
+
+
 class UsbHandoffService:
     def __init__(self, session: Session):
         self.session = session
@@ -579,14 +637,11 @@ class UsbHandoffService:
                     continue
                 ET.SubElement(track, "POSITION_MARK", Name=str(loop.get("label") or "Memory Loop"), Type="4",
                               Start=f"{float(start) / 1000:.6f}", End=f"{float(end) / 1000:.6f}", Num="-1")
-            grid = json.loads(row.get("beat_grid_json") or "null")
-            beats = grid.get("beats") if isinstance(grid, dict) else None
-            if beats:
-                for beat in beats[:100_000]:
-                    time_ms = beat.get("position_ms") if isinstance(beat, dict) else beat
-                    number = beat.get("beat", 1) if isinstance(beat, dict) else 1
-                    if time_ms is not None and float(time_ms) >= 0:
-                        ET.SubElement(track, "TEMPO", Inizio=f"{float(time_ms) / 1000:.6f}", Bpm=attrs.get("AverageBpm", "0"), Metro="4/4", Battito=str(number))
+            markers = _tempo_markers(json.loads(row.get("beat_grid_json") or "null"))
+            if markers:
+                for time_ms, bpm, number, bar in markers:
+                    ET.SubElement(track, "TEMPO", Inizio=f"{time_ms / 1000:.6f}", Bpm=f"{bpm:.2f}",
+                                  Metro=f"{bar}/4", Battito=str(number))
             elif row.get("bpm"):
                 ET.SubElement(track, "TEMPO", Inizio="0.000000", Bpm=f"{float(row['bpm']):.2f}", Metro="4/4", Battito="1")
         playlists = ET.SubElement(root, "PLAYLISTS")
@@ -807,7 +862,7 @@ def create_backup(session: Session, destination: str, include_media: bool,
     missing: list[str] = []
     try:
         session.commit()
-        with WORKFLOW_LOCK, db_connection.database_activity, db_connection.db_lock, db_connection.exclusive_database():
+        with WORKFLOW_LOCK, db_connection.background_analysis_paused(), db_connection.database_activity, db_connection.db_lock, db_connection.exclusive_database():
             session.exec(text("CHECKPOINT"))
             db_snapshot = stage / "plumdeck.duckdb"
             # DuckDB owns an exclusive file handle on Windows. Export through
@@ -981,7 +1036,7 @@ def restore_backup(path: str, confirmed: bool) -> dict[str, Any]:
         staged_db = restore_root / "plumdeck.duckdb"
         # Validate/migrate the staging copy without mutating the archive.
         from infra.database.compaction import ensure_healthy_db
-        ensure_healthy_db(str(staged_db))
+        ensure_healthy_db(str(staged_db), keep_backup=False)
         # Restore included files under a content-addressed managed root and
         # rewrite only the matching archived references in the staging DB.
         managed_root = db_path.parent / "restored-assets" / manifest["snapshot_id"]
@@ -1014,11 +1069,12 @@ def restore_backup(path: str, confirmed: bool) -> dict[str, Any]:
         if jobs.exists():
             import sqlite3
             with closing(sqlite3.connect(jobs)) as queue, queue:
-                queue.execute("UPDATE jobs SET status='paused' WHERE status IN ('running','pausing')")
+                queue.execute("UPDATE jobs SET status=CASE WHEN json_extract(config, '$.background') "
+                              "THEN 'queued' ELSE 'paused' END WHERE status IN ('running','pausing')")
                 queue.execute("UPDATE items SET status='pending' WHERE status='running'")
         queue_path = Path(str(db_path) + ".analysis-jobs.sqlite3")
         queue_rollback = Path(str(rollback) + ".analysis-jobs.sqlite3")
-        with WORKFLOW_LOCK, db_connection.database_activity, db_connection.db_lock, db_connection.exclusive_database():
+        with WORKFLOW_LOCK, db_connection.background_analysis_paused(), db_connection.database_activity, db_connection.db_lock, db_connection.exclusive_database():
             db_connection.checkpoint_db()
             db_connection.close_db()
             queue_existed = queue_path.exists()

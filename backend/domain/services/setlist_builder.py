@@ -1,7 +1,7 @@
 from typing import List, Dict, Any
 import numpy as np
 from domain.models.track import Track
-from utils.audio_math import bpm_distance, calculate_mixability_score
+from utils.audio_math import bpm_distance, calculate_mixability_score, SET_TRANSITION_WEIGHTS
 from utils.embedding import cosine_similarity
 
 # 同一アーティスト連続のペナルティ (単調なセットを防ぐ)
@@ -150,8 +150,13 @@ class SetlistBuilder:
                     param_score -= abs(candidate["track"].bpm - target_bpm) * 0.01
                 param_score -= abs(candidate["track"].energy - target_energy)
                 
-                # Weighted Sum
-                total_score = (mix_score * 1.5) + (goal_sim * 1.0) + (param_score * 0.5)
+                # Preserve the existing scale while excluding an unavailable
+                # goal embedding, just as the transition scorer does.
+                total_score = (mix_score * 1.5) + (param_score * 0.5)
+                if goal_sim is None:
+                    total_score *= 3.0 / 2.0
+                else:
+                    total_score += goal_sim
                 if (current_node["id"], candidate["id"]) in (approved_wordplay_edges or ()):
                     total_score += APPROVED_WORDPLAY_BONUS
                 
@@ -180,5 +185,5 @@ class SetlistBuilder:
             candidate_bpm=candidate["track"].bpm,
             candidate_key=candidate["track"].key,
             vector_similarity=vec_sim,
-            weights={"bpm": 0.4, "key": 0.3, "vector": 0.3} # 繋ぎ重視の重み配分
+            weights=SET_TRANSITION_WEIGHTS,
         )

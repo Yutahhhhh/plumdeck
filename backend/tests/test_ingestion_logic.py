@@ -28,7 +28,8 @@ async def test_process_track_ingestion_imports_lrc(tmp_path, mocker):
     })
     mocker.patch("domain.services.ingestion_domain_service.analyze_track_file", return_value={
         "filepath": str(mp3_path), "title": "Title", "artist": "Artist",
-        "duration": 60, "bpm": 120, "embedding": [0.1] * 200,
+        "duration": 60, "bpm": 120, "energy": .7, "danceability": .6, "brightness": .4, "noisiness": .2,
+        "features_extra": {"waveform_peaks": [.2, .7]},
     })
     mocker.patch("domain.services.ingestion_domain_service.has_valid_metadata", return_value=True)
     
@@ -74,7 +75,8 @@ async def test_process_track_ingestion_lyrics_priority(tmp_path, mocker):
         "filepath": str(mp3_path),
         "duration": 60,
         "bpm": 120,
-        "embedding": [0.1] * 200,
+        "energy": .7, "danceability": .6, "brightness": .4, "noisiness": .2,
+        "features_extra": {"waveform_peaks": [.2, .7]},
     })
     
     service = IngestionDomainService()
@@ -116,7 +118,8 @@ async def test_process_track_ingestion_embedded_lyrics_fallback(tmp_path, mocker
         "artist": "Artist",
         "bpm": 120,
         "duration": 60,
-        "embedding": [0.1] * 200,
+        "energy": .7, "danceability": .6, "brightness": .4, "noisiness": .2,
+        "features_extra": {"waveform_peaks": [.2, .7]},
         "filepath": str(mp3_path)
     })
     
