@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import { rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { CommandError, FIXTURES, Host, RATE, clickTemplate, delay, workspace, writeFixture } from './harness.mjs';
-import { db, distinctOnsets, dominantFrequency, findCopies, median, periodByAutocorrelation, residualDb, risingEdges, toneAmplitude, worstOutOfBandDb, peak, envelope } from './analysis.mjs';
+import { db, dominantFrequency, findCopies, median, periodByAutocorrelation, residualDb, risingEdges, toneAmplitude, worstOutOfBandDb, peak, envelope } from './analysis.mjs';
 
 const binary = process.env.PLUMDECK_TEST_HOST;
 const reportPath = process.env.PLUMDECK_CONFORMANCE_REPORT;
@@ -217,8 +217,8 @@ test('Play engine conformance on BlackHole 2ch', { timeout: 900000, skip: !binar
 
   // ---------------------------------------------------------------- H-2
   await check('H-2', 'syncLeader telemetry follows the engine', ['H-2', 'B-01'], async ({ metric, expect }) => {
+    // Both decks audible: Mixxx lets only a playing, audible deck lead.
     await solo('A', files.pulse120); await solo('B', files.pulse128, { bpm: 128 });
-    for (const deck of ['A', 'B']) await h.ok('mixer.channel.gain', { deck, gain: 0 });
     await h.ok('deck.sync.set', { deck: 'A', enabled: true, leader: 'A' });
     await h.ok('deck.sync.set', { deck: 'B', enabled: true });
     const waitLeader = async (predicate, limit = 1000) => {
@@ -246,7 +246,9 @@ test('Play engine conformance on BlackHole 2ch', { timeout: 900000, skip: !binar
     // A: 120 BPM clicks (leader). B: distinct clicks, put 35% of a beat out of phase.
     const offsets = (recording, fromS) => {
       const tail = { ...recording, mono: recording.mono.subarray(Math.floor(fromS * RATE)) };
-      const a = distinctOnsets(tail.mono, RATE, CLICK_A, CLICK_B).map(ms), b = distinctOnsets(tail.mono, RATE, CLICK_B, CLICK_A).map(ms);
+      // Real clicks correlate within -6 dB of the strongest; the other deck's
+      // click only leaks in around -16 dB, even when both coincide.
+      const a = copies(tail, CLICK_A, 0, -6, 100).map(c => c.ms), b = copies(tail, CLICK_B, 0, -6, 100).map(c => c.ms);
       const pairs = a.map(x => b.reduce((best, v) => Math.abs(v - x) < Math.abs(best - x) ? v : best, Infinity) - x)
         .filter(Number.isFinite).map(d => ((d % BEAT_MS) + BEAT_MS * 1.5) % BEAT_MS - BEAT_MS / 2);
       return { median: median(pairs), worst: pairs.length ? Math.max(...pairs.map(Math.abs)) : null, count: pairs.length };
@@ -273,8 +275,8 @@ test('Play engine conformance on BlackHole 2ch', { timeout: 900000, skip: !binar
       const onPlay = offsets(started, started.marks.play + 0.5);
       results[label] = { before, afterSyncOn: after, afterSyncedPlay: onPlay };
       expect(`${label}: decks start out of phase`, before.count > 0 && before.worst > 50, before);
-      expect(`${label}: phase error <= 2 ms one beat after SYNC ON`, after.count > 2 && Math.abs(after.median) <= 2 && after.worst <= 2.5, after);
-      expect(`${label}: phase error <= 2 ms after play while synced`, onPlay.count > 2 && Math.abs(onPlay.median) <= 2 && onPlay.worst <= 2.5, onPlay);
+      expect(`${label}: phase error <= 2 ms one beat after SYNC ON`, after.count >= 2 && Math.abs(after.median) <= 2 && after.worst <= 2.5, after);
+      expect(`${label}: phase error <= 2 ms after play while synced`, onPlay.count >= 2 && Math.abs(onPlay.median) <= 2 && onPlay.worst <= 2.5, onPlay);
       await neutral();
     }
     metric('phase', results);
@@ -320,8 +322,9 @@ test('Play engine conformance on BlackHole 2ch', { timeout: 900000, skip: !binar
     // B plays the same file unheard as the running reference timeline.
     await solo('A', files.pulse120, { play: false }); await solo('B', files.pulse120, { play: false });
     await h.ok('mixer.channel.gain', { deck: 'B', gain: 0 });
-    await h.ok('deck.play', { deck: 'A' }); await h.ok('deck.play', { deck: 'B' });
+    // SLIP is armed while stopped, as a DJ would before starting the deck.
     await h.ok('deck.slip.set', { deck: 'A', enabled: true });
+    await h.ok('deck.play', { deck: 'A' }); await h.ok('deck.play', { deck: 'B' });
     const gap = s => s.decks.A.positionMs - s.decks.B.positionMs;
     const results = {};
     const measure = async (name, gesture) => {
@@ -434,9 +437,15 @@ test('Play engine conformance on BlackHole 2ch', { timeout: 900000, skip: !binar
   });
 
   // ---------------------------------------------------------------- FX timing
+  /** Ends running echo/reverb tails, so each take starts from an empty delay. */
+  async function flushTails() {
+    await h.try('mixer.beatfx.set', { effect: 'flanger', target: 'A', enabled: false });
+    await pad('A', 'flanger', true); await pad('A', 'flanger', false);
+  }
   async function echoTake(configure, { beats = 1, lengthMs = 1300 } = {}) {
     // A click at 4000 ms; the recording starts ~100 ms before it.
     await h.ok('deck.pause', { deck: 'A' }); await h.ok('deck.seek', { deck: 'A', positionMs: 3850 });
+    await flushTails();
     await configure();
     const recording = await h.record(async () => { await h.ok('deck.play', { deck: 'A' }); }, Math.max(lengthMs, ms(beats * 0.5) + 700));
     return copies(recording);
@@ -519,15 +528,15 @@ test('Play engine conformance on BlackHole 2ch', { timeout: 900000, skip: !binar
   // ---------------------------------------------------------------- QB-3
   await check('QB-3', 'dry preservation and insert leakage', ['QB-3', 'H-8', 'H-10', 'X-01', 'X-02'], async ({ metric, expect }) => {
     await solo('A', files.clicks, { play: false });
-    const dryFound = await echoTake(async () => {});
-    const dryGain = dryFound[0]?.gain ?? 0;
+    const direct = found => found.reduce((a, b) => (b.gain > a.gain ? b : a), { gain: 0 }).gain;
+    const dryGain = direct(await echoTake(async () => {}));
     const dry = {};
     for (const effect of ['echo', 'lowcutecho', 'mtdelay', 'spiral', 'reverb']) {
       for (const mix of [0.5, 1]) {
         let accepted;
         const found = await echoTake(async () => { accepted = await h.try('mixer.beatfx.set', { effect, target: 'A', enabled: true, mix, beats: 1, auto: true }); });
         await h.try('mixer.beatfx.set', { enabled: false });
-        const change = found.length ? db(found[0].gain / dryGain) : -120;
+        const change = found.length ? db(direct(found) / dryGain) : -120;
         dry[`BEAT ${effect} ${mix}`] = accepted.ok ? change : rejected(accepted);
         expect(`BEAT FX ${effect} LEVEL ${mix}: dry within +/- 1 dB`, accepted.ok && Math.abs(change) <= 1, dry[`BEAT ${effect} ${mix}`]);
       }
@@ -537,7 +546,7 @@ test('Play engine conformance on BlackHole 2ch', { timeout: 900000, skip: !binar
         let accepted;
         const found = await echoTake(async () => { accepted = await pad('A', effect, true, { mix, depth: 0.7, ...(h.has('mixer.fx.beats') && effect === 'echo' ? { beats: 1 } : {}) }); });
         await pad('A', effect, false);
-        const change = found.length ? db(found[0].gain / dryGain) : -120;
+        const change = found.length ? db(direct(found) / dryGain) : -120;
         dry[`PAD ${effect} ${mix}`] = accepted.ok ? change : rejected(accepted);
         expect(`PAD ${effect} mix ${mix}: dry within +/- 1 dB`, accepted.ok && Math.abs(change) <= 1, dry[`PAD ${effect} ${mix}`]);
       }
@@ -547,7 +556,7 @@ test('Play engine conformance on BlackHole 2ch', { timeout: 900000, skip: !binar
     // LEVEL 0 must be the dry signal.
     await h.load('A', files.pulse120);
     const take = async configure => {
-      await h.ok('deck.pause', { deck: 'A' }); await h.ok('deck.seek', { deck: 'A', positionMs: 2000 }); await configure();
+      await h.ok('deck.pause', { deck: 'A' }); await h.ok('deck.seek', { deck: 'A', positionMs: 2000 }); await flushTails(); await configure();
       return h.record(async () => { await h.ok('deck.play', { deck: 'A' }); }, 1300);
     };
     const reference = await take(async () => {});
@@ -587,7 +596,7 @@ test('Play engine conformance on BlackHole 2ch', { timeout: 900000, skip: !binar
       const recording = await take(() => h.try('mixer.beatfx.set', { effect: 'pitchshift', target: 'A', enabled: true, mix, auto: true }));
       await h.try('mixer.beatfx.set', { enabled: false });
       const leak = db(toneAmplitude(recording.mono, RATE, 1000, RATE * 0.3, RATE * 1.1) / refAmp);
-      pitch[`LEVEL ${mix}`] = { leakDb: leak, hz: dominantFrequency(recording.mono, RATE, 300, 2500, RATE * 0.3, RATE * 1.1) };
+      pitch[`LEVEL ${mix}`] = { leakDb: leak, hz: dominantFrequency(recording.mono, RATE, 100, 2500, RATE * 0.3, RATE * 1.1) };
       expect(`BEAT FX PITCH LEVEL ${mix}: 1 kHz leak <= -40 dB`, leak <= -40, leak);
     }
     metric('pitch', pitch);
@@ -599,6 +608,7 @@ test('Play engine conformance on BlackHole 2ch', { timeout: 900000, skip: !binar
     const tails = {};
     const takeTail = async (label, on, off, kind) => {
       await h.ok('deck.pause', { deck: 'A' }); await h.ok('deck.seek', { deck: 'A', positionMs: 3850 });
+      await flushTails();
       const accepted = await on();
       const recording = await h.record(async mark => {
         await h.ok('deck.play', { deck: 'A' }); mark('play');

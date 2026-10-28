@@ -208,25 +208,3 @@ export function residualDb(wet, dry, from, to) {
   return 10 * Math.log10(Math.max(residual, 1e-24) / Math.max(energy, 1e-24));
 }
 
-/**
- * Onsets (s) of `mine` that are not merely cross-talk from `other`: peaks of
- * the correlation with `mine` above `floorDb` of its maximum, kept only where
- * that correlation is at least twice the correlation with `other`.
- */
-export function distinctOnsets(x, rate, mine, other, { floorDb = -12, minGapMs = 100 } = {}) {
-  const a = correlate(x, mine), b = correlate(x, other), gap = Math.round(rate * minGapMs / 1000);
-  let top = 0;
-  for (const v of a) top = Math.max(top, Math.abs(v));
-  const floor = top * 10 ** (floorDb / 20), found = [];
-  for (let i = 1; i < a.length - 1; ++i) {
-    const v = Math.abs(a[i]);
-    if (v < floor || v < Math.abs(a[i - 1]) || v < Math.abs(a[i + 1])) continue;
-    let cross = 0;
-    for (let k = Math.max(0, i - 2); k <= Math.min(b.length - 1, i + 2); ++k) cross = Math.max(cross, Math.abs(b[k]));
-    if (v < 2 * cross) continue;
-    if (found.length && i - found.at(-1) < gap) { if (v > Math.abs(a[found.at(-1)])) found[found.length - 1] = i; continue; }
-    found.push(i);
-  }
-  const magnitude = Float64Array.from(a, Math.abs);
-  return found.map(i => refine(magnitude, i) / rate);
-}
