@@ -79,6 +79,17 @@ impl DumpOptions {
         Self { ensure_ascii: false, ..Self::default() }
     }
 
+    /// What Starlette's `JSONResponse` renders with: `json.dumps(value,
+    /// ensure_ascii=False, allow_nan=False, separators=(",", ":"))`.
+    pub fn starlette() -> Self {
+        Self {
+            ensure_ascii: false,
+            separators: Some((",".into(), ":".into())),
+            allow_nan: false,
+            ..Self::default()
+        }
+    }
+
     /// `json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)`.
     pub fn compact_unicode_default_str() -> Self {
         Self {
