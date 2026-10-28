@@ -2,12 +2,14 @@
 //! binary) and, from S13, for running inside the Tauri process.
 //!
 //! S0 serves only the health check `GET /`; everything else gets the Python
-//! backend's plain-text 404 (see [`unmatched`]). Startup progress lines
+//! backend's plain-text 404 (see [`unmatched`]). S1 opens the library before
+//! serving and closes it after ([`startup`]). Startup progress lines
 //! (`PLUMDECK_STARTUP:{...}`) and the managed-sidecar stdin shutdown line keep
 //! the desktop's and scripts/smoke-backend.py's contracts with the Python
 //! sidecar.
 
 pub mod sandbox;
+pub mod startup;
 
 use std::future::Future;
 use std::io;

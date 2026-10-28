@@ -109,11 +109,16 @@ pub fn ensure_supported_version(version: i64) -> Result<(), DbError> {
 
 /// The version guard for a file nothing has opened yet; a missing file passes
 /// (a fresh install). Opened read-only, so a refused file stays untouched.
+/// This is the first open of the file at startup, so an unreadable file fails
+/// here with the message compaction.py's first open gives.
 pub fn check_file_version(path: &Path) -> Result<Option<i64>, DbError> {
     if !path.exists() {
         return Ok(None);
     }
-    let conn = ClaimedConnection::open_read_only(path)?;
+    let conn = ClaimedConnection::open_read_only(path).map_err(|error| match error {
+        DbError::DuckDb(error) => DbError::Invalid(format!("起動時の DB チェックでファイルを開けませんでした: {error}")),
+        other => other,
+    })?;
     let version = read_schema_version(&conn)?;
     ensure_supported_version(version)?;
     Ok(Some(version))
