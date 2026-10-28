@@ -36,12 +36,27 @@ class ErrorBoundary extends React.Component<
   }
 }
 
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <ErrorBoundary>
-      <ThemeProvider defaultTheme="system" storageKey="plumdeck-ui-theme">
-        <App />
-      </ThemeProvider>
-    </ErrorBoundary>
-  </React.StrictMode>,
-);
+const root = ReactDOM.createRoot(document.getElementById("root") as HTMLElement);
+
+// Dev-only: ?preview=startup renders the startup screen with fixture data in a
+// plain browser (no Tauri/backend). Vite folds import.meta.env.DEV to false in
+// production, so this branch and its chunk are dropped from release builds.
+if (import.meta.env.DEV && new URLSearchParams(window.location.search).get("preview") === "startup") {
+  void import("./components/StartupPreview").then(({ StartupPreview }) => {
+    root.render(
+      <React.StrictMode>
+        <StartupPreview />
+      </React.StrictMode>,
+    );
+  });
+} else {
+  root.render(
+    <React.StrictMode>
+      <ErrorBoundary>
+        <ThemeProvider defaultTheme="system" storageKey="plumdeck-ui-theme">
+          <App />
+        </ThemeProvider>
+      </ErrorBoundary>
+    </React.StrictMode>,
+  );
+}
