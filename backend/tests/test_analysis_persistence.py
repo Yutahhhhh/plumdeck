@@ -69,6 +69,7 @@ def test_ingestion_persists_only_allow_listed_features_extra(session):
         "analysis_components": {**original["features_extra"]["analysis_components"],
                                 "sources": {"bpm": "own", "key": "own"}},
         "playback_grid": GRID, "playback_grid_version": 2,
+        "bpm_confidence": 3.1, "key_strength": 0.8,
     }
     # Arrays live only in the BLOB columns.
     assert analysis.beat_positions == pytest.approx([0.25, 0.72, 1.19])
@@ -90,7 +91,9 @@ def test_forced_reingest_keeps_synced_bpm_while_rekordbox_is_offline(session):
     assert extra["analysis_components"]["sources"]["bpm"] == "rekordbox"
     assert "bpm_authority" not in extra
     assert extra["analysis_bpm"] == 64.0
-    assert "beat_positions" not in extra and "key_strength" not in extra
+    assert "beat_positions" not in extra
+    # CSV export reads it, so the allow-list keeps it.
+    assert extra["key_strength"] == 0.8
 
 
 def test_reingest_without_marker_still_updates_bpm(session):
@@ -129,7 +132,8 @@ def test_rhythm_job_does_not_overwrite_rekordbox_bpm(session, tmp_path):
     assert extra["analysis_components"]["sources"]["bpm"] == "rekordbox"
     assert "bpm_authority" not in extra
     assert extra["analysis_bpm"] == 64.0
-    assert not {"bpm_confidence", "analysis_source", "beat_positions"} & extra.keys()
+    assert not {"analysis_source", "beat_positions"} & extra.keys()
+    assert extra["bpm_confidence"] == 2.0  # read by CSV export and the grid fallback
 
 
 def test_grid_job_moves_an_own_bpm_with_the_new_beats(session, tmp_path):

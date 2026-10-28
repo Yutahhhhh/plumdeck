@@ -99,7 +99,7 @@ def test_migrates_v3_to_v4_and_preserves_data(tmp_path):
         assert len(ta.beat_positions) == 300
         assert ta.beat_positions[-1] == pytest.approx(149.5)
         # 読み手のないキーは移行で落ち、許可リストのキーは残る
-        assert json.loads(fx) == {"analysis_components": {"embedding": "musicnn-16khz-v1"}}
+        assert json.loads(fx) == {"bpm_confidence": 0.9, "analysis_components": {"embedding": "musicnn-16khz-v1"}}
 
         # シーケンスは既存 id の続きから採番される
         con.execute("INSERT INTO tracks (filepath, title, artist, genre, bpm) VALUES ('/m/new.mp3','N','A','House',130)")
@@ -187,7 +187,8 @@ _LEGACY_FX = {
     "playback_grid": _GRID, "playback_grid_version": 2, "bpm_authority": _AUTHORITY,
 }
 # The bpm_authority marker becomes the recorded rekordbox source.
-_KEPT_FX = {**{k: _LEGACY_FX[k] for k in ("playback_grid", "playback_grid_version")},
+_KEPT_FX = {**{k: _LEGACY_FX[k] for k in ("playback_grid", "playback_grid_version",
+                                             "bpm_confidence", "key_strength", "bpm_raw")},
             "analysis_components": {**_LEGACY_FX["analysis_components"], "sources": {"bpm": "rekordbox"}}}
 # 既に許可リストだけの行 (区切りの空白なし) は 1 バイトも変えない
 _CLEAN_FX_TEXT = '{"analysis_components":{"embedding":"musicnn-16khz-v1"},"analysis_bpm":121.5}'

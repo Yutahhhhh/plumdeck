@@ -1,8 +1,8 @@
 """Keys stored in track_analyses.features_extra_json.
 
 Analyzer results carry more: beat/waveform arrays (stored as BLOBs) and
-diagnostic keys asserted by the packaged self-tests. Neither has a reader in
-the saved row, so only these keys are persisted.
+diagnostic keys asserted by the packaged self-tests. Only keys that something
+reads from the saved row are persisted.
 """
 from typing import Any, Dict
 
@@ -15,6 +15,11 @@ PERSISTED_KEYS = (
     # bpm_authority marker is rewritten to analysis_components.sources.bpm.
     "analysis_bpm",
     "analysis_key",
+    # Analyzer diagnostics with readers: the library CSV export writes all
+    # three, and the fallback grid reader passes bpm_confidence on.
+    "bpm_confidence",
+    "key_strength",
+    "bpm_raw",
 )
 
 
