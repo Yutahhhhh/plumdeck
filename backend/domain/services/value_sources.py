@@ -58,9 +58,14 @@ def key_source_enabled(session) -> bool:
 
     try:
         row = session.get(Setting, KEY_SOURCE_SETTING)
-        value = str(row.value).strip().lower() if row is not None else ""
     except Exception:
         return KEY_SOURCE_DEFAULT
+    return key_source_value(row.value if row is not None else None)
+
+
+def key_source_value(value: Any) -> bool:
+    """Read a stored 'rekordbox_key_source' value; anything unrecognised is the default."""
+    value = str(value).strip().lower() if value is not None else ""
     if value in {"1", "true", "on", "yes"}:
         return True
     if value in {"0", "false", "off", "no"}:
