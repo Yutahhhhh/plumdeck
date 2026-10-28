@@ -71,24 +71,32 @@ class CsvAppService:
                 filepath = data.get("filepath")
                 norm_path = self._normalize_path(filepath)
                 track = self.session.exec(select(Track).where(Track.filepath == norm_path)).first()
-                before = (track.bpm, track.key) if track else None
-                if track and self._apply_track_metadata_safely(track, data):
-                    self.session.add(track)
-                    edited = [field for field, old in zip(value_sources.FIELDS, before)
-                              if getattr(track, field) != old]
-                    if edited:
-                        self._mark_manual(track.id, edited)
+                if track and self._apply_with_provenance(track, data):
                     updated_count += 1
         self.session.commit()
         return updated_count
 
-    def _mark_manual(self, track_id: int, fields: List[str]) -> None:
+    def _apply_with_provenance(self, track: Track, data: Dict[str, Any],
+                               analysis: TrackAnalysis | None = None) -> bool:
+        """Apply CSV values; a BPM/key the CSV changed is recorded as manual."""
+        before = {field: getattr(track, field) for field in value_sources.FIELDS}
+        if not self._apply_track_metadata_safely(track, data):
+            return False
+        self.session.add(track)
+        edited = [field for field, old in before.items() if getattr(track, field) != old]
+        if edited:
+            self._mark_manual(track.id, edited, analysis)
+        return True
+
+    def _mark_manual(self, track_id: int, fields: List[str],
+                     analysis: TrackAnalysis | None = None) -> TrackAnalysis:
         """A BPM/key edited here outranks rekordbox and re-analysis from now on."""
-        analysis = self.session.get(TrackAnalysis, track_id) or TrackAnalysis(track_id=track_id)
+        analysis = analysis or self.session.get(TrackAnalysis, track_id) or TrackAnalysis(track_id=track_id)
         extra = analysis.features_extra if isinstance(analysis.features_extra, dict) else {}
         updated = value_sources.with_sources(extra, {field: value_sources.MANUAL for field in fields})
         analysis.features_extra_json = json.dumps(updated)
         self.session.add(analysis)
+        return analysis
 
     def execute_import(self, data: ImportExecuteRequest) -> Tuple[int, int]:
         import_count, update_count = 0, 0
@@ -98,16 +106,16 @@ class CsvAppService:
                 track = self.session.exec(select(Track).where(Track.filepath == old_path)).first()
                 if track:
                     track.filepath = new_path
-                    if track_data and self._apply_track_metadata_safely(track, track_data):
-                        self.session.add(track)
+                    if track_data:
                         analysis = self.session.get(TrackAnalysis, track.id) or TrackAnalysis(track_id=track.id)
-                        # Merge into the existing analysis: keep features_extra (grid,
-                        # component versions, BPM sync marker) and stored arrays when the
-                        # CSV row has none. The CSV's bpm_confidence / key_strength /
-                        # bpm_raw columns have no reader and are not persisted.
-                        if track_data.get("beat_positions"): analysis.beat_positions = track_data["beat_positions"]
-                        if track_data.get("waveform_peaks"): analysis.waveform_peaks = track_data["waveform_peaks"]
-                        self.session.add(analysis)
+                        if self._apply_with_provenance(track, track_data, analysis):
+                            # Merge into the existing analysis: keep features_extra (grid,
+                            # component versions, sources) and stored arrays when the
+                            # CSV row has none. The CSV's bpm_confidence / key_strength /
+                            # bpm_raw columns are export-only and are not imported.
+                            if track_data.get("beat_positions"): analysis.beat_positions = track_data["beat_positions"]
+                            if track_data.get("waveform_peaks"): analysis.waveform_peaks = track_data["waveform_peaks"]
+                            self.session.add(analysis)
                     update_count += 1
                     
             for row in data.new_tracks:
@@ -116,8 +124,12 @@ class CsvAppService:
                 t_dict = row.model_dump()
                 for legacy in ("bpm_confidence", "key_strength", "bpm_raw"):
                     t_dict.pop(legacy, None)
+                # A BPM/key a CSV row brings is a manual value: rekordbox and
+                # re-analysis must not replace it.
+                supplied = {field: value_sources.MANUAL for field in value_sources.FIELDS
+                            if value_sources.valid(field, t_dict.get(field))}
                 analysis_info = {
-                    "extras": "{}",
+                    "extras": json.dumps(value_sources.with_sources({}, supplied)) if supplied else "{}",
                     "beats": t_dict.pop("beat_positions", []), "peaks": t_dict.pop("waveform_peaks", [])
                 }
                 if not t_dict.get("title"): t_dict["title"] = "Unknown"
@@ -138,10 +150,19 @@ class CsvAppService:
         tracks = self.session.exec(select(Track)).all()
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["filepath", "title", "artist", "album", "genre", "subgenre", "year", "is_genre_verified"])
+        writer.writerow(["filepath", "title", "artist", "album", "genre", "subgenre", "year", "bpm", "key", "is_genre_verified"])
         for track in tracks:
-            writer.writerow([track.filepath, track.title, track.artist, track.album, track.genre, track.subgenre, track.year, track.is_genre_verified])
+            writer.writerow([track.filepath, track.title, track.artist, track.album, track.genre, track.subgenre, track.year, track.bpm, track.key, track.is_genre_verified])
         return output.getvalue()
+
+    @staticmethod
+    def _parse_bpm(value: Any) -> float | None:
+        """A positive, finite BPM cell; anything else leaves the BPM unchanged."""
+        try:
+            bpm = float(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+        return bpm if value_sources.valid("bpm", bpm) else None
 
     def analyze_metadata_import(self, csv_content: str) -> MetadataImportAnalysisResult:
         reader = self._parse_csv_content(csv_content)
@@ -153,11 +174,11 @@ class CsvAppService:
             norm_path = self._normalize_path(raw_path)
             if not norm_path: continue
             is_verified = row.get('is_genre_verified', '').lower() in ('true', '1', 'yes', 'on') if row.get('is_genre_verified') else None
-            import_row = MetadataImportRow(filepath=raw_path, title=row.get('title'), artist=row.get('artist'), album=row.get('album'), genre=row.get('genre'), subgenre=row.get('subgenre'), year=int(row.get('year')) if row.get('year') and str(row.get('year')).isdigit() else None, is_genre_verified=is_verified)
+            import_row = MetadataImportRow(filepath=raw_path, title=row.get('title'), artist=row.get('artist'), album=row.get('album'), genre=row.get('genre'), subgenre=row.get('subgenre'), year=int(row.get('year')) if row.get('year') and str(row.get('year')).isdigit() else None, bpm=self._parse_bpm(row.get('bpm')), key=row.get('key'), is_genre_verified=is_verified)
             if norm_path in path_map:
                 current_track = path_map[norm_path]
                 dummy_track = Track(filepath=norm_path)
-                for field in ["title", "artist", "album", "genre", "subgenre", "year", "is_genre_verified"]:
+                for field in ["title", "artist", "album", "genre", "subgenre", "year", "bpm", "key", "is_genre_verified"]:
                     setattr(dummy_track, field, getattr(current_track, field))
                 if self._apply_track_metadata_safely(dummy_track, import_row.model_dump()):
                     updates.append({"current": current_track, "new": import_row})

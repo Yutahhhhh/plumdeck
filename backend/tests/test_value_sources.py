@@ -9,7 +9,7 @@ from sqlmodel import select
 
 from app.services.analysis_job_service import AnalysisJobService
 from app.services.csv_app_service import CsvAppService
-from api.schemas.settings import MetadataImportExecuteRequest
+from api.schemas.settings import CsvImportRow, ImportExecuteRequest, MetadataImportExecuteRequest
 from domain.models.setting import Setting
 from domain.models.track import Track, TrackAnalysis
 from domain.services import value_sources
@@ -224,6 +224,43 @@ def test_manual_csv_values_outrank_rekordbox_and_reanalysis(session, mocker):
     assert (track.bpm, track.key) == (125.0, "G minor")
     assert extra["analysis_components"]["sources"] == {"bpm": "manual", "key": "manual"}
     assert extra["analysis_bpm"] == 64.0
+
+
+def test_library_csv_corrections_are_manual_for_moved_and_new_tracks(session, mocker):
+    use_rekordbox(mocker, "bpm", path="/old.mp3")
+    track_id = IngestionRepository()._prepare_track_models(session, analysis_result(filepath="/old.mp3"))
+    session.commit()
+    assert saved(session, track_id)[1]["analysis_components"]["sources"]["bpm"] == "rekordbox"
+    CsvAppService(session).execute_import(ImportExecuteRequest(
+        new_tracks=[CsvImportRow(filepath="/lib/new.mp3", title="New", artist="Artist", bpm=125.0, key="G minor")],
+        path_updates=[{"old_path": "/old.mp3", "new_path": PATH, "track": {"bpm": 130.0}}]))
+    assert saved(session, track_id)[1]["analysis_components"]["sources"]["bpm"] == "manual"
+    new_id = session.exec(select(Track.id).where(Track.filepath == "/lib/new.mp3")).one()
+    assert saved(session, new_id)[1]["analysis_components"]["sources"] == {"bpm": "manual", "key": "manual"}
+
+    # rekordbox's 128 and the re-analysed 64 no longer replace the correction.
+    use_rekordbox(mocker, "bpm")
+    IngestionRepository()._prepare_track_models(session, analysis_result())
+    session.commit()
+    assert saved(session, track_id)[0].bpm == 130.0
+
+
+def test_metadata_csv_previews_and_imports_bpm_and_key_as_manual(session, mocker):
+    use_rekordbox(mocker, "bpm")
+    track_id = IngestionRepository()._prepare_track_models(session, analysis_result())
+    session.commit()
+    service = CsvAppService(session)
+    exported = service.export_metadata_csv().splitlines()[0].split(",")
+    assert {"bpm", "key"} <= set(exported)
+    preview = service.analyze_metadata_import(f"filepath,bpm,key\n{PATH},126.5,G minor\n{PATH}x,abc,\n")
+    assert len(preview.updates) == 1 and len(preview.not_found) == 1
+    row = preview.updates[0]["new"]
+    assert (row.bpm, row.key) == (126.5, "G minor")
+    assert preview.not_found[0].bpm is None
+    service.execute_metadata_import(MetadataImportExecuteRequest(updates=[{"new": row.model_dump()}]))
+    track, extra = saved(session, track_id)
+    assert (track.bpm, track.key) == (126.5, "G minor")
+    assert extra["analysis_components"]["sources"] == {"bpm": "manual", "key": "manual"}
 
 
 def _job_save(session, tmp_path, features, result):

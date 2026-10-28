@@ -34,6 +34,9 @@ export interface MetadataImportRow {
   genre?: string;
   subgenre?: string;
   year?: number;
+  /** Imported as a manual value that rekordbox and re-analysis keep. */
+  bpm?: number | null;
+  key?: string | null;
   is_genre_verified?: boolean;
 }
 
