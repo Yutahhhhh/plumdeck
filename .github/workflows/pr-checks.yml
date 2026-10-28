@@ -57,6 +57,8 @@ jobs:
         run: node --experimental-strip-types --test native/dj-engine-host/tests-node/beat-grid-math.test.ts native/dj-engine-host/tests-node/performance-cue-metadata.test.ts
       - name: Waveform backspin detection and JOG weight braking
         run: node --experimental-strip-types --test native/dj-engine-host/tests-node/scratch-release.test.ts
+      - name: Play controls logic (loops, tempo, key notation, mixer, shortcuts, PAD FX, protocol)
+        run: node --experimental-strip-types --test src/components/play/play-logic.test.mjs native/dj-engine-host/tests-node/protocol.test.ts native/dj-engine-host/tests-node/ddj1000-pad-pages.test.ts
 
   backend:
     name: Database and import regression tests

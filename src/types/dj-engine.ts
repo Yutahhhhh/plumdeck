@@ -83,7 +83,59 @@ export const DJ_ENGINE_OPS = {
   recordingStop: "recording.stop",
   recordingDirectorySet: "recording.directory.set",
   recordingFormatSet: "recording.format.set",
+  deckPitchbend: "deck.pitchbend",
+  deckKeyShift: "deck.key.shift",
+  deckKeySync: "deck.key.sync",
+  deckKeyReset: "deck.key.reset",
+  deckSlipSet: "deck.slip.set",
+  deckReverseSet: "deck.reverse.set",
+  deckSlipReverseSet: "deck.slipReverse.set",
+  mixerColorFxSet: "mixer.colorfx.set",
+  mixerBeatFxSet: "mixer.beatfx.set",
+  mixerChannelOrientation: "mixer.channel.orientation",
+  /** Contract for H-12; gated by `mixer.crossfader.curve`. */
+  mixerCrossfaderCurve: "mixer.crossfader.curve",
+  engineAudioHealth: "engine.audioHealth",
 } as const;
+
+/**
+ * Capability names the UI gates on. A host declares only what it implements;
+ * controls for undeclared capabilities stay hidden or disabled with a reason.
+ * Names marked "contract" are not declared by the Mixxx host yet: they are the
+ * agreed surface for the host fixes (H-x) and the Rust engine.
+ */
+export const DJ_ENGINE_CAPABILITIES = {
+  deckKey: "deck.key",
+  /** contract (H-4): the engine knows the loaded track's key, so KEY SYNC works. */
+  deckKeySync: "deck.key.sync",
+  deckSlip: "deck.slip",
+  deckReverse: "deck.reverse",
+  deckPitchbend: "deck.pitchbend",
+  deckSync: "deck.sync",
+  /** contract (H-2): `syncLeader` is re-read every tick, not only after sync ops. */
+  deckSyncLeaderTelemetry: "deck.sync.leader.v2",
+  /** contract (H-11): loops 1/64..512 beats and beat jumps up to 128. */
+  deckLoopExtended: "deck.loop.range.v2",
+  mixerColorFx: "mixer.colorfx",
+  mixerBeatFx: "mixer.beatfx",
+  mixerBeatFxRelease: "mixer.beatfx.release",
+  /** contract (H-8 ②): `mixer.fx.set` accepts `beats`. */
+  mixerFxBeats: "mixer.fx.beats",
+  /** contract (H-12): `mixer.crossfader.curve` is accepted. */
+  mixerCrossfaderCurve: "mixer.crossfader.curve",
+  mixerCrossfader: "mixer.crossfader",
+  mixerPfl: "mixer.pfl",
+  sampler: "sampler",
+  recording: "recording",
+  /** contract (Rust): pad modes that have no engine op today. */
+  deckSlicer: "deck.slicer",
+  deckSequencer: "deck.sequencer",
+  deckCensor: "deck.censor",
+  deckStems: "deck.stems",
+} as const;
+
+export const CROSSFADER_CURVES = ["smooth", "standard", "sharp"] as const;
+export type CrossfaderCurve = (typeof CROSSFADER_CURVES)[number];
 
 export type DjEngineOp = (typeof DJ_ENGINE_OPS)[keyof typeof DJ_ENGINE_OPS];
 
@@ -208,7 +260,8 @@ export interface DeckState {
  */
 export const PAD_EFFECTS = ["echo", "reverb", "flanger", "phaser", "filter", "bitcrusher", "distortion", "autopan", "tremolo", "moogladder4filter"] as const;
 export type PadEffect = (typeof PAD_EFFECTS)[number];
-export interface ChannelFx { effect: PadEffect; enabled: boolean; mix: number }
+export interface ChannelFx { effect: PadEffect; enabled: boolean; mix: number; depth?: number }
+export interface ChannelColorFx { effect: string; amount: number }
 
 export interface ChannelState {
   deck: DeckId;
@@ -220,6 +273,10 @@ export interface ChannelState {
   trim?: number;
   filter?: number;
   fx?: ChannelFx;
+  /** Color FX knob as last set; `filter` is derived from it and drifts for non-filter types. */
+  colorFx?: ChannelColorFx;
+  /** Crossfader assign: 0 = A, 1 = THRU, 2 = B. */
+  orientation?: number;
 }
 
 export interface BeatFxState {
@@ -230,6 +287,8 @@ export interface BeatFxState {
   enabled: boolean;
   mix: number;
   beats: number;
+  /** RELEASE FX is held. */
+  releaseActive?: boolean;
 }
 
 export interface MixerState {

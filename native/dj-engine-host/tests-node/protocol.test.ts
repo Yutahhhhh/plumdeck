@@ -17,7 +17,12 @@ import {
   applySnapshotWithEvents,
   buildBeatgridParams,
   buildBeatStepParams,
+  buildColorFxParams,
+  buildCrossfaderCurveParams,
   buildFilterParams,
+  buildKeyShiftParams,
+  buildOrientationParams,
+  buildPitchbendParams,
   buildTrimParams,
   buildFxParams,
   buildCrossfaderParams,
@@ -69,6 +74,27 @@ test("performance controls reject invalid ranges and unsupported effects", () =>
   for (const value of [-0.01, 1.01, NaN]) assert.throws(() => buildFxParams("A", "echo", true, value));
   assert.deepEqual(buildFxParams("A", "phaser", true, 1, 1), { deck: "A", effect: "phaser", enabled: true, mix: 1, depth: 1 });
   for (const value of [-0.01, 1.01, NaN]) assert.throws(() => buildFxParams("A", "echo", true, 1, value));
+});
+
+test("play-mode contract ops validate their parameters", () => {
+  assert.equal(buildBeatStepParams("A", 1 / 64, true, true).beats, 1 / 64);
+  assert.equal(buildBeatStepParams("A", 512, true, true).beats, 512);
+  assert.equal(buildBeatStepParams("A", -128, false, true).beats, -128);
+  assert.throws(() => buildBeatStepParams("A", 1 / 64, true), "1/64 needs the extended capability");
+  assert.throws(() => buildBeatStepParams("A", 129, false, true));
+  assert.deepEqual(buildFxParams("A", "echo", true, 0.5, 0.5, 0.5), { deck: "A", effect: "echo", enabled: true, mix: 0.5, depth: 0.5, beats: 0.5 });
+  assert.throws(() => buildFxParams("A", "echo", true, 0.5, 0.5, 0));
+  assert.deepEqual(buildKeyShiftParams("B", -3), { deck: "B", semitones: -3 });
+  for (const value of [13, -13, 0.5, NaN]) assert.throws(() => buildKeyShiftParams("B", value));
+  assert.deepEqual(buildPitchbendParams("A", 0.04), { deck: "A", amount: 0.04 });
+  assert.throws(() => buildPitchbendParams("A", 0.8));
+  assert.deepEqual(buildColorFxParams("C", "whitenoise", -0.5), { deck: "C", effect: "whitenoise", amount: -0.5 });
+  assert.throws(() => buildColorFxParams("C", "space", 0));
+  assert.throws(() => buildColorFxParams("C", "filter", 1.5));
+  assert.deepEqual(buildOrientationParams("D", 2), { deck: "D", orientation: 2 });
+  assert.throws(() => buildOrientationParams("D", 3));
+  assert.deepEqual(buildCrossfaderCurveParams("sharp"), { curve: "sharp" });
+  assert.throws(() => buildCrossfaderCurveParams("steep"));
 });
 
 test("restored hot cues retain exact source positions and require eight valid slots", () => {

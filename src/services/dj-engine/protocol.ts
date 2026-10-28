@@ -7,6 +7,7 @@
  */
 
 import {
+  CROSSFADER_CURVES,
   DECK_IDS,
   DJ_ENGINE_EVENTS,
   DJ_ENGINE_RANGES,
@@ -118,11 +119,50 @@ export function buildLoadParams(
   return { deck, track };
 }
 
-export function buildBeatStepParams(deck: DeckId, beats: number, loop = false): Record<string, unknown> {
+/**
+ * `extended` follows the `deck.loop.range.v2` capability: loops 1/64..512 and
+ * jumps up to ±128 beats instead of the Mixxx host's 1/8..64.
+ */
+export function buildBeatStepParams(deck: DeckId, beats: number, loop = false, extended = false): Record<string, unknown> {
   assertDeckId(deck);
-  assertRange("beats", beats, { min: loop ? .125 : -64, max: 64 });
-  if (Math.abs(beats) < .125) throw new DjEngineValidationError("beats", "拍数は 1/8 拍以上で指定してください");
+  const max = extended ? (loop ? 512 : 128) : 64, min = extended ? 1 / 64 : .125;
+  assertRange("beats", beats, { min: loop ? min : -max, max });
+  if (Math.abs(beats) < min) throw new DjEngineValidationError("beats", `拍数は ${extended ? "1/64" : "1/8"} 拍以上で指定してください`);
   return { deck, beats };
+}
+
+export function buildKeyShiftParams(deck: DeckId, semitones: number): Record<string, unknown> {
+  assertDeckId(deck);
+  assertRange("semitones", semitones, { min: -12, max: 12 });
+  if (!Number.isInteger(semitones)) throw new DjEngineValidationError("semitones", "キーは半音単位で指定してください");
+  return { deck, semitones };
+}
+
+/** Temporary speed offset; the host releases it ~150 ms after the last message. */
+export function buildPitchbendParams(deck: DeckId, amount: number): Record<string, unknown> {
+  assertDeckId(deck);
+  assertRange("amount", amount, { min: -0.75, max: 0.75 });
+  return { deck, amount };
+}
+
+export const COLOR_FX_EFFECTS = ["filter", "echo", "pitchshift", "whitenoise"] as const;
+export function buildColorFxParams(deck: DeckId, effect: string, amount: number): Record<string, unknown> {
+  assertDeckId(deck);
+  if (!(COLOR_FX_EFFECTS as readonly string[]).includes(effect)) throw new DjEngineValidationError("effect", `Color FX は ${COLOR_FX_EFFECTS.join(" / ")} のいずれかです`);
+  assertRange("amount", amount, { min: -1, max: 1 });
+  return { deck, effect, amount };
+}
+
+/** Crossfader assign: 0 = A, 1 = THRU, 2 = B. */
+export function buildOrientationParams(deck: DeckId, orientation: number): Record<string, unknown> {
+  assertDeckId(deck);
+  if (orientation !== 0 && orientation !== 1 && orientation !== 2) throw new DjEngineValidationError("orientation", "割り当ては 0 (A) / 1 (THRU) / 2 (B) です");
+  return { deck, orientation };
+}
+
+export function buildCrossfaderCurveParams(curve: string): Record<string, unknown> {
+  if (!(CROSSFADER_CURVES as readonly string[]).includes(curve)) throw new DjEngineValidationError("curve", `カーブは ${CROSSFADER_CURVES.join(" / ")} のいずれかです`);
+  return { curve };
 }
 
 export function buildFilterParams(deck: DeckId, value: number): Record<string, unknown> {
@@ -139,13 +179,15 @@ export function buildTrimParams(deck: DeckId, gain: number): Record<string, unkn
 export const FX_MIX_RANGE = { min: 0, max: 1 } as const;
 export const FX_DEPTH_RANGE = { min: 0, max: 1 } as const;
 
-export function buildFxParams(deck: DeckId, effect: PadEffect, enabled: boolean, mix: number, depth?: number): Record<string, unknown> {
+/** `beats` is sent only to hosts declaring `mixer.fx.beats`. */
+export function buildFxParams(deck: DeckId, effect: PadEffect, enabled: boolean, mix: number, depth?: number, beats?: number): Record<string, unknown> {
   assertDeckId(deck);
   if (!PAD_EFFECTS.includes(effect) || typeof enabled !== "boolean") throw new DjEngineValidationError("effect", "エフェクトの種類または状態が不正です");
   assertRange("mix", mix, FX_MIX_RANGE);
-  if (depth === undefined) return { deck, effect, enabled, mix };
-  assertRange("depth", depth, FX_DEPTH_RANGE);
-  return { deck, effect, enabled, mix, depth };
+  const params: Record<string, unknown> = { deck, effect, enabled, mix };
+  if (depth !== undefined) { assertRange("depth", depth, FX_DEPTH_RANGE); params.depth = depth; }
+  if (beats !== undefined) { assertRange("beats", beats, { min: 1 / 64, max: 512 }); params.beats = beats; }
+  return params;
 }
 
 export function buildSeekParams(

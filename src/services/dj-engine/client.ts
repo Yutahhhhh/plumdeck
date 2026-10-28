@@ -19,6 +19,7 @@ import { Backspin } from "./backspin";
 import { microphoneCommandParams } from "./audio-settings";
 
 import {
+  DJ_ENGINE_CAPABILITIES,
   DJ_ENGINE_OPS,
   type DeckId,
   type AudioConfig,
@@ -42,7 +43,12 @@ import {
   applySnapshotWithEvents,
   buildBeatgridParams,
   buildBeatStepParams,
+  buildColorFxParams,
+  buildCrossfaderCurveParams,
   buildFilterParams,
+  buildKeyShiftParams,
+  buildOrientationParams,
+  buildPitchbendParams,
   buildTrimParams,
   buildFxParams,
   buildChannelGainParams,
@@ -362,7 +368,36 @@ export class DjEngineClient {
   }
 
   pitchbend(deck: DeckId, amount: number): Promise<unknown> {
-    return this.continuous(`${deck}:pitchbend`, "deck.pitchbend", this.withTrack(deck, { deck, amount }), deck);
+    return this.continuous(`${deck}:pitchbend`, DJ_ENGINE_OPS.deckPitchbend, this.withTrack(deck, buildPitchbendParams(deck, amount)), deck);
+  }
+
+  keyShift(deck: DeckId, semitones: number): Promise<unknown> {
+    return this.send(DJ_ENGINE_OPS.deckKeyShift, this.withTrack(deck, buildKeyShiftParams(deck, semitones)));
+  }
+
+  keySync(deck: DeckId): Promise<unknown> {
+    return this.send(DJ_ENGINE_OPS.deckKeySync, this.withTrack(deck, { deck }));
+  }
+
+  keyReset(deck: DeckId): Promise<unknown> {
+    return this.send(DJ_ENGINE_OPS.deckKeyReset, this.withTrack(deck, { deck }));
+  }
+
+  setSlip(deck: DeckId, enabled: boolean): Promise<unknown> {
+    return this.send(DJ_ENGINE_OPS.deckSlipSet, this.withTrack(deck, { deck, enabled }));
+  }
+
+  setReverse(deck: DeckId, enabled: boolean): Promise<unknown> {
+    return this.send(DJ_ENGINE_OPS.deckReverseSet, this.withTrack(deck, { deck, enabled }));
+  }
+
+  setSlipReverse(deck: DeckId, enabled: boolean): Promise<unknown> {
+    return this.send(DJ_ENGINE_OPS.deckSlipReverseSet, this.withTrack(deck, { deck, enabled }));
+  }
+
+  /** True when the host takes the rekordbox loop/jump ranges. */
+  private extendedBeats(): boolean {
+    return Boolean(this.clientState.snapshot?.engine.capabilities.includes(DJ_ENGINE_CAPABILITIES.deckLoopExtended));
   }
 
   seek(deck: DeckId, positionMs: number, durationMs?: number): Promise<unknown> {
@@ -500,11 +535,11 @@ export class DjEngineClient {
   beatJump(deck: DeckId, beats: number): Promise<unknown> {
     const settling = this.settleBackspin(deck);
     if (settling) return settling.then(() => this.beatJump(deck, beats));
-    return this.send(DJ_ENGINE_OPS.deckBeatJump, this.withTrack(deck, buildBeatStepParams(deck, beats)));
+    return this.send(DJ_ENGINE_OPS.deckBeatJump, this.withTrack(deck, buildBeatStepParams(deck, beats, false, this.extendedBeats())));
   }
 
   beatLoop(deck: DeckId, beats: number): Promise<unknown> {
-    return this.send(DJ_ENGINE_OPS.deckBeatLoop, this.withTrack(deck, buildBeatStepParams(deck, beats, true)));
+    return this.send(DJ_ENGINE_OPS.deckBeatLoop, this.withTrack(deck, buildBeatStepParams(deck, beats, true, this.extendedBeats())));
   }
 
   setQuantize(deck: DeckId, enabled: boolean): Promise<unknown> {
@@ -524,8 +559,8 @@ export class DjEngineClient {
    * は待機中の値を上書きするため、押下の `true` が離した `false` に置き換わり、
    * エフェクトが一瞬しか掛からない（＝掛かっていないように聞こえる）。
    */
-  async setFx(deck: DeckId, effect: PadEffect, enabled: boolean, mix: number, depth?: number): Promise<unknown> {
-    const params = routePerformanceCommand(DJ_ENGINE_OPS.mixerFxSet, this.withTrack(deck, buildFxParams(deck, effect, enabled, mix, depth)));
+  async setFx(deck: DeckId, effect: PadEffect, enabled: boolean, mix: number, depth?: number, beats?: number): Promise<unknown> {
+    const params = routePerformanceCommand(DJ_ENGINE_OPS.mixerFxSet, this.withTrack(deck, buildFxParams(deck, effect, enabled, mix, depth, beats)));
     try {
       return await this.send(DJ_ENGINE_OPS.mixerFxSet, params);
     } catch (cause) {
@@ -541,6 +576,28 @@ export class DjEngineClient {
 
   setEq(deck: DeckId, band: EqBand, gain: number): Promise<unknown> {
     return this.continuous(`${deck}:eq:${band}`, DJ_ENGINE_OPS.mixerChannelEq, buildEqParams(deck, band, gain));
+  }
+
+  /** COLOR knob. Latest value wins while the knob is turning. */
+  setColorFx(deck: DeckId, effect: string, amount: number): Promise<unknown> {
+    return this.continuous(`${deck}:colorfx`, DJ_ENGINE_OPS.mixerColorFxSet, buildColorFxParams(deck, effect, amount));
+  }
+
+  setOrientation(deck: DeckId, orientation: number): Promise<unknown> {
+    return this.send(DJ_ENGINE_OPS.mixerChannelOrientation, buildOrientationParams(deck, orientation));
+  }
+
+  setCrossfaderCurve(curve: string): Promise<unknown> {
+    return this.send(DJ_ENGINE_OPS.mixerCrossfaderCurve, buildCrossfaderCurveParams(curve));
+  }
+
+  setBeatFx(params: Record<string, unknown>): Promise<unknown> {
+    return this.send(DJ_ENGINE_OPS.mixerBeatFxSet, params);
+  }
+
+  /** xruns / late callbacks since start. Hosts without it reply `unknown_op`. */
+  audioHealth(): Promise<{ xruns?: number; lateCallbacks?: number }> {
+    return this.send(DJ_ENGINE_OPS.engineAudioHealth, {}) as Promise<{ xruns?: number; lateCallbacks?: number }>;
   }
 
   setPfl(deck: DeckId, enabled: boolean): Promise<unknown> {
