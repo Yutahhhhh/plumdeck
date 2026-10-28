@@ -1,15 +1,20 @@
 //! The plumdeck backend server, assembled for headless use (`plumdeck-backend`
 //! binary) and, from S13, for running inside the Tauri process.
 //!
-//! S0 serves only the health check `GET /` and FastAPI-style JSON errors for
-//! unknown routes. Startup progress lines (`PLUMDECK_STARTUP:{...}`) and the
-//! managed-sidecar stdin shutdown line keep the desktop's and
-//! scripts/smoke-backend.py's contracts with the Python sidecar.
+//! S0 serves only the health check `GET /`; everything else gets the Python
+//! backend's plain-text 404 (see [`unmatched`]). Startup progress lines
+//! (`PLUMDECK_STARTUP:{...}`) and the managed-sidecar stdin shutdown line keep
+//! the desktop's and scripts/smoke-backend.py's contracts with the Python
+//! sidecar.
+
+pub mod sandbox;
 
 use std::future::Future;
 use std::io;
 
-use axum::http::StatusCode;
+use axum::extract::Request;
+use axum::http::{header, Method, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
@@ -46,20 +51,37 @@ async fn root() -> Json<Value> {
     Json(json!({ "message": ROOT_MESSAGE }))
 }
 
-async fn not_found() -> HttpError {
-    ApiError::not_found().into()
+/// What the Python backend answers when no route takes a request.
+///
+/// main.py mounts the MCP app at `/`, so every request FastAPI's routes do
+/// not fully match (an unknown path, a known path with another method such as
+/// `POST /`, `HEAD` on a GET route, a plain `OPTIONS`) falls into it and gets
+/// Starlette's plain-text 404, never FastAPI's JSON 404 or a 405. Kept
+/// bug-compatible until a deviation is approved. CORS preflights are answered
+/// by the CORS middleware before this point (S2).
+pub fn unmatched() -> Response {
+    (StatusCode::NOT_FOUND, [(header::CONTENT_TYPE, "text/plain; charset=utf-8")], "Not Found").into_response()
 }
 
-async fn method_not_allowed() -> HttpError {
-    ApiError::method_not_allowed().into()
+async fn unmatched_handler() -> Response {
+    unmatched()
+}
+
+/// FastAPI's GET routes do not answer HEAD (axum's do), so HEAD is unmatched.
+async fn head_is_unmatched(request: Request, next: Next) -> Response {
+    if request.method() == Method::HEAD {
+        return unmatched();
+    }
+    next.run(request).await
 }
 
 /// The HTTP routes.
 pub fn router() -> Router {
     Router::new()
         .route("/", get(root))
-        .fallback(not_found)
-        .method_not_allowed_fallback(method_not_allowed)
+        .fallback(unmatched_handler)
+        .method_not_allowed_fallback(unmatched_handler)
+        .layer(middleware::from_fn(head_is_unmatched))
 }
 
 /// Serve `router()` on `listener` until `shutdown` resolves, then finish
@@ -183,14 +205,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unknown_routes_are_json_errors() {
-        let (status, content_type, body) = call(Method::GET, "/api/does-not-exist").await;
+    async fn unmatched_requests_get_the_mounts_plain_404() {
+        for (method, path) in [
+            (Method::GET, "/api/does-not-exist"),
+            (Method::GET, "/api/"),
+            (Method::POST, "/"),
+            (Method::DELETE, "/"),
+            (Method::OPTIONS, "/"),
+        ] {
+            let (status, content_type, body) = call(method.clone(), path).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}");
+            assert_eq!(content_type, "text/plain; charset=utf-8", "{method} {path}");
+            assert_eq!(body, "Not Found", "{method} {path}");
+        }
+        let (status, content_type, body) = call(Method::HEAD, "/").await;
         assert_eq!(status, StatusCode::NOT_FOUND);
-        assert_eq!(content_type, "application/json");
-        assert_eq!(body, r#"{"detail":"Not Found"}"#);
-        let (status, _, body) = call(Method::POST, "/").await;
-        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
-        assert_eq!(body, r#"{"detail":"Method Not Allowed"}"#);
+        assert_eq!(content_type, "text/plain; charset=utf-8");
+        // axum drops HEAD bodies, as uvicorn does.
+        assert_eq!(body, "");
     }
 
     #[test]

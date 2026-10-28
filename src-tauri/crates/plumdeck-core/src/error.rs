@@ -47,14 +47,11 @@ impl ApiError {
         Self::new(409, detail)
     }
 
-    /// Starlette's default for an unmatched route.
+    /// `HTTPException(status_code=404)` without a detail. Unmatched routes
+    /// are not this: they get the MCP mount's plain-text 404
+    /// (plumdeck_backend::unmatched).
     pub fn not_found() -> Self {
         Self::new(404, "Not Found")
-    }
-
-    /// Starlette's default for a matched path with the wrong method.
-    pub fn method_not_allowed() -> Self {
-        Self::new(405, "Method Not Allowed")
     }
 
     /// The JSON body, `{"detail": ...}`.
