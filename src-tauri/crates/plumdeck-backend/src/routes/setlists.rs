@@ -42,7 +42,7 @@ fn not_found(detail: &str) -> Response {
 }
 
 /// A setlist as `jsonable_encoder` writes the model.
-fn setlist_json(row: &SetlistRow) -> PyValue {
+pub(crate) fn setlist_json(row: &SetlistRow) -> PyValue {
     dict([
         ("id", int(row.id)),
         ("name", opt(row.name.clone(), text)),

@@ -10,6 +10,7 @@ pub mod imports;
 pub mod lyrics;
 pub mod performance;
 pub mod recommendations;
+pub mod rows;
 pub mod settings;
 pub mod setlists;
 pub mod tracks;

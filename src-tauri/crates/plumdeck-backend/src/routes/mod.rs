@@ -11,10 +11,12 @@ pub mod lyrics;
 pub mod media;
 pub mod metadata_jobs;
 pub mod performance;
+pub mod play;
 pub mod settings;
 pub mod setlists;
 pub mod suggestions;
 pub mod tracks;
+pub mod waveform_detail;
 pub mod wordplay;
 
 use axum::routing::{delete, get, patch, post, put};
@@ -58,6 +60,25 @@ pub fn api() -> Router<AppState> {
         .route("/api/settings/metadata/import/analyze", post(csv_io::analyze_metadata))
         .route("/api/settings/metadata/import/execute", post(csv_io::execute_metadata))
         .route("/api/metadata", get(media::track_metadata))
+        .route("/api/play/playlists", get(play::local_playlists).post(play::create_local_playlist))
+        .route("/api/play/playlists/{playlist_id}", patch(play::rename_local_playlist).delete(play::delete_local_playlist))
+        .route("/api/play/playlists/{playlist_id}/tracks", get(play::local_playlist_tracks).post(play::add_local_playlist_track))
+        .route("/api/play/playlists/{playlist_id}/tracks/{entry_id}", delete(play::remove_local_playlist_track))
+        .route("/api/play/rekordbox/import", post(play::import_rekordbox_mirror))
+        .route("/api/play/rekordbox/sources", get(play::mirror_sources))
+        .route("/api/play/rekordbox/{source_id}/tree", get(play::mirror_tree))
+        .route("/api/play/rekordbox/{source_id}/tree/page", get(play::mirror_tree_page))
+        .route("/api/play/rekordbox/{source_id}/playlists/{playlist_id}/tracks", get(play::mirror_tracks))
+        .route("/api/play/rekordbox/{source_id}/playlists/{playlist_id}/tracks/page", get(play::mirror_tracks_page))
+        .route("/api/play/rekordbox/{source_id}/playlists/{playlist_id}/copy", post(play::copy_mirror_playlist))
+        .route("/api/play/sessions", post(play::start_session))
+        .route("/api/play/sessions/{session_id}/end", post(play::end_session))
+        .route("/api/play/history", get(play::history).put(play::upsert_history))
+        .route("/api/play/recordings", get(play::recordings).put(play::upsert_recording))
+        .route("/api/play/recordings/formats", get(play::recording_formats))
+        .route("/api/play/recordings/{recording_id}", patch(play::name_recording).delete(play::discard_recording))
+        .route("/api/play/recordings/{recording_id}/audio", get(play::recording_audio))
+        .route("/api/play/tracks/{track_id}/waveform-detail", get(waveform_detail::get_waveform_detail))
         .route("/api/assist/library-status", get(assist::library_status))
         .route("/api/assist/decks/resolve", post(assist::resolve_decks))
         .route("/api/assist/recommendations", post(assist::recommendations))

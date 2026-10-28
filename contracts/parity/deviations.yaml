@@ -148,3 +148,21 @@ deviations:
       beat_grid null. POST /api/tracks/{id}/grid-analysis and the grid-jobs
       routes come with S11.
     current: temporary; removed when S11 lands.
+  - id: D-20
+    status: proposed
+    source: backend/app/services/waveform_detail_service.py (_cache_dir, np.savez_compressed)
+    summary: >
+      The detailed-waveform cache is a plain binary file per source in its
+      own folder (waveform-detail-rs-v1) instead of NumPy .npz files in
+      waveform-detail-v1, and its key leaves out st_ctime_ns (not portable
+      to Windows). Both caches are disposable; the answers are the same.
+    current: B never reads A's cache; the first request per file decodes again.
+  - id: D-21
+    status: proposed
+    source: backend/api/routers/play.py (CURRENT_TIMESTAMP, column defaults)
+    summary: >
+      Play routes that stamped rows with DuckDB's CURRENT_TIMESTAMP
+      (rekordbox_sources.imported_at, play_sessions.started_at/ended_at,
+      setlists.updated_at on entry add/remove) bind the app clock's local
+      time instead, like every other stored timestamp in B (plan R3).
+    current: values differ only by clock source; scenarios freeze the clock.

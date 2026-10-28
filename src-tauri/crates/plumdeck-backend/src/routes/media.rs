@@ -202,7 +202,7 @@ fn boundary() -> String {
 }
 
 /// FileResponse for an existing path.
-async fn file_response(path: PathBuf, request: &HeaderMap) -> Response {
+pub(crate) async fn file_response(path: PathBuf, request: &HeaderMap) -> Response {
     let metadata = match tokio::fs::metadata(&path).await {
         Ok(metadata) => metadata,
         Err(error) => return server_error(&error),
