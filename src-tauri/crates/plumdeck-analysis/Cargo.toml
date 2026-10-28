@@ -1,0 +1,16 @@
+[package]
+name = "plumdeck-analysis"
+version = "0.1.0"
+description = "plumdeck's own track analysis (rhythm, key, timbre, waveform) and the V1 worker protocol"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# Clean room: ported from the repository's own NumPy light path
+# (backend/domain/services/analysis/light_dsp.py, light_grid.py,
+# beat_alignment.py, beat_grid.py, portable.py), not from Essentia or librosa.
+[dependencies]
+plumdeck-decode.workspace = true
+plumdeck-media.workspace = true
+rustfft.workspace = true
+serde_json.workspace = true

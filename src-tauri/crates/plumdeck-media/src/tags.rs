@@ -92,3 +92,30 @@ pub fn duration_seconds(path: &Path) -> Option<f64> {
     let tagged = Probe::open(path).ok()?.options(ParseOptions::new()).read().ok()?;
     Some(tagged.properties().duration().as_secs_f64())
 }
+
+/// TinyTag's fields the analyzer copies into a new track.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BasicInfo {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub genre: Option<String>,
+    pub year: Option<String>,
+    pub duration: Option<f64>,
+}
+
+/// Title, artist, album, genre, year and duration (`None` fields when absent).
+pub fn basic_info(path: &Path) -> BasicInfo {
+    use lofty::file::AudioFile;
+    let Some(tagged) = Probe::open(path).ok().and_then(|probe| probe.options(ParseOptions::new()).read().ok()) else { return BasicInfo::default() };
+    let duration = Some(tagged.properties().duration().as_secs_f64());
+    let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag()) else { return BasicInfo { duration, ..BasicInfo::default() } };
+    BasicInfo {
+        title: non_empty(tag.title()),
+        artist: non_empty(tag.artist()),
+        album: non_empty(tag.album()),
+        genre: non_empty(tag.genre()),
+        year: tag.get_string(lofty::tag::ItemKey::Year).or_else(|| tag.get_string(lofty::tag::ItemKey::RecordingDate)).map(str::to_owned),
+        duration,
+    }
+}

@@ -4322,6 +4322,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "plumdeck-analysis"
+version = "0.1.0"
+dependencies = [
+ "plumdeck-decode",
+ "plumdeck-media",
+ "rustfft",
+ "serde_json",
+]
+
+[[package]]
 name = "plumdeck-backend"
 version = "0.1.0"
 dependencies = [
@@ -4332,6 +4342,7 @@ dependencies = [
  "clap",
  "encoding_rs",
  "md-5",
+ "plumdeck-analysis",
  "plumdeck-core",
  "plumdeck-db",
  "plumdeck-domain",

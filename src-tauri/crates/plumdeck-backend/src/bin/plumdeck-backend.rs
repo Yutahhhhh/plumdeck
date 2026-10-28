@@ -1,4 +1,5 @@
-//! Headless backend: `plumdeck-backend [--port N] [--parity]`.
+//! Headless backend: `plumdeck-backend [--port N] [--parity]`, or one
+//! analysis job with `--analysis-worker` (protocol V1 on stdin/stdout).
 //!
 //! Reads the same environment as the Python sidecar (PLUMDECK_PORT, DB_PATH,
 //! USER_DATA_DIR, PLUMDECK_LOG_DIR, PLUMDECK_MANAGED_SIDECAR, ...), binds
@@ -37,6 +38,9 @@ struct Args {
     /// Parity side B: only run against sandbox copies (see module docs).
     #[arg(long)]
     parity: bool,
+    /// Run one analysis worker request from stdin (protocol V1) and exit.
+    #[arg(long)]
+    analysis_worker: bool,
 }
 
 /// `--parity` with `PLUMDECK_PARITY_FREEZE_NOW` (a scenario's `freeze_now`,
@@ -60,6 +64,11 @@ fn frozen_clock(parity: bool) -> Option<FixedClock> {
 
 fn main() -> ExitCode {
     let args = Args::parse();
+    if args.analysis_worker {
+        let stdin = std::io::stdin();
+        let code = plumdeck_analysis::run_worker(&mut stdin.lock(), &mut std::io::stdout());
+        return ExitCode::from(code as u8);
+    }
 
     println!("{}", StartupStage::Settings.line());
     let config = match Config::from_env() {

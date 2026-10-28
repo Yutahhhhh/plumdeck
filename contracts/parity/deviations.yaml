@@ -188,3 +188,16 @@ deviations:
       discovery on macOS parses `diskutil info` text instead of its plist;
       Windows discovery comes with S13. Ejecting is macOS-only until then.
     current: B's archives restore in A and A's in B (inspect checks hashes, not bytes).
+  - id: D-24
+    status: proposed
+    source: backend/domain/services/analysis (Essentia RhythmExtractor2013, KeyExtractor, Danceability, MusiCNN)
+    summary: >
+      The Rust analyzer (plumdeck-analysis) is the repository's own NumPy
+      light path ported step by step: onset flux and autocorrelation tempo,
+      a DP beat tracker with attack alignment, chroma key profiles, and the
+      timbre summary of a centred 30-second window, from one 11.025 kHz
+      decode. Values differ from Essentia's; results carry their own
+      component versions (rust-attacks-v1, rust-chroma-v1, rust-timbre-v1)
+      so stored rows say which implementation produced them. Embeddings
+      are not computed yet (W1-27/W1-28) and answer an error.
+    current: analysis-quality gates (RB-30) and the owner's replay check decide when it becomes the default.
