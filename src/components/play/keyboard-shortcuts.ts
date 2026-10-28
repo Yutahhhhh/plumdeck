@@ -81,3 +81,17 @@ export function resolveShortcut(preset: ShortcutPreset, input: KeyInput): Shortc
   const entry = shortcutTable(preset).find((item) => item.code === input.code && Boolean(item.shift) === shift);
   return entry?.action ?? null;
 }
+
+/** Help table rows: deck operations side by side (Deck 1 / Deck 2), then the rest. */
+export function shortcutHelp(preset: ShortcutPreset): { label: string; keys: [string | null, string | null] | string }[] {
+  const rows = new Map<string, [string | null, string | null]>();
+  const other: { label: string; keys: string }[] = [];
+  for (const entry of shortcutTable(preset)) {
+    if ("side" in entry.action && entry.action.kind !== "load") {
+      const keys = rows.get(entry.label) ?? [null, null];
+      keys[entry.action.side] = entry.key;
+      rows.set(entry.label, keys);
+    } else other.push({ label: entry.label, keys: entry.key });
+  }
+  return [...[...rows].map(([label, keys]) => ({ label, keys })), ...other];
+}
