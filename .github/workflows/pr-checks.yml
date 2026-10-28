@@ -152,6 +152,24 @@ jobs:
           OPENBLAS_NUM_THREADS: '1'
         run: python backend/light_analysis_diagnostic.py
 
+  backend-port:
+    name: Rust backend port crates and parity tooling
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+          key: backend-port
+          cache-on-failure: true
+      - name: Test plumdeck-core, -db, -backend and -parity
+        working-directory: src-tauri
+        # One invocation: testing these packages separately splits host
+        # build-dependency features and rebuilds bundled DuckDB per package.
+        run: cargo test -p plumdeck-core -p plumdeck-db -p plumdeck-backend -p plumdeck-parity
+
   windows-shell:
     name: Windows shell and controller regression tests
     runs-on: windows-2022
@@ -174,6 +192,10 @@ jobs:
           # Unit tests compile the shell independently; packaging validates real resources.
           TAURI_CONFIG: '{"bundle":{"resources":[]}}'
         run: cargo test --lib
+      - name: Test the backend port's Python-compat layer on Windows paths
+        working-directory: src-tauri
+        # No DuckDB here; ntpath, LocalAppData and the CPython vectors only.
+        run: cargo test -p plumdeck-core
 
       - name: Preserve resolved Rust lockfile
         if: always()
