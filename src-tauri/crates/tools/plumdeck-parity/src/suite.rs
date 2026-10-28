@@ -37,12 +37,23 @@ fn target(side: &Side) -> Target {
     Target { base: format!("http://127.0.0.1:{}", side.port), port: side.port }
 }
 
+/// Where side A comes from (see [`crate::golden`]).
+pub enum Golden {
+    /// The live Python oracle.
+    Off,
+    /// The live oracle, recorded into this directory.
+    Record(PathBuf),
+    /// A recording in this directory; no Python runs.
+    Replay(PathBuf),
+}
+
 fn run_one(
     programs: &Programs,
     work: &Path,
     path: &Path,
     global: &NormalizeFile,
     ledger: &Ledger,
+    golden: &Golden,
 ) -> Result<SuiteReport> {
     let loaded = scenario::load(path)?;
     let case = case_named(loaded.fixture.as_deref())?;
@@ -68,28 +79,74 @@ fn run_one(
     for side in ["a", "b"] {
         fixture::copy_dir(&master, &dir.join(side).join("ud"))?;
     }
-    let mut a = spawn("A", &dir.join("a"), programs, loaded.freeze_now.as_deref())?;
+    let work_text = dir.to_string_lossy().into_owned();
+    let recording = match golden {
+        Golden::Replay(golden_dir) => Some(crate::golden::load(golden_dir, &loaded.name)?),
+        _ => None,
+    };
+    let mut a = match recording {
+        Some(_) => None,
+        None => Some(spawn("A", &dir.join("a"), programs, loaded.freeze_now.as_deref())?),
+    };
     let mut b = match spawn("B", &dir.join("b"), programs, loaded.freeze_now.as_deref()) {
         Ok(b) => b,
         Err(error) => {
-            let _ = stop(&mut a);
+            if let Some(a) = a.as_mut() {
+                let _ = stop(a);
+            }
             return Err(error);
         }
     };
-    let ready = (wait_ready(&mut a), wait_ready(&mut b));
+    let ready_a = a.as_mut().map_or(Ok(true), wait_ready);
+    let ready = (ready_a, wait_ready(&mut b));
+    // A recorded side A answers on no port; any unused one stands in.
+    let a_target = match &a {
+        Some(a) => target(a),
+        None => {
+            let port = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
+            Target { base: format!("http://127.0.0.1:{port}"), port }
+        }
+    };
+    match (&recording, golden) {
+        (Some(recording), _) => crate::golden::start_replay(&work_text, a_target.port, recording.answers.clone()),
+        (None, Golden::Record(_)) => crate::golden::start_recording(&work_text, a_target.port),
+        _ => {}
+    }
     let outcome = match ready {
         (Ok(true), Ok(true)) => {
             let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-            runtime.block_on(scenario::run(&loaded, global, ledger, &target(&a), &target(&b), &vars))
+            runtime.block_on(scenario::run(&loaded, global, ledger, &a_target, &target(&b), &vars))
         }
         other => Err(anyhow::anyhow!("a side did not come up: A {:?} B {:?}", other.0, other.1)),
     };
-    let stopped = (stop(&mut a), stop(&mut b));
+    let answers = crate::golden::finish();
+    let stopped_a = match a.as_mut() {
+        Some(a) => Some(stop(a)),
+        None => None,
+    };
+    let stopped_b = stop(&mut b);
     let run = outcome?;
-    let (sa, sb) = (stopped.0?, stopped.1?);
+    let sb = stopped_b?;
     let mut db_diffs = Vec::new();
-    if !sa.success() || !sb.success() {
-        db_diffs.push(format!("exit: A {sa} B {sb}"));
+    let a_db = dir.join("a").join("ud").join(DB_NAME);
+    match stopped_a {
+        Some(sa) => {
+            let sa = sa?;
+            if !sa.success() || !sb.success() {
+                db_diffs.push(format!("exit: A {sa} B {sb}"));
+            }
+            if let Golden::Record(golden_dir) = golden {
+                let library = crate::golden::dump(&a_db, &work_text, &dir.join("golden-export"))?;
+                crate::golden::save(golden_dir, &crate::golden::Recording { scenario: loaded.name.clone(), answers, library })?;
+            }
+        }
+        None => {
+            if !sb.success() {
+                db_diffs.push(format!("exit: B {sb}"));
+            }
+            let recording = recording.as_ref().expect("replaying");
+            crate::golden::restore(&recording.library, &a_db, &work_text)?;
+        }
     }
     let mut ignored = Vec::new();
     let mut ignored_note = Vec::new();
@@ -101,7 +158,7 @@ fn run_one(
         }
         ignored_note.push(format!("{} ({status}): {}", group.id, group.columns.join(", ")));
     }
-    let result = dbdiff::diff_ignoring(&a.ud().join(DB_NAME), &b.ud().join(DB_NAME), 20, &ignored)?;
+    let result = dbdiff::diff_ignoring(&a_db, &b.ud().join(DB_NAME), 20, &ignored)?;
     let mut db_note = result.lines.last().cloned().unwrap_or_default();
     if !ignored_note.is_empty() {
         db_note = format!("{db_note}; not compared: {}", ignored_note.join("; "));
@@ -113,13 +170,13 @@ fn run_one(
 }
 
 /// Run every scenario; returns the reports in order.
-pub fn run(programs: &Programs, work: &Path, scenarios: &[PathBuf], report_dir: Option<&Path>) -> Result<Vec<SuiteReport>> {
+pub fn run(programs: &Programs, work: &Path, scenarios: &[PathBuf], report_dir: Option<&Path>, golden: &Golden) -> Result<Vec<SuiteReport>> {
     let mut reports = Vec::new();
     for path in scenarios {
         let global = scenario::load_normalize(scenario::default_normalize_path(path).as_deref())?;
         let ledger = scenario::load_ledger(scenario::default_ledger_path(path).as_deref())?;
-        let report = run_one(programs, work, path, &global, &ledger).with_context(|| format!("scenario {}", path.display()))?;
-        report.run.print("python", "rust");
+        let report = run_one(programs, work, path, &global, &ledger, golden).with_context(|| format!("scenario {}", path.display()))?;
+        report.run.print(if matches!(golden, Golden::Replay(_)) { "golden" } else { "python" }, "rust");
         println!("  db: {}", report.db_note);
         for diff in &report.db_diffs {
             println!("  DIFF {diff}");

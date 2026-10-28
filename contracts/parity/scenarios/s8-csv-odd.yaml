@@ -1,0 +1,56 @@
+# S8: csv.DictReader corner cases in both CSV dry runs (settings.py import
+# and metadata import analyze): quoted cells with commas, quotes and line
+# breaks, short rows (restval None skips a library row, keeps a metadata
+# row), extra cells, a duplicate header, LF and CRLF line ends (a bare CR is a csv.Error, a 500), blank
+# lines, a header without rows, an empty upload, and a JSON array cell
+# that is not a list of numbers. Read-only.
+name: s8-csv-odd
+db: fixture
+fixture: library
+fixture_sql: |
+  INSERT INTO tracks (filepath, title, artist, genre, year, bpm, key, created_at) VALUES
+    ('/odd/a,b.mp3', 'Comma, Song', 'Q "Artist"', 'House', 2000, 120.0, '8A', '2026-03-09 00:00:00'),
+    ('/odd/short.mp3', 'Short', 'Row', 'Techno', NULL, NULL, NULL, '2026-03-09 00:00:01');
+steps:
+  - name: library dry run of quoted and short rows
+    expect_status: 200
+    http:
+      method: POST
+      path: /api/settings/import/analyze
+      headers: {content-type: "multipart/form-data; boundary=XB"}
+      raw: "--XB\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.csv\"\r\n\r\nfilepath,title,artist,bpm,beat_positions,title\r\n\"/odd/a,b.mp3\",\"Comma, Song\",\"Q \"\"Artist\"\"\",120,,Dup\r\n/odd/new1.mp3,\"Multi\nLine\",X,1e2,\"[1, \"\"2\"\"]\",T2\n/odd/new2.mp3,mid\"quote,Y,,5,T3\n/odd/new3.mp3,Z,Z,,\"[\"\"x\"\"]\",T4\r\n/odd/new4.mp3,W,W,,null,T5,extra,cells\r\n/odd/short2.mp3,Short\r\n\r\n/odd/new5.mp3,\"ab\"cd,V,  7.5  ,,T6\r\n--XB--\r\n"
+  - name: library dry run of a header only
+    expect_status: 200
+    http:
+      method: POST
+      path: /api/settings/import/analyze
+      headers: {content-type: "multipart/form-data; boundary=XB"}
+      raw: "--XB\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.csv\"\r\n\r\nfilepath,title,artist\r\n--XB--\r\n"
+  - name: library dry run of an empty upload
+    expect_status: 200
+    http:
+      method: POST
+      path: /api/settings/import/analyze
+      headers: {content-type: "multipart/form-data; boundary=XB"}
+      raw: "--XB\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.csv\"\r\n\r\n\r\n--XB--\r\n"
+  - name: library dry run without title and artist columns
+    expect_status: 200
+    http:
+      method: POST
+      path: /api/settings/import/analyze
+      headers: {content-type: "multipart/form-data; boundary=XB"}
+      raw: "--XB\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.csv\"\r\n\r\nfilepath,bpm\r\n/odd/x.mp3,128\r\n /odd/short.mp3 ,\r\n--XB--\r\n"
+  - name: metadata dry run of quoted and short rows
+    expect_status: 200
+    http:
+      method: POST
+      path: /api/settings/metadata/import/analyze
+      headers: {content-type: "multipart/form-data; boundary=XB"}
+      raw: "--XB\r\nContent-Disposition: form-data; name=\"file\"; filename=\"m.csv\"\r\n\r\nfilepath,title,artist,genre,year,bpm,key,is_genre_verified\r\n\"/odd/a,b.mp3\",\"Comma, Song\",\"Q \"\"Artist\"\"\",Deep,2000, 121 ,9A,On\r\n/odd/short.mp3,Shorter\r\n/odd/short.mp3,,,,1999,1_20,,0\r\n/odd/none.mp3\r\n--XB--\r\n"
+  - name: metadata dry run with the file field under another name
+    expect_status: 422
+    http:
+      method: POST
+      path: /api/settings/metadata/import/analyze
+      headers: {content-type: "multipart/form-data; boundary=XB"}
+      raw: "--XB\r\nContent-Disposition: form-data; name=\"upload\"; filename=\"m.csv\"\r\n\r\nfilepath\r\n--XB--\r\n"

@@ -257,6 +257,9 @@ async fn run_ingestion(state: AppState, task: BackgroundTask, targets: Vec<Strin
     .map_err(|e| e.to_string())?;
     task.update(&[("stage", json!("解析が必要な音源を確認中")), ("queued", json!(false))]);
     task.emit();
+    // Ready tracks (skipped or analyzed) get their optional embedding from
+    // the background job once this import releases the analysis slot.
+    let embedding_paths: Vec<String> = files.iter().map(|file| plumdeck_core::compat::text::nfc(file)).collect();
     let mut to_process = Vec::new();
     for file in files {
         let known = completed.get(&plumdeck_core::compat::text::nfc(&file));
@@ -270,6 +273,7 @@ async fn run_ingestion(state: AppState, task: BackgroundTask, targets: Vec<Strin
         task.update(&[("type", json!("complete")), ("total", json!(0))]);
         task.emit();
         drop(release);
+        enqueue_embeddings(&jobs, embedding_paths).await;
         return Ok(());
     }
     task.update(&[("type", json!("processing")), ("total", json!(to_process.len())), ("current", json!(0)), ("file", json!("")), ("stage", json!("音源を解析中"))]);
@@ -319,7 +323,28 @@ async fn run_ingestion(state: AppState, task: BackgroundTask, targets: Vec<Strin
     task.update(&[("type", json!("complete")), ("file", json!(""))]);
     task.emit();
     drop(release);
+    enqueue_embeddings(&jobs, embedding_paths).await;
     Ok(())
+}
+
+/// Queue the optional embeddings of imported paths, 200 at a time (only
+/// analyzed tracks without a current vector are added).
+async fn enqueue_embeddings(jobs: &Arc<Jobs>, paths: Vec<String>) {
+    let jobs = jobs.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        let mut unique = Vec::new();
+        for path in paths {
+            if !unique.contains(&path) {
+                unique.push(path);
+            }
+        }
+        for chunk in unique.chunks(200) {
+            if let Err(error) = jobs.enqueue_embedding(None, Some(chunk)) {
+                tracing::warn!("WARNING: could not queue optional embeddings: {error}");
+            }
+        }
+    })
+    .await;
 }
 
 fn set_detail(task: &BackgroundTask, key: &str, file: &str, value: Value) {
@@ -809,6 +834,15 @@ fn spawn_batch(state: AppState, batch_id: String) {
             });
         }
         state.analysis.progress.lock().unwrap_or_else(|e| e.into_inner()).remove(&batch_id);
+        // Playable tracks get their optional embedding from the background job.
+        let ready: Result<Vec<i64>, String> = state.db.lease().map_err(|e| e.to_string()).and_then(|conn| {
+            conn.prepare("SELECT DISTINCT track_id FROM import_items WHERE batch_id=? AND load_ready AND track_id IS NOT NULL")
+                .and_then(|mut s| s.query_map([batch_id.as_str()], |r| r.get(0))?.collect())
+                .map_err(|e| e.to_string())
+        });
+        if let Err(error) = ready.and_then(|ids| state.analysis.jobs.enqueue_embedding(Some(&ids), None)) {
+            tracing::warn!("WARNING: could not queue optional embeddings: {error}");
+        }
         state.analysis.jobs.coordinator.release(&token);
         state.analysis.jobs.launch_next();
     });

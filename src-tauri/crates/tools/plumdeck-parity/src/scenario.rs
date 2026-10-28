@@ -304,6 +304,12 @@ pub fn load(path: &Path) -> Result<Scenario> {
         if kinds.iter().filter(|k| **k).count() != 1 {
             bail!("{}: step {} needs exactly one of http/mcp/ws/wait", path.display(), index + 1);
         }
+        if let Some(wait) = &step.wait {
+            if !wait.get("ms").is_some_and(Value::is_u64) {
+                bail!("{}: step {}: wait needs ms", path.display(), index + 1);
+            }
+            continue;
+        }
         if let Some(mcp) = &step.mcp {
             if !mcp.get("method").is_some_and(Value::is_string) {
                 bail!("{}: step {}: mcp needs a method", path.display(), index + 1);
@@ -660,6 +666,11 @@ pub async fn run(
     let mut steps = Vec::new();
     let mut sessions: [Option<McpSession>; 2] = [None, None];
     for (index, step) in scenario.steps.iter().enumerate() {
+        // `wait: {ms}`: give background work on both sides time to settle.
+        if let Some(ms) = step.wait.as_ref().and_then(|w| w.get("ms")).and_then(Value::as_u64) {
+            tokio::time::sleep(Duration::from_millis(ms)).await;
+            continue;
+        }
         let deviation = match &step.deviation {
             Some(deviation) => {
                 let status = ledger
@@ -669,14 +680,21 @@ pub async fn run(
             }
             None => None,
         };
+        // Side A is the live oracle, or its golden recording (`golden`).
+        let replay = crate::golden::replaying();
         let ((ra, ta), (rb, tb)) = match (&step.http, &step.mcp) {
-            (Some(http), _) => (send(&client, a, http, vars).await?, send(&client, b, http, vars).await?),
+            (Some(http), _) => {
+                let ra = if replay { (crate::golden::next()?, Duration::ZERO) } else { send(&client, a, http, vars).await? };
+                (ra, send(&client, b, http, vars).await?)
+            }
             (None, Some(mcp)) => {
                 let [sa, sb] = &mut sessions;
-                (send_mcp(&client, a, sa, mcp, vars).await?, send_mcp(&client, b, sb, mcp, vars).await?)
+                let ra = if replay { (crate::golden::next()?, Duration::ZERO) } else { send_mcp(&client, a, sa, mcp, vars).await? };
+                (ra, send_mcp(&client, b, sb, mcp, vars).await?)
             }
             (None, None) => unreachable!("validated in load"),
         };
+        crate::golden::record(&ra);
         // Debugging aid: PLUMDECK_PARITY_DUMP=DIR writes both answers of every step.
         if let Some(dir) = std::env::var_os("PLUMDECK_PARITY_DUMP") {
             let dir = PathBuf::from(dir).join(&scenario.name);

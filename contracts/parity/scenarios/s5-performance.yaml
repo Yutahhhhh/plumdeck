@@ -15,7 +15,7 @@ fixture_sql: |
         '[{"id":"a","start_ms":0,"end_ms":500,"label":"x"}]',
         '{"bpm":124,"first_beat_ms":12.5,"beats_per_bar":4,"beat_times_ms":null,"beat_numbers":null,"source":"manual","confidence":null}',
         3, '2026-04-01 00:00:00', '2026-04-02 00:00:00.5'),
-    (3, 'not json', '[]', NULL, 1, '2026-04-01 00:00:00', NULL),
+    (3, 'not json', '{"a": 1}', NULL, 1, '2026-04-01 00:00:00', NULL),
     (4, '[{"slot":"1","position_ms":5},{"slot":2,"position_ms":"x"},7,{"slot":7,"position_ms":7.25},{"slot":8,"position_ms":1}]', '[]',
         '{"bpm":174.0,"first_beat_ms":0,"beats_per_bar":4,"source":"analysis","confidence":2.5}', 2, NULL, NULL),
     (5, '[]', '[]', '{"bpm":172,"first_beat_ms":0}', 1, NULL, NULL);
@@ -29,6 +29,12 @@ steps:
   - name: no row and too few stored beats (Python starts an on-demand analysis)
     deviation: {id: D-19, b_status: 200}
     http: {method: GET, path: /api/tracks/2/performance-metadata}
+  - name: replace over undecodable stored JSON
+    expect_status: 200
+    http: {method: PUT, path: /api/tracks/3/performance-metadata, body: {revision: 1, cue_points: [{slot: 2, position_ms: 3}], beat_grid: {bpm: 128, first_beat_ms: 5.5, source: rekordbox}}}
+  - name: read it back after the repair
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/3/performance-metadata}
   - name: no row and a missing file
     expect_status: 200
     http: {method: GET, path: /api/tracks/10/performance-metadata}

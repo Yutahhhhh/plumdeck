@@ -1,0 +1,95 @@
+# S9: more MCP tools on the sets fixture: prompts, the assist window tools
+# (state, ranking, routing, settings and picks), auto/bridge setlists,
+# genre cleanup, the analysis-job tools that only plan or report (no worker
+# starts) and the rekordbox playlist tools on the sandbox's empty rekordbox
+# library.
+name: s9-mcp-assist
+db: fixture
+fixture: sets
+freeze_now: "2026-05-01 12:34:56.789012"
+compare_overrides:
+  tolerances:
+    # D-24: B's results carry the Rust analyzers' component versions.
+    - {path: "$.result..versions.rhythm", mode: generated}
+    - {path: "$.result..versions.key", mode: generated}
+    - {path: "$.result..versions.timbre", mode: generated}
+    - {path: "$.result..versions.waveform", mode: generated}
+    - {path: "$.result..versions.embedding", mode: generated}
+    # The oracle freezes datetime.now() but not time.time() (assist window stamps).
+    - {path: "$.result..applied.created_at", mode: generated}
+steps:
+  - name: a prompt
+    mcp: {method: prompts/get, params: {name: setlist_questionnaire, arguments: {theme: 夏の夜}}}
+  - name: a prompt with arguments
+    mcp: {method: prompts/get, params: {name: setlist_from_rekordbox_playlists, arguments: {playlists: "A, B", minutes: "60"}}}
+  - name: a prompt without arguments
+    mcp: {method: prompts/get, params: {name: setlist_from_rekordbox_playlists}}
+  - name: an unknown prompt
+    mcp: {method: prompts/get, params: {name: nope}}
+
+  # assist
+  - name: assist recommend from a track
+    mcp: {method: tools/call, params: {name: assist_recommend, arguments: {source_track_id: 1, limit: 5}}}
+  - name: assist recommend with an intent
+    mcp: {method: tools/call, params: {name: assist_recommend, arguments: {source_track_id: 3, intent: hype, genre_scope: all, limit: 3}}}
+  - name: assist recommend without a source
+    mcp: {method: tools/call, params: {name: assist_recommend, arguments: {}}}
+  - name: assist search with filters
+    mcp: {method: tools/call, params: {name: assist_search, arguments: {filters: {bpm_min: 100, bpm_max: 180}, limit: 4}}}
+  - name: assist search like a track
+    deviation: {id: D-51, b_status: 200}
+    mcp: {method: tools/call, params: {name: assist_search, arguments: {like_track_id: 1, limit: 3}}}
+  - name: assist route
+    mcp: {method: tools/call, params: {name: assist_route, arguments: {source_track_id: 1, target_track_id: 5}}}
+  - name: assist route without a source
+    mcp: {method: tools/call, params: {name: assist_route, arguments: {target_track_id: 5}}}
+  - name: assist apply settings
+    mcp: {method: tools/call, params: {name: assist_apply_settings, arguments: {intent: calm, transition: true, limit: 10, filters: {year_min: 2000, year_max: 2009}, agent_name: Tester}}}
+  - name: assist apply an unknown intent
+    mcp: {method: tools/call, params: {name: assist_apply_settings, arguments: {intent: explode}}}
+  - name: assist state after the settings
+    mcp: {method: tools/call, params: {name: assist_get_state, arguments: {}}}
+  - name: assist show tracks
+    mcp: {method: tools/call, params: {name: assist_show_tracks, arguments: {tracks: [{track_id: 1, reason: 明るい}, {track_id: 10, reason: 欠落}, {track_id: 999, reason: なし}], title: テスト, note: メモ}}}
+  - name: assist show nothing
+    mcp: {method: tools/call, params: {name: assist_show_tracks, arguments: {tracks: []}}}
+  - name: assist clear
+    mcp: {method: tools/call, params: {name: assist_clear_tracks, arguments: {}}}
+
+  # setlist generation and genres
+  - name: auto setlist from seeds
+    mcp: {method: tools/call, params: {name: generate_auto_setlist, arguments: {length: 4, seed_track_ids: [1]}}}
+  - name: auto setlist by genre
+    mcp: {method: tools/call, params: {name: generate_auto_setlist, arguments: {min_length: 2, max_length: 3, genres: [House]}}}
+  - name: bridge between unknown tracks
+    mcp: {method: tools/call, params: {name: generate_bridge_setlist, arguments: {start_track_id: 998, end_track_id: 999}}}
+  - name: recommend with genres
+    mcp: {method: tools/call, params: {name: recommend_next_track, arguments: {track_id: 3, genres: [House, Techno], limit: 3}}}
+  - name: cleanup suggestions for subgenres
+    mcp: {method: tools/call, params: {name: get_genre_cleanup_suggestions, arguments: {mode: subgenre}}}
+  - name: cleanup labels
+    mcp: {method: tools/call, params: {name: cleanup_genre_labels, arguments: {target_genre: House, track_ids: [3]}}}
+
+  # analysis jobs (plan and status only)
+  - name: plan analysis of the library
+    mcp: {method: tools/call, params: {name: plan_track_analysis, arguments: {}}}
+  - name: plan rhythm analysis of some tracks
+    mcp: {method: tools/call, params: {name: plan_track_analysis, arguments: {track_ids: [1, 2], features: [rhythm], only_outdated: false}}}
+  - name: plan by genre with a limit
+    mcp: {method: tools/call, params: {name: plan_track_analysis, arguments: {genres: [House], limit: 1}}}
+  - name: plan an unknown feature
+    mcp: {method: tools/call, params: {name: plan_track_analysis, arguments: {features: [colour]}}}
+  - name: status without jobs
+    mcp: {method: tools/call, params: {name: get_track_analysis_status, arguments: {}}}
+  - name: status of an unknown job
+    mcp: {method: tools/call, params: {name: get_track_analysis_status, arguments: {job_id: job-none}}}
+  - name: pause an unknown job
+    mcp: {method: tools/call, params: {name: pause_track_analysis, arguments: {job_id: job-none}}}
+  - name: resume an unknown job
+    mcp: {method: tools/call, params: {name: resume_track_analysis, arguments: {job_id: job-none}}}
+
+  # rekordbox playlists (sandbox library)
+  - name: rekordbox playlists
+    mcp: {method: tools/call, params: {name: list_rekordbox_playlists, arguments: {}}}
+  - name: rekordbox playlist tracks of an unknown playlist
+    mcp: {method: tools/call, params: {name: get_rekordbox_playlist_tracks, arguments: {playlist: nope}}}

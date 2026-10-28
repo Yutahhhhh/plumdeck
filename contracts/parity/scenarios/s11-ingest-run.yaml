@@ -1,0 +1,28 @@
+# S11: a library import (ingest) of a folder without audio on the fresh
+# fixture: the start answer, the finished state and a second cancel. No
+# file is analysed (D-24/D-25 cover analysis results); the oracle does not
+# freeze time.time(), so timing fields compare by kind only.
+name: s11-ingest-run
+db: fixture
+fixture: fresh
+freeze_now: "2026-05-01 12:34:56.789012"
+compare_overrides:
+  tolerances:
+    - {path: "$..run_id", mode: generated}  # uuid4 hex
+    - {path: "$..start_time", mode: generated}
+    - {path: "$..end_time", mode: generated}
+    - {path: "$..elapsed", mode: generated}
+    - {path: "$..eta", mode: generated}
+    - {path: "$..eta_seconds", mode: generated}
+    - {path: "$..updated_at", mode: generated}
+steps:
+  - name: ingest a folder without audio
+    expect_status: 200
+    http: {method: POST, path: /api/ingest, body: {targets: ["{media}/no-such-folder"]}}
+  - wait: {ms: 1500}
+  - name: status after the run
+    expect_status: 200
+    http: {method: GET, path: /api/ingest/status}
+  - name: cancel after the run
+    expect_status: 200
+    http: {method: POST, path: /api/ingest/cancel}

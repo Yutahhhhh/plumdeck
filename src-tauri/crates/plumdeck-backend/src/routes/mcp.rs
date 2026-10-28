@@ -157,7 +157,7 @@ fn prompt(params: &Value) -> Result<Value, (i64, String)> {
             let playlists = argument("playlists");
             let minutes = argument("minutes");
             format!(
-                "rekordbox のプレイリストを素材に、展開のあるセットリストを plumdeck で組んでください。\n\n対象プレイリスト（DJ の指定）: {}\n想定時間: {}\n\n手順:\n1. list_rekordbox_playlists で階層を確認し、指定されたフォルダ/プレイリストを特定する。\n2. get_rekordbox_playlist_tracks で各プレイリストの曲・BPM・キー・ジャンル・エネルギーを確認する。\n3. プレイリストをどの順で展開させるか（例: 現場物/イベ2 で温めて 現場物/HIPHOP&Latin で切り替える）、\n   各展開の曲数、エネルギー/BPM の推移を DJ の意図に沿って決め、短く説明して確認を取る。\n   曲数は 想定時間 ÷ 平均の使用尺（DJ に聞くか 1 曲 3〜4 分）で見積もる。\n4. plan_phased_setlist に展開を phases として渡す。切り替えが急なら間に\n   similar_to_track_ids や genres を使ったブリッジ用の短いフェーズを挟む。\n5. 結果の transition（bpm_diff, key_relation, mix_score）と notes を見て、弱い繋ぎを\n   指摘し、必要なら条件を変えて再生成する。保存は DJ の了承後に\n   save_as_setlist_name か set_setlist_tracks(track_data=...) で行う。\n\n除外したいアーティストがいれば exclude_artists に渡す。",
+                "rekordbox のプレイリストを素材に、展開のあるセットリストを plumdeck で組んでください。\n\n対象プレイリスト（DJ の指定）: {}\n想定時間: {}\n\n手順:\n1. list_rekordbox_playlists で階層を確認し、指定されたフォルダ/プレイリストを特定する。\n2. get_rekordbox_playlist_tracks で各プレイリストの曲・BPM・キー・ジャンル・エネルギーを確認する。\n3. プレイリストをどの順で展開させるか（例: 現場物/イベ2 で温めて 現場物/HIPHOP&Latin で切り替える）、\n   各展開の曲数、エネルギー/BPM の推移を DJ の意図に沿って決め、短く説明して確認を取る。\n   曲数は 想定時間 ÷ 平均の使用尺（DJ に聞くか 1 曲 3〜4 分）で見積もる。\n4. plan_phased_setlist に展開を phases として渡す。切り替えが急なら間に\n   similar_to_track_ids や genres を使ったブリッジ用の短いフェーズを挟む。\n5. 結果の transition（bpm_diff, key_relation, mix_score）と notes を見て、弱い繋ぎを\n   指摘し、必要なら条件を変えて再生成する。保存は DJ の了承後に\n   save_as_setlist_name か set_setlist_tracks(track_data=...) で行う。\n除外したいアーティストがいれば exclude_artists に渡す。",
                 if playlists.is_empty() { "未指定 — list_rekordbox_playlists で候補を見せて選んでもらう".to_owned() } else { playlists },
                 if minutes.is_empty() { "未指定 — DJ に確認する".to_owned() } else { minutes },
             )
@@ -165,11 +165,12 @@ fn prompt(params: &Value) -> Result<Value, (i64, String)> {
         "setlist_questionnaire" => {
             let theme = argument("theme");
             format!(
-                "DJ に設問形式で好みを聞き取り、plumdeck のローカル音源だけでセットリストを組んでください。\n\nテーマ・メモ: {}\n\n進め方（1 回に 1〜3 問、選択肢を添えて短く聞く）:\n1. 現場と尺: どんな場所/時間帯か、何分のセットか、客層。\n2. 流れ: 例「じわじわ上げる」「序盤から飛ばして中盤で落とす」「ジャンルを切り替えて見せ場を作る」。\n   答えから 3〜5 個の展開（phase）と、それぞれのエネルギー/BPM の推移を決める。\n3. 好きなアーティスト・曲: search_tracks で実在を確認し、候補を番号付きで提示して選んでもらう。\n   展開ごとに誰を軸にしたいかも聞く。絶対かけたい曲は anchor_track_ids にする。\n4. 広げ方: 選んだアーティストだけか、似た曲も混ぜるか（similar_to_track_ids / expand_similar）、\n   年代・ジャンルの縛り、避けたいアーティスト。\n5. ワードプレイ: list_wordplay_pairs で承認済みペアを確認する。選んだ曲の歌詞から\n   find_wordplay_links で新しい繋ぎ候補を探し、良いものは propose_wordplay_pairs で pending 登録して\n   DJ に承認を求める（承認されたものだけが生成に効く。承認は DJ の明示が必要）。\n6. 聞き取った内容を phases にまとめて plan_phased_setlist を呼ぶ。各展開の label には\n   意図がわかる名前を付ける。好きなアーティストは artists、選んだ曲は track_ids/anchor_track_ids。\n7. 結果を「展開 / 曲 / 選ばれた理由(sources) / 繋ぎ」で提示し、気に入らない点を聞いて調整する。\n   保存は DJ の了承後に save_as_setlist_name か set_setlist_tracks(track_data=...) で行う。\n\nアーティストの類似性は音響ベクトルだけでは分からないので、似たアーティストはあなた自身の\n音楽知識で挙げ、search_tracks でライブラリにあるか確かめてから artists に加える。\n除外したいアーティストがいれば exclude_artists に渡す。",
+                "DJ に設問形式で好みを聞き取り、plumdeck のローカル音源だけでセットリストを組んでください。\nテーマ・メモ: {}\n\n進め方（1 回に 1〜3 問、選択肢を添えて短く聞く）:\n1. 現場と尺: どんな場所/時間帯か、何分のセットか、客層。\n2. 流れ: 例「じわじわ上げる」「序盤から飛ばして中盤で落とす」「ジャンルを切り替えて見せ場を作る」。\n   答えから 3〜5 個の展開（phase）と、それぞれのエネルギー/BPM の推移を決める。\n3. 好きなアーティスト・曲: search_tracks で実在を確認し、候補を番号付きで提示して選んでもらう。\n   展開ごとに誰を軸にしたいかも聞く。絶対かけたい曲は anchor_track_ids にする。\n4. 広げ方: 選んだアーティストだけか、似た曲も混ぜるか（similar_to_track_ids / expand_similar）、\n   年代・ジャンルの縛り、避けたいアーティスト。\n5. ワードプレイ: list_wordplay_pairs で承認済みペアを確認する。選んだ曲の歌詞から\n   find_wordplay_links で新しい繋ぎ候補を探し、良いものは propose_wordplay_pairs で pending 登録して\n   DJ に承認を求める（承認されたものだけが生成に効く。承認は DJ の明示が必要）。\n6. 聞き取った内容を phases にまとめて plan_phased_setlist を呼ぶ。各展開の label には\n   意図がわかる名前を付ける。好きなアーティストは artists、選んだ曲は track_ids/anchor_track_ids。\n7. 結果を「展開 / 曲 / 選ばれた理由(sources) / 繋ぎ」で提示し、気に入らない点を聞いて調整する。\n   保存は DJ の了承後に save_as_setlist_name か set_setlist_tracks(track_data=...) で行う。\nアーティストの類似性は音響ベクトルだけでは分からないので、似たアーティストはあなた自身の\n音楽知識で挙げ、search_tracks でライブラリにあるか確かめてから artists に加える。\n除外したいアーティストがいれば exclude_artists に渡す。",
                 if theme.is_empty() { "なし".to_owned() } else { theme },
             )
         }
-        _ => return Err((-32602, format!("Unknown prompt: {name}"))),
+        // The SDK reports an unknown prompt with code 0.
+        _ => return Err((0, format!("Unknown prompt: {name}"))),
     };
     let description = serde_json::from_str::<Vec<Value>>(PROMPTS)
         .unwrap_or_default()
@@ -186,12 +187,19 @@ fn prompt(params: &Value) -> Result<Value, (i64, String)> {
 /// `None` hides the cause (any other exception in Python).
 type ToolResult = Result<Value, Option<String>>;
 
+const UNSTRUCTURED_TOOLS: [&str; 5] =
+    ["plan_track_analysis", "start_track_analysis", "get_track_analysis_status", "pause_track_analysis", "resume_track_analysis"];
+
 async fn call_tool(state: &AppState, name: &str, arguments: Value) -> Value {
     let known = tools().iter().any(|t| t["name"] == name);
     let result = if known { run(state, name, &arguments).await } else { Err(Some(format!("Unknown tool: {name}"))) };
     match result {
         Ok(value) => {
             let text = serde_json::to_string_pretty(&value).unwrap_or_default();
+            // Tools annotated `-> dict` (analysis.py) have no output schema, so no structuredContent.
+            if UNSTRUCTURED_TOOLS.contains(&name) {
+                return json!({"content": [{"type": "text", "text": text}], "isError": false});
+            }
             json!({"content": [{"type": "text", "text": text}], "structuredContent": {"result": value}, "isError": false})
         }
         Err(message) => {

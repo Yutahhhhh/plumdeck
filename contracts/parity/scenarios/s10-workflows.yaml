@@ -19,6 +19,8 @@ fixture_sql: |
          (1, 'manual:1:x', 3, NULL, 3725000, NULL, 'Flac Title', 'Flac Artist', 'Extended', 'manual', 'confirmed', 1);
   INSERT INTO media_repair_operations (id, state, plan_json, result_json, created_at, updated_at)
   VALUES ('repair-fixed', 'planned', '{"id": "repair-fixed", "state": "planned", "items": [{"track_id": 10, "old_path": "{media}/missing.mp3", "old_revision": 1, "access_state": "missing", "candidate_path": null, "candidate_state": "none", "reason": "x"}], "summary": {"available": 0, "missing": 1}}', '{}', '2026-04-20 00:00:00', '2026-04-20 00:00:00');
+  INSERT INTO usb_exports (id, usb_device_id, setlist_id, state, snapshot_hash, snapshot_json, handoff_path, verification_json, created_at, updated_at)
+  VALUES ('usb-fixed', NULL, 2, 'awaiting_rekordbox', 'stale-hash', '{"schema_version": 1, "serializer_version": 1, "setlist": {"id": 2, "name": "Peak"}, "entries": [], "timing": {}, "hash": "stale-hash"}', NULL, '{}', '2026-04-21 00:00:00', '2026-04-21 00:00:00');
   INSERT INTO audio_presets (id, name, config_json, created_at, updated_at)
   VALUES ('audio-fixed', 'Club', '{"sample_rate": 44100, "buffer_size": 256, "master": {"channels": [0, 1]}}', '2026-04-20 00:00:00', '2026-04-20 00:00:00');
 db_deviations:
@@ -61,6 +63,8 @@ compare_overrides:
     - {path: "$.handoff_path", mode: generated}
     - {path: "$.xml_path", mode: generated}
     - {path: "$[*].event_key", mode: generated}
+    - {path: "$[*].id", mode: generated}
+    - {path: "$[*].handoff_path", mode: generated}
 steps:
   - name: summary
     expect_status: 200
@@ -216,6 +220,18 @@ steps:
   - name: handoff needs a setlist
     expect_status: 422
     http: {method: POST, path: /api/workflows/usb/handoffs, body: {}}
+  - name: handoff of a setlist whose files exist
+    expect_status: 200
+    http: {method: POST, path: /api/workflows/usb/handoffs, body: {setlist_id: 2}}
+  - name: handoffs with the stale fixture row
+    expect_status: 200
+    http: {method: GET, path: /api/workflows/usb/handoffs}
+  - name: verify a stale handoff
+    http: {method: POST, path: /api/workflows/usb/handoffs/usb-fixed/verify, body: {level: user_rekordbox_check}}
+  - name: duplicate the stored handoff
+    http: {method: POST, path: /api/workflows/usb/handoffs/usb-fixed/duplicate, body: {}}
+  - name: usb devices
+    http: {method: GET, path: /api/workflows/usb/devices}
   - name: duplicate a missing handoff
     http: {method: POST, path: /api/workflows/usb/handoffs/usb-none/duplicate, body: {}}
   - name: verify a missing handoff

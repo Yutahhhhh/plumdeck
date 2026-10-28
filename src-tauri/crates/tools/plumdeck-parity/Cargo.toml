@@ -8,10 +8,12 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
+base64.workspace = true
 chrono.workspace = true
 clap.workspace = true
 duckdb.workspace = true
 hex.workspace = true
+miniz_oxide.workspace = true
 plumdeck-core.workspace = true
 plumdeck-db.workspace = true
 reqwest.workspace = true

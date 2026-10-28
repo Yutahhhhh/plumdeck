@@ -20,6 +20,7 @@ mod compare;
 mod dbdiff;
 mod dbstats;
 mod fixture;
+mod golden;
 mod media;
 mod scenario;
 mod startup;
@@ -84,6 +85,13 @@ enum Command {
         /// Also write each scenario's report as JSON into this directory.
         #[arg(long)]
         report: Option<PathBuf>,
+        /// Record side A (the live oracle) into this directory as golden files.
+        #[arg(long, conflicts_with = "golden")]
+        record_golden: Option<PathBuf>,
+        /// Compare side B with the golden files in this directory instead of
+        /// running the Python oracle.
+        #[arg(long)]
+        golden: Option<PathBuf>,
         /// Scenario YAML files.
         #[arg(required = true)]
         scenarios: Vec<PathBuf>,
@@ -152,11 +160,16 @@ fn run_command(command: Command) -> Result<bool> {
             println!("{}", serde_json::to_string_pretty(&dbstats::stats(&file)?)?);
             Ok(true)
         }
-        Command::Suite { work, python, oracle, backend, report, scenarios } => {
+        Command::Suite { work, python, oracle, backend, report, record_golden, golden, scenarios } => {
             let programs = startup::Programs { python, oracle, backend: backend_or_sibling(backend)? };
             std::fs::create_dir_all(&work)?;
             let work = work.canonicalize()?;
-            let reports = suite::run(&programs, &work, &scenarios, report.as_deref())?;
+            let golden = match (record_golden, golden) {
+                (Some(dir), _) => suite::Golden::Record(dir),
+                (None, Some(dir)) => suite::Golden::Replay(dir),
+                (None, None) => suite::Golden::Off,
+            };
+            let reports = suite::run(&programs, &work, &scenarios, report.as_deref(), &golden)?;
             Ok(reports.iter().all(|report| report.unexplained() == 0))
         }
         Command::Startup { work, python, oracle, backend, cases } => {

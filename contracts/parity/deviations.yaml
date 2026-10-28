@@ -243,3 +243,12 @@ deviations:
       random on both sides. Parity scenarios compare these values by kind
       only (tolerance mode `generated`, db_deviations).
     current: values differ only by clock source and randomness.
+  - id: D-51
+    status: proposed
+    source: backend/mcp_server/tools/assist.py (like_track_id, like_artist), app/services/assist_app_service.py (_reference_anchor, _likeness)
+    summary: >
+      The MCP assist_recommend / assist_search / assist_route tools ignore
+      the "like X" reference (like_track_id, like_artist): no reference
+      summary, no likeness ordering and no missing-reference note. Without
+      other filters assist_search answers "検索条件か「〜のような曲」を1つ以上指定してください".
+    current: temporary; the reference anchor and likeness scoring are not ported yet.
