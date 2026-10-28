@@ -221,7 +221,8 @@ fn short(value: &Value) -> String {
 /// N6: an array whose order is undefined only among elements that agree on
 /// `by` (e.g. `ORDER BY count DESC` without a tie-breaker). Each run of
 /// consecutive elements with the same `by` value is sorted by its canonical
-/// JSON on both sides; the order between runs is still compared.
+/// JSON (keys sorted, see [`canonical`]) on both sides; the order between
+/// runs is still compared.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Ties {
@@ -270,9 +271,26 @@ fn sort_runs(items: &mut [Value], by: &str) {
         while end < items.len() && items[end].get(by).cloned() == key {
             end += 1;
         }
-        items[start..end].sort_by_cached_key(|item| item.to_string());
+        items[start..end].sort_by_cached_key(canonical);
         start = end;
     }
+}
+
+/// JSON text with object keys sorted at every level: the same value gives
+/// the same text whatever key order a side wrote (N1 ignores key order).
+pub fn canonical(value: &Value) -> String {
+    fn sorted(value: &Value) -> Value {
+        match value {
+            Value::Object(map) => {
+                let mut pairs: Vec<(&String, &Value)> = map.iter().collect();
+                pairs.sort_by(|a, b| a.0.cmp(b.0));
+                Value::Object(pairs.into_iter().map(|(key, item)| (key.clone(), sorted(item))).collect())
+            }
+            Value::Array(items) => Value::Array(items.iter().map(sorted).collect()),
+            other => other.clone(),
+        }
+    }
+    sorted(value).to_string()
 }
 
 /// One side's HTTP response.
@@ -408,6 +426,17 @@ mod tests {
 
     fn captured(status: u16, content_type: &str, body: &str) -> Captured {
         Captured { status, content_type: content_type.into(), headers: Vec::new(), body: body.as_bytes().to_vec() }
+    }
+
+    #[test]
+    fn ties_ignore_each_sides_key_order() {
+        let rules = [Ties { path: "$".into(), by: "t".into() }];
+        let mut a = json!([{"d": "x", "id": 2, "t": 1}, {"d": null, "id": 1, "t": 1}]);
+        let mut b: Value = serde_json::from_str(r#"[{"id": 1, "d": null, "t": 1}, {"id": 2, "d": "x", "t": 1}]"#).unwrap();
+        normalize_ties(&mut a, &rules);
+        normalize_ties(&mut b, &rules);
+        assert_eq!(a, b);
+        assert_eq!(canonical(&json!({"b": [{"z": 1, "a": 2}], "a": null})), r#"{"a":null,"b":[{"a":2,"z":1}]}"#);
     }
 
     #[test]

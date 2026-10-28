@@ -10,15 +10,18 @@
 //! - [`restore_recovery`]: crash recovery of the two-file restore unit.
 //! - [`jobs_sqlite`]: the SQLite analysis-job queue beside the library.
 //! - [`array_codec`]: the BLOB layout of waveforms and beat positions.
+//! - [`compaction`]: the startup health check and its allowlist marker.
 //! - [`repos`]: repositories (S1: what startup touches).
 //!
-//! Startup compaction (compaction.py) is not ported yet.
+//! Startup compaction (compaction.py) is ported up to its rebuild decision
+//! ([`compaction`]): the `features_extra_clean` marker; the rebuilds are not.
 //!
 //! SQL in this crate never calls `now()`/`CURRENT_TIMESTAMP`: the bundled
 //! engine has no ICU, so those are UTC, while stored timestamps are local
 //! naive time. Bind `plumdeck_core::time::Clock` values instead (plan R3).
 
 pub mod array_codec;
+pub mod compaction;
 pub mod handle;
 pub mod jobs_sqlite;
 pub mod repos;

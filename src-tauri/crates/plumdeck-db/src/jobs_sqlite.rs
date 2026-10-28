@@ -17,7 +17,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use plumdeck_core::compat::pyfmt::round_ndigits;
-use plumdeck_core::compat::pyjson::{dumps_json, DumpOptions};
+use plumdeck_core::compat::pyjson::{dumps_json, DumpOptions, PyValue};
+use plumdeck_core::compat::pyjson_loads::loads;
 use plumdeck_core::time::Clock;
 use rusqlite::types::ValueRef;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -82,6 +83,25 @@ fn dict_rows(conn: &Connection, sql: &str, job_id: &str) -> Result<Vec<Value>, D
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// `bool(json.loads(config).get("background"))`; Python raised (and the
+/// recovery rolled back) when the config is not a JSON object.
+fn is_background(config: Option<&str>) -> Result<bool, DbError> {
+    let invalid = || DbError::Invalid("analysis job config is not a JSON object".into());
+    let parsed = loads(config.ok_or_else(invalid)?).map_err(|_| invalid())?;
+    let PyValue::Dict(pairs) = parsed else { return Err(invalid()) };
+    let value = pairs.iter().rev().find(|(key, _)| matches!(key, PyValue::Str(k) if k == "background"));
+    Ok(match value.map(|(_, value)| value) {
+        None | Some(PyValue::None) => false,
+        Some(PyValue::Bool(flag)) => *flag,
+        Some(PyValue::Int(number)) => *number != 0,
+        Some(PyValue::Float(number)) => *number != 0.0,
+        Some(PyValue::Str(text)) => !text.is_empty(),
+        Some(PyValue::List(items)) => !items.is_empty(),
+        Some(PyValue::Dict(items)) => !items.is_empty(),
+        Some(_) => true,
+    })
+}
+
 fn py_dumps(value: &Value) -> Result<String, DbError> {
     dumps_json(value, &DumpOptions::default()).map_err(|error| DbError::Invalid(error.to_string()))
 }
@@ -121,11 +141,19 @@ impl AnalysisJobQueue {
         Ok(value)
     }
 
-    /// After a crash nothing is running: running jobs pause, running items
-    /// return to pending.
+    /// After a crash nothing is running: running, pausing and queued jobs go
+    /// back to `queued` when they are automatic (`config.background`), to
+    /// `paused` otherwise; running items return to pending.
     pub fn recover(&self) -> Result<(), DbError> {
         self.write(|conn| {
-            conn.execute("UPDATE jobs SET status='paused' WHERE status IN ('running','pausing')", [])?;
+            let rows: Vec<(String, Option<String>)> = conn
+                .prepare("SELECT id,config FROM jobs WHERE status IN ('running','pausing','queued')")?
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<Result<_, _>>()?;
+            for (id, config) in rows {
+                let status = if is_background(config.as_deref())? { "queued" } else { "paused" };
+                conn.execute("UPDATE jobs SET status=? WHERE id=?", params![status, id])?;
+            }
             conn.execute("UPDATE items SET status='pending' WHERE status='running'", [])?;
             Ok(())
         })
@@ -420,6 +448,27 @@ mod tests {
         queue.update_job(&job, "running", None, None).unwrap();
         queue.clone().recover_once().unwrap();
         assert_eq!(queue.get(None).unwrap()["status"], "running");
+    }
+
+    #[test]
+    fn recovery_requeues_background_jobs_only() {
+        let dir = Dir::new("background");
+        let queue = AnalysisJobQueue::new(dir.0.join("q.sqlite3"), None, clock(1.0));
+        let background = queue.create(&json!({"background": true}), &[item(1, "/x")]).unwrap();
+        let user = queue.create(&json!({"background": 0, "features": ["key"]}), &[item(2, "/y")]).unwrap();
+        let waiting = queue.create(&json!({}), &[]).unwrap();
+        let done = queue.create(&json!({"background": true}), &[]).unwrap();
+        queue.update_job(&background, "running", None, None).unwrap();
+        queue.update_job(&user, "pausing", None, None).unwrap();
+        queue.update_job(&waiting, "queued", None, None).unwrap();
+        queue.update_job(&done, "completed", None, None).unwrap();
+        queue.recover().unwrap();
+        let status = |job: &str| queue.get(Some(job)).unwrap()["status"].clone();
+        assert_eq!([status(&background), status(&user), status(&waiting), status(&done)], ["queued", "paused", "paused", "completed"]);
+        Connection::open(queue.path()).unwrap().execute("UPDATE jobs SET config='[]' WHERE id=?", params![user]).unwrap();
+        queue.update_job(&user, "running", None, None).unwrap();
+        assert!(queue.recover().is_err());
+        assert_eq!(status(&user), "running", "the failed recovery rolled back");
     }
 
     /// The same build must later open rekordbox's encrypted master.db.

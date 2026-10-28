@@ -37,6 +37,7 @@ fn stats_json(stats: &DashboardStats) -> PyValue {
         ("total_tracks", int(stats.total_tracks)),
         ("analyzed_tracks", int(stats.analyzed_tracks)),
         ("unanalyzed_tracks", int(stats.unanalyzed_tracks())),
+        ("embedding_pending_tracks", int(stats.embedding_pending_tracks)),
         ("genre_distribution", PyValue::List(genres)),
         ("unverified_genres_count", int(stats.unverified_genres_count)),
         ("lyrics_tracks_count", int(stats.lyrics_tracks_count)),
@@ -70,7 +71,8 @@ mod tests {
         assert_eq!(
             answer.json(),
             json!({
-                "total_tracks": 0, "analyzed_tracks": 0, "unanalyzed_tracks": 0, "genre_distribution": [],
+                "total_tracks": 0, "analyzed_tracks": 0, "unanalyzed_tracks": 0, "embedding_pending_tracks": 0,
+                "genre_distribution": [],
                 "unverified_genres_count": 0, "lyrics_tracks_count": 0, "recent_setlists": [],
                 "config": {"has_root_path": false}
             })
@@ -83,7 +85,8 @@ mod tests {
         );
         let answer = send(app(), Method::GET, "/api/dashboard", &[], "").await;
         let body = answer.json();
-        assert_eq!((body["analyzed_tracks"].clone(), body["unanalyzed_tracks"].clone()), (json!(1), json!(1)));
+        // Analyzed needs measured timbre and a stored waveform, not only a BPM.
+        assert_eq!((body["analyzed_tracks"].clone(), body["unanalyzed_tracks"].clone()), (json!(0), json!(2)));
         assert_eq!(body["genre_distribution"], json!([{"name": "House", "count": 2}]));
         assert_eq!(body["unverified_genres_count"], json!(2));
         assert_eq!(

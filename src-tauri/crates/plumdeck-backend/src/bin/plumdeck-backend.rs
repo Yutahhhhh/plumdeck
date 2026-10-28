@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use clap::Parser;
 use plumdeck_backend::sandbox::check_parity_sandbox;
-use plumdeck_backend::startup::{close_library, open_library, CompactionNotPorted, Library};
+use plumdeck_backend::startup::{close_library, open_library, HealthCheckWithoutRebuild, Library};
 use plumdeck_backend::middleware::CorsPolicy;
 use plumdeck_backend::{serve, shutdown_signal, stdin_shutdown_line, AppState, StartupStage, GRACEFUL_SHUTDOWN_SECS};
 use plumdeck_core::config::Config;
@@ -105,7 +105,7 @@ fn main() -> ExitCode {
         // main.py lifespan, before the socket is bound (uvicorn's order).
         let db_path = config.db_path.clone();
         let opened = tokio::task::spawn_blocking(move || {
-            open_library(&db_path, &CompactionNotPorted, Arc::new(SystemClock), &mut |stage| {
+            open_library(&db_path, &HealthCheckWithoutRebuild, Arc::new(SystemClock), &mut |stage| {
                 println!("{}", stage.line());
             })
         })

@@ -7,8 +7,10 @@
 //! 2. stage `queue`: put interrupted Play imports back in the queue;
 //! 3. stage `ready`.
 //!
-//! The analysis-job queue is recovered lazily on first use, as Python's
-//! `AnalysisJobService.repository` does, not here.
+//! After the import queue, `AnalysisJobService.startup()` opens the
+//! analysis-job queue and recovers it (creating the file). Launching a
+//! queued job and the embedding backfill (`enqueue_missing_embeddings`) run
+//! analysis and arrive with S11: a queued job stays queued here.
 //!
 //! On shutdown the database is CHECKPOINTed and closed (`checkpoint_db()`,
 //! `close_db()`).
@@ -40,15 +42,16 @@ pub trait StartupCompaction: Send + Sync {
     fn ensure_healthy(&self, db_path: &Path) -> Result<(), DbError>;
 }
 
-/// Stand-in until compaction.py is ported: never rebuilds. Libraries that
-/// Python would rebuild (schema below v5, legacy analysis columns, bloated
-/// files) are opened as they are.
+/// compaction.py up to its rebuild decision ([`plumdeck_db::compaction`]):
+/// marks a clean library, never rebuilds. Libraries that Python would
+/// rebuild (schema below v5, legacy analysis columns, features_extra keys
+/// outside the allowlist, bloated files) are opened as they are.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct CompactionNotPorted;
+pub struct HealthCheckWithoutRebuild;
 
-impl StartupCompaction for CompactionNotPorted {
-    fn ensure_healthy(&self, _db_path: &Path) -> Result<(), DbError> {
-        Ok(())
+impl StartupCompaction for HealthCheckWithoutRebuild {
+    fn ensure_healthy(&self, db_path: &Path) -> Result<(), DbError> {
+        plumdeck_db::compaction::ensure_healthy_db(db_path).map(|_| ())
     }
 }
 
@@ -67,6 +70,8 @@ pub enum StartupError {
     Database(DbError),
     #[error("Error while restoring the import queue: {0}")]
     Queue(DbError),
+    #[error("Error while restoring the analysis-job queue: {0}")]
+    Jobs(DbError),
 }
 
 /// `init_db`: everything up to an open, initialized library.
@@ -105,6 +110,13 @@ pub fn open_library(
         return Err(StartupError::Queue(error));
     }
     let jobs = AnalysisJobQueue::for_library(&db, clock);
+    // `analysis_job_service.startup()`: the repository is created (and the
+    // queue recovered) when it looks for the next queued job. Python's
+    // lifespan let a failure here stop startup.
+    if let Err(error) = jobs.recover_once() {
+        let _ = db.shutdown(SHUTDOWN_TIMEOUT);
+        return Err(StartupError::Jobs(error));
+    }
     Ok(Library { db, jobs })
 }
 
@@ -190,7 +202,7 @@ mod tests {
             ["paused:true", "completed:false"]
         );
         assert_eq!(query::<String>(&library.db, "SELECT state FROM import_items ORDER BY id"), ["queued", "failed"]);
-        assert!(!library.jobs.path().exists(), "the job queue is recovered lazily, not at startup");
+        assert!(library.jobs.path().exists(), "startup opens and recovers the job queue");
         assert_eq!(close_library(&library), None);
         assert!(!library.db.is_open());
         assert!(!dir.0.join("plumdeck.duckdb.wal").exists());
@@ -222,7 +234,7 @@ mod tests {
     fn a_fresh_install_creates_the_v5_library() {
         let dir = Dir::new("fresh");
         let path = dir.0.join("plumdeck.duckdb");
-        let library = open_library(&path, &CompactionNotPorted, Arc::new(SystemClock), &mut |_| {}).unwrap();
+        let library = open_library(&path, &HealthCheckWithoutRebuild, Arc::new(SystemClock), &mut |_| {}).unwrap();
         assert_eq!(query::<String>(&library.db, "SELECT value FROM schema_info WHERE key = 'version'"), ["5"]);
         assert_eq!(close_library(&library), None);
     }

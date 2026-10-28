@@ -1,0 +1,36 @@
+# S2: GET /api/dashboard with the analyzed rule of release-integration
+# (completed_analysis_condition: bpm/duration > 0, measured timbre in [0, 1],
+# a stored waveform, the whole-track grid for light rows) and
+# embedding_pending_tracks (analyzed tracks without a valid vector of the
+# current model). On the catalog fixture: T01 analyzed with a valid vector,
+# T03 analyzed with an all-zero vector, T09 analyzed with another model's
+# vector, T11 analyzed without a vector, T12 light with an excerpt-only grid
+# (not analyzed), T13 bpm 0 (not analyzed), T04 three zero descriptors with a
+# recorded timbre version (analyzed, no vector).
+name: s2-dashboard-analyzed
+db: fixture
+fixture: catalog
+fixture_sql: |
+  UPDATE tracks SET duration = 200, energy = 0.5, danceability = 0.6, brightness = 0.7, noisiness = 0.1 WHERE id IN (1, 3, 9, 11, 12, 13);
+  UPDATE tracks SET bpm = 120, duration = 100, energy = 0, danceability = 0, brightness = 0, noisiness = 0.2 WHERE id = 4;
+  UPDATE tracks SET analysis_level = 'light' WHERE id = 12;
+  INSERT INTO track_analyses (track_id, waveform_u8, beats_f32, features_extra_json) VALUES
+    (1, '\x01\x02'::BLOB, NULL, '{}'),
+    (3, '\x01'::BLOB, NULL, '{"analysis_components": {}}'),
+    (9, '\x01'::BLOB, NULL, 'not json'),
+    (11, '\x01'::BLOB, NULL, '{}'),
+    (12, '\x01'::BLOB, '\x00\x00\x80\x3f'::BLOB, '{"analysis_components": {"rhythm": "librosa-rhythm-light-v1"}}'),
+    (13, '\x01'::BLOB, NULL, '{}'),
+    (4, '\x01'::BLOB, NULL, '{"analysis_components": {"timbre": "timbre-v2"}}');
+  INSERT INTO track_embeddings (track_id, model_name, embedding_json) VALUES
+    (1, 'msd-musicnn-1:musicnn-16khz-v1', (SELECT list_transform(range(200), x -> 0.5)::VARCHAR)),
+    (3, 'msd-musicnn-1:musicnn-16khz-v1', (SELECT list_transform(range(200), x -> 0.0)::VARCHAR)),
+    (9, 'musicnn', (SELECT list_transform(range(200), x -> 0.5)::VARCHAR));
+compare_overrides:
+  ties:
+    - {path: "$.genre_distribution", by: count}
+    - {path: "$.recent_setlists", by: updated_at}
+steps:
+  - name: analyzed and embedding backlog counts
+    expect_status: 200
+    http: {method: GET, path: /api/dashboard}

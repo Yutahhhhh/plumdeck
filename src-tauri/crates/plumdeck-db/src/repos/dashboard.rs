@@ -8,6 +8,7 @@
 use chrono::NaiveDateTime;
 use duckdb::Connection;
 
+use super::analyzed::{pending_embedding_ids_sql, COMPLETED_ANALYSIS_SQL};
 use super::settings::{finish, setting_value};
 use crate::DbError;
 
@@ -38,7 +39,10 @@ pub struct SetlistRow {
 #[derive(Clone, Debug, PartialEq)]
 pub struct DashboardStats {
     pub total_tracks: i64,
+    /// Tracks meeting the analyzed rule (`completed_analysis_condition`).
     pub analyzed_tracks: i64,
+    /// Analyzed tracks whose similarity vector is still missing.
+    pub embedding_pending_tracks: i64,
     pub genre_distribution: Vec<GenreCount>,
     pub unverified_genres_count: i64,
     pub lyrics_tracks_count: i64,
@@ -63,7 +67,9 @@ pub fn dashboard_stats(conn: &Connection) -> Result<DashboardStats, DbError> {
     conn.execute_batch("BEGIN TRANSACTION")?;
     let result = (|| {
         let total_tracks = count(conn, "SELECT count(*) FROM tracks")?;
-        let analyzed_tracks = count(conn, "SELECT count(*) FROM tracks WHERE tracks.bpm > 0")?;
+        let analyzed_tracks = count(conn, &format!("SELECT count(*) FROM tracks WHERE {COMPLETED_ANALYSIS_SQL}"))?;
+        let embedding_pending_tracks =
+            count(conn, &format!("SELECT count(*) FROM ({}) AS anon_1", pending_embedding_ids_sql()))?;
         let genre_distribution = conn
             .prepare(
                 "SELECT genre, COUNT(*) as count FROM tracks \
@@ -99,6 +105,7 @@ pub fn dashboard_stats(conn: &Connection) -> Result<DashboardStats, DbError> {
         Ok(DashboardStats {
             total_tracks,
             analyzed_tracks,
+            embedding_pending_tracks,
             genre_distribution,
             unverified_genres_count,
             lyrics_tracks_count,
@@ -131,7 +138,9 @@ mod tests {
         )
         .unwrap();
         let stats = dashboard_stats(&conn).unwrap();
-        assert_eq!((stats.total_tracks, stats.analyzed_tracks, stats.unanalyzed_tracks()), (6, 3, 3));
+        // No track has a stored waveform, so none is analyzed.
+        assert_eq!((stats.total_tracks, stats.analyzed_tracks, stats.unanalyzed_tracks()), (6, 0, 6));
+        assert_eq!(stats.embedding_pending_tracks, 0);
         assert_eq!(
             stats.genre_distribution,
             [GenreCount { name: "House".into(), count: 2 }, GenreCount { name: "unknown".into(), count: 1 }]

@@ -129,12 +129,12 @@
 
 ### 3.2 `feat/rust-migration`（この資料があるブランチ）
 
-分岐点は `feat/release-integration` の初期（解析整理と Play 改善の**前**）。
+分岐点は `feat/release-integration` の初期（解析整理と Play 改善の**前**）。段 0 で `origin/feat/release-integration` をマージ済み（`contracts/` 再生成、S0〜S2 のパリティを再確認）。
 
 | 項目 | 状態 | 主な場所 |
 |---|---|---|
 | S0 基盤 | 完了 | `src-tauri/Cargo.toml`（workspace）、`src-tauri/crates/plumdeck-core`（Python 互換部品）、`contracts/`（schema / http / mcp / compat-vectors）、`tools/parity/`（Python オラクルと補助）、`src-tauri/crates/tools/plumdeck-parity`、ヘッドレス bin `plumdeck-backend` |
-| S1 DB 層と起動・停止 | 完了（起動時の compaction は未移植） | `src-tauri/crates/plumdeck-db`（DuckDB 1.5.5 固定、ハンドルとゲート、スキーマ初期化、新しい版の DB の拒否、restore の回復、SQLite ジョブキュー、BLOB コーデック）、`plumdeck-backend/src/startup.rs` |
+| S1 DB 層と起動・停止 | 完了（起動時の compaction は判定と `features_extra_clean` の印まで。再構築は未移植。解析ジョブキューは起動時に開いて回復するが、待機中ジョブの起動と埋め込みのバックフィルは S11） | `src-tauri/crates/plumdeck-db`（DuckDB 1.5.5 固定、ハンドルとゲート、スキーマ初期化、新しい版の DB の拒否、restore の回復、SQLite ジョブキュー、BLOB コーデック）、`plumdeck-backend/src/startup.rs` |
 | S2 settings / dashboard / ミドルウェア | 完了（save / reveal の Tauri 置換は S13 で） | `plumdeck-backend/src/routes`、`middleware.rs`、`contracts/parity/scenarios/s2-*.yaml` |
 | `plumdeck-rekordbox` | RB-10（master.db）と RB-11（ANLZ）完了 | `src-tauri/crates/plumdeck-rekordbox`（DuckDB 非依存） |
 | `plumdeck-decode` | W1-04 / W1-05 相当完了（HE-AAC と Opus は型付きの Unsupported） | `src-tauri/crates/plumdeck-decode`（`spec.rs` にクリーンルーム仕様） |
