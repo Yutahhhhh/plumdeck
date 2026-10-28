@@ -115,8 +115,10 @@ def choose(field: str, incoming: Any, incoming_source: str | None,
         return external, REKORDBOX
     if incoming_source == REKORDBOX and valid(field, incoming):
         return incoming, REKORDBOX
-    if not rekordbox.readable and stored_source == REKORDBOX and valid(field, stored):
-        # master.db is offline: keep the rekordbox value instead of an estimate.
+    if stored_source == REKORDBOX and valid(field, stored):
+        # master.db is offline, or rekordbox no longer has a value (the file
+        # left the collection, another path spelling, BPM 0): keep the synced
+        # value instead of an estimate.
         return stored, REKORDBOX
     if valid(field, incoming):
         return incoming, incoming_source or OWN

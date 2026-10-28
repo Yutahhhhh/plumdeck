@@ -108,8 +108,10 @@ def test_choose_applies_manual_then_rekordbox_then_own():
     # A value the caller took from rekordbox stays rekordbox even if master.db went away.
     assert choose("bpm", 128.0, "rekordbox", None, None, offline) == (128.0, "rekordbox")
     assert choose("bpm", 64.0, "own", 128.0, "rekordbox", offline) == (128.0, "rekordbox")
-    # Readable but rekordbox no longer has a tempo: own analysis applies.
-    assert choose("bpm", 64.0, "own", 128.0, "rekordbox", values(True)) == (64.0, "own")
+    # Readable but rekordbox no longer has a tempo (left the collection, another
+    # path spelling, BPM 0): the synced value still outranks an estimate.
+    assert choose("bpm", 64.0, "own", 128.0, "rekordbox", values(True)) == (128.0, "rekordbox")
+    assert choose("bpm", 64.0, "own", 120.0, "own", values(True)) == (64.0, "own")
     assert choose("bpm", 0.0, "own", 120.0, "own", values(True)) == (120.0, "own")
     assert choose("bpm", 0.0, "own", None, None, offline) == (None, None)
 
@@ -247,8 +249,8 @@ def test_analysis_job_save_applies_the_same_rule(session, mocker, tmp_path):
 
     use_rekordbox(mocker, "unregistered")
     track, extra = _job_save(session, tmp_path, ["rhythm"], result)
-    assert (track.bpm, extra["analysis_components"]["sources"]["bpm"]) == (64.0, "own")
-    assert "analysis_bpm" not in extra
+    assert (track.bpm, extra["analysis_components"]["sources"]["bpm"]) == (128.0, "rekordbox")
+    assert extra["analysis_bpm"] == 64.0
 
 
 def _ingest(mocker, tmp_path, case, keys=False):
