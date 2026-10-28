@@ -13,21 +13,29 @@ export type PadMode =
   | "keyshift" | "seqcall" | "actcensr" | "stems" | "memorycue" | "sampler";
 export type FxEffect = PadEffect;
 
-export const PAD_MODES: { mode: PadMode; label: string }[] = [
+/**
+ * Pad modes in the order of the DJ software's mode selector. `capability`
+ * hides a mode until the engine implements it, so no selectable mode is dead.
+ */
+export const PAD_MODES: { mode: PadMode; label: string; capability?: string }[] = [
   { mode: "hotcue", label: "HOT CUE" },
-  { mode: "padfx", label: "PAD FX 1" },
-  { mode: "padfx2", label: "PAD FX 2" },
-  { mode: "sampler", label: "SAMPLER" },
-  { mode: "slicer", label: "SLICER" },
+  { mode: "padfx", label: "PAD FX 1", capability: "mixer.fx" },
+  { mode: "padfx2", label: "PAD FX 2", capability: "mixer.fx" },
+  { mode: "slicer", label: "SLICER", capability: "deck.slicer" },
   { mode: "beatjump", label: "BEAT JUMP" },
   { mode: "beatloop", label: "BEAT LOOP" },
-  { mode: "keyboard", label: "KEYBOARD" },
-  { mode: "keyshift", label: "KEY SHIFT" },
-  { mode: "seqcall", label: "SEQ. CALL" },
-  { mode: "actcensr", label: "ACT. CENSR" },
-  { mode: "stems", label: "STEMS" },
+  { mode: "keyboard", label: "KEYBOARD", capability: "deck.key" },
+  { mode: "keyshift", label: "KEY SHIFT", capability: "deck.key" },
+  { mode: "seqcall", label: "SEQ. CALL", capability: "deck.sequencer" },
+  { mode: "actcensr", label: "CENSOR", capability: "deck.censor" },
+  { mode: "stems", label: "STEMS", capability: "deck.stems" },
   { mode: "memorycue", label: "MEMORY CUE" },
+  { mode: "sampler", label: "SAMPLER", capability: "sampler" },
 ];
+
+/** Modes this engine can drive. The current mode stays listed so it can be left. */
+export const availablePadModes = (capabilities: readonly string[], current?: PadMode) =>
+  PAD_MODES.filter((entry) => !entry.capability || capabilities.includes(entry.capability) || entry.mode === current);
 
 /**
  * この音声エンジンに対応する op が無いモード。rekordbox 同様セレクタには出すが、
@@ -36,7 +44,7 @@ export const PAD_MODES: { mode: PadMode; label: string }[] = [
 export const UNBACKED_PAD_MODES: Record<string, string> = {
   slicer: "SLICER はこの音声エンジン未対応",
   seqcall: "SEQ. CALL はこの音声エンジン未対応",
-  actcensr: "ACT. CENSR はこの音声エンジン未対応",
+  actcensr: "CENSOR はこの音声エンジン未対応",
   stems: "STEMS はこの音声エンジン未対応",
 };
 

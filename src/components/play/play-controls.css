@@ -226,7 +226,6 @@
 
 /* デッキ行の高さに収めるため、つまみは 2 列に畳んで値表示を省く。 */
 .dj-mixer-panel { min-height: 0; align-items: stretch; }
-.dj-panel-stub { flex-shrink: 0; padding: 6px 10px; border-bottom: 1px solid #000; background: #17191c; color: #8f959d; font-size: 9px; }
 
 /* 縦フェーダーは親の実高さを使う。ここを 0 にすると潰れる。 */
 .dj-mixer-tempo-reset { flex-shrink: 0; }
@@ -345,3 +344,17 @@
 .dj-beatfx-release small { color: #9aa0a8; font-size: 10px; font-weight: 600; }
 .dj-beatfx-release.is-on small { color: #fff; }
 .dj-beatfx-error { color: #f3a49d; font-size: 11px; }
+
+/* RECORDING panel */
+.dj-recording-panel { display: flex; align-items: center; gap: 12px; flex-shrink: 0; flex-wrap: wrap; min-height: 34px; padding: 4px 10px; border-bottom: 1px solid #000; background: #17191c; color: #d0d4da; font-size: 11px; }
+.dj-recording-panel-title { color: #b6bdc8; font-weight: 800; letter-spacing: .08em; }
+.dj-recording-panel-rec { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px; border: 1px solid #3a3f46; border-radius: 2px; background: #1b1d20; color: #e2e5e9; font-size: 11px; font-weight: 800; }
+.dj-recording-panel-rec svg { width: 10px; height: 10px; color: #ff5c5c; fill: currentColor; }
+.dj-recording-panel-rec.is-recording { border-color: #c4352c; background: #5a1a16; }
+.dj-recording-panel-rec:disabled { opacity: .4; }
+.dj-recording-panel-time { min-width: 56px; color: #fff; font-size: 18px; font-weight: 700; }
+.dj-recording-panel dl { display: flex; gap: 14px; min-width: 0; margin: 0; }
+.dj-recording-panel dl div { display: flex; gap: 5px; min-width: 0; }
+.dj-recording-panel dt { color: #9aa3ad; }
+.dj-recording-panel dd { min-width: 0; max-width: 320px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dj-recording-panel small { color: #f3a49d; }

@@ -41,6 +41,8 @@ import "./play-workspace.css";
 import "./play-density.css";
 import { AudioSettings } from "./AudioSettings";
 import { RecordingSaveDialog } from "./RecordingSaveDialog";
+import { RecordingPanel } from "./RecordingPanel";
+import { SamplerPanel } from "./SamplerPanel";
 import { RekordboxCueImportButton } from "./RekordboxCueImportButton";
 import { BeatGridEditor } from "./BeatGridEditor";
 import type { PerformanceBeatGrid, PerformanceMetadata } from "@/types/performance-metadata";
@@ -719,6 +721,14 @@ export function PlayWorkspace() {
     [trackMetadata],
   );
 
+  // A toggle exists only when its panel has something to operate.
+  const panelAvailable: Record<PanelId, boolean> = {
+    fx: capabilities.includes(DJ_ENGINE_CAPABILITIES.mixerBeatFx),
+    sampler: capabilities.includes(DJ_ENGINE_CAPABILITIES.sampler),
+    mixer: true,
+    recording: recordingSupported,
+  };
+  const toggleRecording = () => void run(() => client.getState().snapshot?.recording?.active ? finalizeRecording() : client.startRecording());
   const togglePanel = (panel: PanelId) => setPanels((current) => {
     const next = { ...current, [panel]: !current[panel] };
     localStorage.setItem("plumdeck.panels", JSON.stringify(next));
@@ -848,7 +858,7 @@ export function PlayWorkspace() {
   return <PlayDragDropProvider onLoad={loadTrack}><main style={{'--wave-contrast':waveContrast,'--wave-grayscale':waveMonochrome?1:0} as CSSProperties} className={cn("dj-workspace", expandedPair&&"dj-workspace--wave-expanded", compactDecks && "dj-workspace--compact", deckCount === 4 && "dj-workspace--four", waveformLayout === "vertical" && "dj-workspace--vertical")}>
     <header className="dj-global-bar">
       <div className="dj-performance-label"><Disc3 /><strong>PERFORMANCE</strong></div>
-      <PanelToolbar visible={panels} onToggle={togglePanel} />
+      <PanelToolbar visible={panels} available={panelAvailable} onToggle={togglePanel} />
       <div className="dj-segmented" aria-label="デッキ表示サイズ">{([false, true] as const).map((compact) => <button key={String(compact)} title={compact ? "コンパクト表示（ブラウザを広く）" : "通常表示"} aria-pressed={compactDecks === compact} className={compactDecks === compact ? "is-on" : ""} onClick={() => { setCompactDecks(compact); localStorage.setItem("plumdeck.compactDecks", String(compact)); }}>{compact ? "コンパクト" : "通常"}</button>)}</div>
       <div className="dj-segmented" aria-label="Deck count">{([2, 4] as const).map((count) => <button key={count} title={`${count} デッキ`} aria-pressed={deckCount === count} className={deckCount === count ? "is-on" : ""} onClick={() => changeDeckCount(count)}>{count}</button>)}</div>
       <details className="dj-wave-settings"><summary>表示設定</summary><div>
@@ -889,19 +899,19 @@ export function PlayWorkspace() {
         {!status?.running && <><input aria-label="音声出力デバイス" className="dj-device-input" value={outputDevice} onChange={(event) => { setOutputDevice(event.target.value); localStorage.setItem("plumdeck.djOutputDevice", event.target.value); }} placeholder="標準オーディオ出力" /><button className="dj-button" disabled={busy || !status?.installed} onClick={() => void start(outputDevice || undefined, recordingDir || undefined)}>{busy ? <Loader2 className="animate-spin" /> : <Power />}起動</button></>}
         {status?.running && !connected && <button className="dj-button" onClick={() => void connect()}>接続</button>}
         <button className={cn("dj-button", shortcuts && "is-on")} aria-label="キーボード操作" title="キーボード操作" onClick={() => setShortcuts((value) => !value)}><Keyboard /></button>
-        <button className={cn("dj-button dj-record", snapshot?.recording?.active && "is-recording")} disabled={!connected || !recordingSupported || snapshot?.recording?.stopping} title={recordingSupported ? "録音開始 / 停止" : "録音は現在の音声ホストで利用できません"} onClick={() => void run(() => snapshot?.recording?.active ? finalizeRecording() : client.startRecording())}>{snapshot?.recording?.active ? <Square /> : <Circle />}<span>{snapshot?.recording?.active ? formatTime(snapshot.recording.elapsedMs) : "REC"}</span></button>
+        <button className={cn("dj-button dj-record", snapshot?.recording?.active && "is-recording")} disabled={!connected || !recordingSupported || snapshot?.recording?.stopping} title={recordingSupported ? "録音開始 / 停止" : "録音は現在の音声ホストで利用できません"} onClick={toggleRecording}>{snapshot?.recording?.active ? <Square /> : <Circle />}<span>{snapshot?.recording?.active ? formatTime(snapshot.recording.elapsedMs) : "REC"}</span></button>
         {status?.running && <button className="dj-button" aria-label="音声エンジン停止" title="音声エンジン停止" onClick={stopEngine}><Power /></button>}
       </div>
     </header>
     {(error || commandError || snapshot?.recording?.error) && <div role="alert" className="dj-error"><AlertTriangle />{commandError || error || snapshot?.recording?.error}</div>}
     {shortcuts && <div className="dj-shortcuts"><b>1–4</b> デッキ選択　<b>Space</b> 再生 / 一時停止　<b>Q / E</b> 5秒戻る / 進む　<b>ドラッグ</b> 曲を波形またはデッキへ　<b>波形ドラッグ</b> スクラブ</div>}
-    {panels.fx && <BeatFxPanel state={snapshot?.mixer.beatFx} decks={visibleDecks} releaseSupported={capabilities.includes(DJ_ENGINE_CAPABILITIES.mixerBeatFxRelease)}
+    {panels.fx && panelAvailable.fx && <BeatFxPanel state={snapshot?.mixer.beatFx} decks={visibleDecks} releaseSupported={capabilities.includes(DJ_ENGINE_CAPABILITIES.mixerBeatFxRelease)}
       micAvailable={Boolean(snapshot?.audio.microphone?.available)} samplerAvailable={capabilities.includes(DJ_ENGINE_CAPABILITIES.sampler)}
       disabledReason={!connected ? "未接続" : !capabilities.includes(DJ_ENGINE_CAPABILITIES.mixerBeatFx) ? "この音声エンジンは BEAT FX 非対応" : undefined}
       send={(params) => client.setBeatFx(params)} />}
-    {panels.recording && <div className="dj-panel-stub" role="note">
-      録音は上部ツールバーの REC ボタンから開始/停止できます。専用パネルは未実装です。
-    </div>}
+    {panels.sampler && panelAvailable.sampler && <SamplerPanel enabled={connected && capabilities.includes(DJ_ENGINE_CAPABILITIES.sampler)} cueAvailable={capabilities.includes(DJ_ENGINE_CAPABILITIES.mixerPfl)} />}
+    {panels.recording && panelAvailable.recording && <RecordingPanel recording={snapshot?.recording} directory={recordingDir}
+      disabledReason={!connected ? "未接続" : undefined} onToggle={toggleRecording} />}
     <section className="dj-performance" aria-label="Software DJ controller">
       {waveformLayout === "horizontal" && <div className="dj-scrolling-waves">{visibleDecks.map((id) => lane(id, "horizontal"))}</div>}
       {junctionSession?.active && <JunctionTurnBar snapshot={junctionSession} />}

@@ -15,7 +15,7 @@ import { usePlayPreferences } from "./play-preferences";
 import { DeckWaveform } from "./DeckWaveform";
 import { artworkUrl, useTrackVisuals } from "./useTrackVisuals";
 import { barNumbers, lowerBeat } from "./beat-grid-math";
-import { PerformancePads, UNBACKED_PAD_MODES, type FxEffect, type PadMode } from "./PerformancePads";
+import { availablePadModes, PerformancePads, UNBACKED_PAD_MODES, type FxEffect, type PadMode } from "./PerformancePads";
 import { PadModeSelect } from "./PadModeSelect";
 import { AutoBeatLoop, type LoopMode } from "./AutoBeatLoop";
 import { beatLoopPress, clampBeats, loopBeats, LOOP_BEATS_RANGE, LOOP_BEATS_RANGE_EXTENDED, resizeLoop, stepBeats } from "./loop-math";
@@ -267,7 +267,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
               <div className="dj-pad-pages" role="group" aria-label={`Deck ${id} ${padMode==="sampler"?"バンク":"ページ"}`}>
                 {Array.from({length:lastPage+1},(_,page)=><button key={page} type="button" aria-pressed={displayedPage===page} onClick={()=>movePage(page-displayedPage)}>{padMode==="sampler"?"BANK":"PAGE"} {page+1}</button>)}
               </div>
-              <PadModeSelect deckId={id} value={padMode} onChange={(mode) => { if (gridEditor) onGridClose?.(); setPadMode(mode); }} />
+              <PadModeSelect deckId={id} value={padMode} modes={availablePadModes(capabilities, padMode)} onChange={(mode) => { if (gridEditor) onGridClose?.(); setPadMode(mode); }} />
               {["padfx","padfx2"].includes(padMode) && <label className="dj-pad-fx-depth" title={fxReason ?? "PAD FX の掛かり具合"}>
                 <span>DEPTH</span>
                 <input type="range" min={0} max={1} step={.01} value={fxMix} disabled={Boolean(fxReason)}
