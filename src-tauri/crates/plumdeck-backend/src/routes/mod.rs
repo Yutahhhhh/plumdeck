@@ -7,6 +7,7 @@ pub mod csv_io;
 pub mod dashboard;
 pub mod file_tags;
 pub mod genres;
+pub mod junction;
 pub mod lyrics;
 pub mod mcp;
 pub mod media;

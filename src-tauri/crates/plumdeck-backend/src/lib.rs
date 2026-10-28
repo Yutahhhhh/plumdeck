@@ -87,12 +87,14 @@ pub struct AppState {
     pub metadata: routes::metadata_jobs::MetadataJobs,
     /// The Assist window and agent bridge (S6).
     pub assist: routes::assist::AssistBridge,
+    /// Where the MCP Junction tools send their actions (S12).
+    pub junction: Arc<dyn routes::junction::JunctionPort>,
 }
 
 impl AppState {
     pub fn new(db: DbHandle, cors: CorsPolicy) -> Self {
         let library_dir = db.path().parent().map(std::path::Path::to_path_buf).unwrap_or_default();
-        Self { db, cors: Arc::new(cors), clock: Arc::new(SystemClock), metadata: routes::metadata_jobs::MetadataJobs::new(library_dir), assist: Default::default() }
+        Self { db, cors: Arc::new(cors), clock: Arc::new(SystemClock), metadata: routes::metadata_jobs::MetadataJobs::new(library_dir), assist: Default::default(), junction: routes::junction::default_port() }
     }
 
     /// Run blocking work (DuckDB) off the async workers; a panic in it is a
