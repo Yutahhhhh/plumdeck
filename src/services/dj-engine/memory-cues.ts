@@ -64,9 +64,13 @@ export async function memoryAction(deck: DeckId, action: "save" | "delete" | "pr
     return;
   }
   if (action === "delete") {
-    // Delete the cue that was selected (called), not whatever is near the playhead.
-    const target = selectedMemoryCue(deck, trackId);
-    if (target === null) throw new Error("削除するメモリーキューを選んでください（パッドや ◀ ▶ で呼び出すと選択されます）");
+    // As on a CDJ: delete the called cue while the deck stands on it.
+    // Otherwise the cue at the playhead (within 50 ms), as before; a cue
+    // called minutes ago is never deleted from far away.
+    const near = (positionMs: number) => Math.abs(positionMs - state.positionMs) <= 50;
+    const called = selectedMemoryCue(deck, trackId);
+    const target = called !== null && state.status !== "playing" && near(called) ? called : points.find(p => near(p.positionMs))?.positionMs ?? null;
+    if (target === null) throw new Error("削除するメモリーキューの位置で止めてください（パッドや ◀ ▶ で呼び出すとその位置に移動します）");
     store(trackId, points.filter(p => Math.abs(p.positionMs - target) > 1));
     select(deck, trackId, null);
     return;

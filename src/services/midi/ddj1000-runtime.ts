@@ -3,12 +3,12 @@ import { padPreset, BEAT_LOOP_PAGES, BEAT_JUMP_PAGES, keyPad, type PadFxSlot } f
 import { createPadFxSender, padFxGroup, type PadFxGroup } from "./pad-fx-send.ts";
 import { pressFx, releaseFx, releaseAllFx, type PadFxActiveState } from "../../components/play/pad-fx-stack.ts";
 import { getPadSelection, selectPads, subscribePads } from "./pad-state.ts";
+import { chooseSyncLeader } from "../../components/play/sync-leader.ts";
 import { BEAT_FX, beatFxMaxBeats, beatFxMinBeats } from "./beat-fx.ts";
 import type { DjEngineClient } from "../dj-engine/client";
 import type { BeatFxState, DeckId, PadEffect } from "../../types/dj-engine";
 import type { MidiAction } from "./ddj1000";
 import { controllerTailLock, junctionChannelActive, junctionChannelSettings, junctionChannelTarget, type JunctionChannelAssign } from "./junction-channel.ts";
-import { junctionCommand } from "../junction/client.ts";
 const DECKS: DeckId[] = ["A", "B", "C", "D"];
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 export type ControllerActions = {
@@ -81,7 +81,8 @@ export class Ddj1000Runtime {
     this.junctionTimer = setTimeout(() => {
       this.junctionTimer = null;
       const pending = this.junctionPending; this.junctionPending = {};
-      if (this.alive) this.perform(() => junctionCommand("input.set", pending));
+      // Loaded on use: the Tauri client graph does not run under node --test.
+      if (this.alive) this.perform(async () => (await import("../junction/client.ts")).junctionCommand("input.set", pending));
     }, 50);
   }
   private client: DjEngineClient;
@@ -330,7 +331,7 @@ export class Ddj1000Runtime {
         if (control === "fxRelease") params={release:Boolean(pressed)};
         if (control === "fxBeatDown" || control === "fxBeatUp") {
           const current=this.client.getState().snapshot?.mixer.beatFx??this.nativeFx;
-          const capabilities=this.client.getState().snapshot?.engine.capabilities;
+          const capabilities=this.client.getState().snapshot?.engine?.capabilities;
           params={beats:clamp(current.beats*(control === "fxBeatDown"?0.5:2),beatFxMinBeats(current.effect,capabilities),beatFxMaxBeats(current.effect,capabilities))};
         }
         const result = await this.client.send("mixer.beatfx.set",params) as {beatFx?:BeatFxState};
@@ -482,7 +483,7 @@ export class Ddj1000Runtime {
         this.seekPreview.set(deck, { position, at: now, session, track });
         this.perform(() => this.client.seek(deck, position));
       } else {
-        if (this.client.getState().snapshot?.engine.capabilities.includes("deck.pitchbend")) {
+        if (this.client.getState().snapshot?.engine?.capabilities.includes("deck.pitchbend")) {
           this.perform(() => this.client.pitchbend(deck, clamp(value * 0.002, -0.75, 0.75)));
           return;
         }
@@ -520,10 +521,14 @@ export class Ddj1000Runtime {
         case "keylock": await this.client.setKeylock(deck, !d.keylock); break;
         case "quantize": await this.client.setQuantize(deck, !d.quantize); break;
         case "sync": {
-          const leader = DECKS.find(id => id !== deck && this.client.getState().snapshot?.decks[id].status === "playing");
+          // Same choice as the on-screen BEAT SYNC: the MASTER deck first.
+          const snapshot = this.client.getState().snapshot;
+          const leader = d.syncEnabled ? undefined : chooseSyncLeader(deck, snapshot?.engine?.decks ?? DECKS, snapshot?.decks ?? {});
           await this.client.setSync(deck, !d.syncEnabled, leader); break;
         }
         case "master":
+          // Pressed on the MASTER deck: give MASTER up, as the on-screen button does.
+          if (d.syncLeader === deck) { await this.client.setSync(deck, false); break; }
           // Leading is a role inside the sync group, not the absence of sync.
           // Clearing this deck's own sync would hand the tempo to whichever deck
           // the engine elects next, which is what SHIFT+SYNC is meant to prevent.
