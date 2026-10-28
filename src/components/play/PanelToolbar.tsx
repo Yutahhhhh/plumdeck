@@ -11,7 +11,7 @@ export const PANEL_DEFAULTS: PanelVisibility = {
 
 const PANELS: { id: PanelId; label: string; title: string; icon: ReactElement }[] = [
   {
-    id: "fx", label: "FX", title: "エフェクトパネルを表示/隠す",
+    id: "fx", label: "FX", title: "BEAT FX パネルを表示/隠す",
     icon: <span className="dj-panel-glyph dj-panel-glyph--text">FX</span>,
   },
   {
@@ -35,12 +35,14 @@ const PANELS: { id: PanelId; label: string; title: string; icon: ReactElement }[
 
 type Props = {
   visible: PanelVisibility;
+  /** Panels this engine can fill. A toggle is shown only when its panel has content. */
+  available: Record<PanelId, boolean>;
   onToggle: (panel: PanelId) => void;
 };
 
-export function PanelToolbar({ visible, onToggle }: Props) {
+export function PanelToolbar({ visible, available, onToggle }: Props) {
   return <div className="dj-panel-toolbar" role="group" aria-label="パネル表示切り換え">
-    {PANELS.filter(panel => panel.id !== "sampler").map((panel) => <button key={panel.id} type="button"
+    {PANELS.filter(panel => available[panel.id]).map((panel) => <button key={panel.id} type="button"
       className={cn("dj-panel-toggle", visible[panel.id] && "is-on")}
       aria-pressed={visible[panel.id]} aria-label={panel.label} title={panel.title}
       onClick={() => onToggle(panel.id)}>{panel.icon}</button>)}

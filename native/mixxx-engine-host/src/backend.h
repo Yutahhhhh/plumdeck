@@ -110,6 +110,17 @@ public:
     }
     virtual void startRecording() {}
     virtual void stopRecording() {}
+    virtual QJsonObject meters() const { return {}; }
+    virtual void headphoneGain(double) {}
+    virtual void headphoneMix(double) {}
+    virtual void crossfaderCurve(const QString&) {}
+    virtual QString padFx(int deck, const QString& effect, bool enabled, double mix, double depth, std::optional<double> beats, const QJsonObject& params) {
+        if (beats || !params.isEmpty()) return "PAD FX parameters are unavailable";
+        return fx(deck, effect, enabled, mix, depth) ? QString{} : QStringLiteral("Native effect processor is unavailable");
+    }
+    virtual void keyShift(int deck, double semitones) { keylock(deck, true); performanceControl(deck, "pitch_adjust", semitones); }
+    virtual void keySync(int deck) { performanceControl(deck, "sync_key", 1); performanceControl(deck, "sync_key", 0); }
+    virtual void keyReset(int deck) { performanceControl(deck, "reset_key", 1); performanceControl(deck, "reset_key", 0); }
     std::function<void(int, quint64, QJsonObject, QString)> loaded;
     std::function<void(QJsonObject)> recordingChanged;
 };

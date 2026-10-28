@@ -105,8 +105,8 @@ const QSet<QString> transport = {"deck.load", "deck.unload", "deck.play", "deck.
 const QSet<QString> deckControls = {"deck.key.shift", "deck.key.sync", "deck.key.reset", "deck.slip.set", "deck.reverse.set", "deck.slipReverse.set","deck.tempo.set", "deck.keylock.set", "deck.sync.set", "deck.beatgrid.set", "deck.hotcue.set", "deck.hotcue.jump", "deck.hotcue.clear", "deck.loop.set", "deck.loop.enable", "deck.loop.beats", "deck.beatjump", "deck.quantize.set"};
 // Builtin Mixxx effects usable as performance pads. Each name is loaded as
 // org.mixxx.effects.<name>; keep this in sync with PAD_EFFECTS on the client.
-const QSet<QString> padEffects = {"echo", "reverb", "flanger", "phaser", "filter", "bitcrusher", "distortion", "autopan", "tremolo", "moogladder4filter"};
-const QSet<QString> mixerOps = {"mixer.colorfx.set","mixer.beatfx.set","mixer.channel.orientation", "mixer.channel.pfl", "mixer.channel.gain", "mixer.crossfader", "mixer.master.gain", "mixer.channel.eq", "mixer.eq.set", "mixer.filter.set", "mixer.trim.set", "mixer.fx.set"};
+const QSet<QString> padEffects = {"echo", "reverb", "flanger", "phaser", "filter", "bitcrusher", "distortion", "autopan", "tremolo", "moogladder4filter", "lowcutecho", "mtdelay", "spiral", "enigmajet", "sliproll", "roll", "pitchshift"};
+const QSet<QString> mixerOps = {"mixer.headphone.gain", "mixer.headphone.mix", "mixer.crossfader.curve","mixer.colorfx.set","mixer.beatfx.set","mixer.channel.orientation", "mixer.channel.pfl", "mixer.channel.gain", "mixer.crossfader", "mixer.master.gain", "mixer.channel.eq", "mixer.eq.set", "mixer.filter.set", "mixer.trim.set", "mixer.fx.set"};
 const QString deckNames[] = {"A", "B", "C", "D"};
 int deckIndex(const QString& name) {
     for (int index = 0; index < 4; ++index) if (deckNames[index] == name) return index;
@@ -133,8 +133,8 @@ Host::Host(std::unique_ptr<PlaybackBackend> backend) : backend_(std::move(backen
             if (track.isEmpty() || slot.descriptor["path"].toString().isEmpty() || slot.state["status"] == "loading") continue;
             const auto channel = channels[deckNames[index]].toObject();
             const double orientation = channel["orientation"].toDouble();
-            const double crossGain = orientation < 0.5 ? (1.0 - crossfader) * 0.5
-                    : orientation > 1.5 ? (1.0 + crossfader) * 0.5 : 1.0;
+            const double crossGain = channel["crossfaderGain"].toDouble(orientation < 0.5 ? (1.0 - crossfader) * 0.5
+                    : orientation > 1.5 ? (1.0 + crossfader) * 0.5 : 1.0);
             const double audibility = qMax(0.0, channel["gain"].toDouble() * channel["trim"].toDouble(1.0) * crossGain);
             rows.append(QJsonObject{{"deck", deckNames[index]}, {"title", track["title"].toString()}, {"artist", track["artist"].toString()},
                 {"durationMs", track["durationMs"].toDouble()}, {"bpm", track["bpm"].toDouble()},
@@ -153,6 +153,12 @@ Host::Host(std::unique_ptr<PlaybackBackend> backend) : backend_(std::move(backen
     };
     connect(&timer_, &QTimer::timeout, this, [this] { sample(); });
     timer_.start(20);
+    metersTimer_.setTimerType(Qt::PreciseTimer);
+    connect(&metersTimer_, &QTimer::timeout, this, [this] {
+        if (!metersEnabled_ || sessionId_.isEmpty() || !backend_->available()) return;
+        const auto levels = backend_->meters();
+        if (!levels.isEmpty()) event("meters", levels);
+    });
 }
 void Host::resetDeck(int index) {
     releaseScratch(index, false);
@@ -189,9 +195,11 @@ QJsonObject Host::emptyDeck() {
 }
 QJsonObject Host::info() const {
     QJsonArray capabilities;
-    if (backend_->available()) capabilities = {"sampler", "mixer.beatfx", "mixer.colorfx", "deck.key", "deck.slip", "deck.reverse", "deck.load.async", "deck.transport", "deck.scratch", "deck.pitchbend", "deck.tempo", "deck.keylock", "deck.sync", "deck.beatgrid", "deck.hotcue", "deck.loop", "deck.beatjump", "deck.quantize", "mixer.eq", "mixer.filter", "mixer.trim", "mixer.fx", "mixer.gain", "mixer.crossfader", "recording", "audio.microphone", "audio.microphone.ducking"};
-    if (backend_->audio()["pflApplied"].toBool()) capabilities.append("mixer.pfl");
-    if (backend_->available()) { capabilities.append("mixer.beatfx.release"); capabilities.append("deck.clock.v2"); capabilities.append("performance.midi.v2"); capabilities.append("waveform.tiles.v2"); }
+    if (backend_->available()) capabilities = {"sampler", "mixer.beatfx", "mixer.colorfx", "deck.key", "deck.key.sync", "deck.sync.leader.v2", "deck.loop.range.v2", "mixer.crossfader.curve", "meters", "deck.slip", "deck.reverse", "deck.load.async", "deck.transport", "deck.scratch", "deck.pitchbend", "deck.tempo", "deck.keylock", "deck.sync", "deck.beatgrid", "deck.hotcue", "deck.loop", "deck.beatjump", "deck.quantize", "mixer.eq", "mixer.filter", "mixer.trim", "mixer.fx", "mixer.fx.beats", "mixer.gain", "mixer.crossfader", "recording", "audio.microphone", "audio.microphone.ducking"};
+    if (backend_->audio()["pflApplied"].toBool()) {
+        capabilities.append("mixer.pfl"); capabilities.append("mixer.headphone");
+    }
+    if (backend_->available()) { capabilities.append("mixer.beatfx.release"); capabilities.append("mixer.beatfx.range.v2"); capabilities.append("deck.clock.v2"); capabilities.append("performance.midi.v2"); capabilities.append("waveform.tiles.v2"); }
     return {{"name", backend_->implementation() == "mixxx" ? "plumdeck-mixxx-engine-host" : "plumdeck-mixxx-host-unavailable"}, {"version", "0.3.0"}, {"implementation", backend_->implementation()}, {"simulated", false}, {"deterministic", false}, {"audioAvailable", backend_->available()}, {"audioProblem", backend_->problem()}, {"decks", QJsonArray{"A", "B", "C", "D"}}, {"capabilities", capabilities}, {"upstreamCommit", "3ebac449e7e5fe2a0186596657696e87ce8b0e56"}};
 }
 QJsonObject Host::envelope(const QString& kind) const {
@@ -223,7 +231,7 @@ void Host::event(const QString& name, const QJsonObject& data) {
     auto message = envelope("event"); message.insert("event", name); message.insert("seq", static_cast<qint64>(++seq_)); message.insert("data", data); send(message);
 }
 QJsonObject Host::snapshot() {
-    return {{"rev", static_cast<qint64>(rev_)}, {"seq", static_cast<qint64>(seq_)}, {"engineId", engineId_}, {"sessionId", sessionId_}, {"engineTimeMs", static_cast<double>(clock_.elapsed())}, {"engine", info()}, {"decks", QJsonObject{{"A", slots_[0].state}, {"B", slots_[1].state}, {"C", slots_[2].state}, {"D", slots_[3].state}}}, {"mixer", backend_->mixer()}, {"audio", backend_->audio()}, {"recording", recordingState()}, {"meters", QJsonObject{{"enabled", false}, {"intervalMs", 100}, {"simulated", false}}}};
+    return {{"rev", static_cast<qint64>(rev_)}, {"seq", static_cast<qint64>(seq_)}, {"engineId", engineId_}, {"sessionId", sessionId_}, {"engineTimeMs", static_cast<double>(clock_.elapsed())}, {"engine", info()}, {"decks", QJsonObject{{"A", slots_[0].state}, {"B", slots_[1].state}, {"C", slots_[2].state}, {"D", slots_[3].state}}}, {"mixer", backend_->mixer()}, {"audio", backend_->audio()}, {"recording", recordingState()}, {"meters", QJsonObject{{"enabled", metersEnabled_}, {"intervalMs", metersIntervalMs_}, {"simulated", false}}}};
 }
 
 void Host::sampleRecordingTimeline() {
@@ -243,8 +251,8 @@ void Host::sampleRecordingTimeline() {
     for (int index = 0; index < 4; ++index) {
         const auto channel = channels[deckNames[index]].toObject();
         const double orientation = channel["orientation"].toDouble();
-        const double crossGain = orientation < 0.5 ? (1.0 - crossfader) * 0.5
-                : orientation > 1.5 ? (1.0 + crossfader) * 0.5 : 1.0;
+        const double crossGain = channel["crossfaderGain"].toDouble(orientation < 0.5 ? (1.0 - crossfader) * 0.5
+                : orientation > 1.5 ? (1.0 + crossfader) * 0.5 : 1.0);
         const bool contributing = active && slots_[index].state["status"] == "playing" &&
                 channel["gain"].toDouble() * channel["trim"].toDouble(1.0) * crossGain > 0.0001 &&
                 slots_[index].state["track"].isObject();
@@ -304,6 +312,7 @@ void Host::line(const QByteArray& bytes) {
         if (backend_->available()) backend_->samplerCommand("sampler.stopAll", {});
         if (effectsReleased) ++rev_;
         performanceInput_->reset();
+        metersEnabled_ = false; metersTimer_.stop();
         const auto previous = sessionId_;
         sessionId_ = QUuid::createUuid().toString(QUuid::WithoutBraces); lastId_ = id;
         auto hello = envelope("hello"); hello.insert("id", cmd["id"]); hello.insert("sessionId", sessionId_); hello.insert("engine", info()); hello.insert("protocolVersions", QJsonObject{{"min", 1}, {"max", 1}}); send(hello);
@@ -413,6 +422,17 @@ void Host::line(const QByteArray& bytes) {
         if (backend_->recordingFormat(format).isEmpty()) { error(cmd, "invalid_params", "This host cannot write that recording format"); return; }
         ++rev_; const auto state = recordingState(); result(cmd, state); event("recording.state", state); return;
     }
+    if (op == "meters.subscribe") {
+        if (!backend_->available()) { error(cmd, "unsupported_operation", backend_->problem()); return; }
+        const auto params = cmd["params"].toObject();
+        const auto interval = params.contains("intervalMs") ? params["intervalMs"] : QJsonValue(20);
+        if (!cmd["params"].isObject() || !params["enabled"].isBool() || !integer(interval) || interval.toDouble() < 20 || interval.toDouble() > 2000) {
+            error(cmd, "invalid_params", "Expected enabled boolean and intervalMs 20..2000"); return;
+        }
+        metersEnabled_ = params["enabled"].toBool(); metersIntervalMs_ = interval.toInt();
+        if (metersEnabled_) metersTimer_.start(metersIntervalMs_); else metersTimer_.stop();
+        ++rev_; result(cmd, {{"enabled", metersEnabled_}, {"intervalMs", metersIntervalMs_}, {"simulated", false}}); return;
+    }
     const bool recordingOp = op == "recording.start" || op == "recording.stop";
     if (!transport.contains(op) && !deckControls.contains(op) && !mixerOps.contains(op) && !recordingOp && op != "deck.timing.trace") { error(cmd, "unsupported_operation", "This host does not implement the requested controller operation"); return; }
     if (!cmd["params"].isObject()) { error(cmd, "invalid_params", "params must be an object"); return; }
@@ -423,6 +443,21 @@ void Host::line(const QByteArray& bytes) {
         ++rev_; const auto state = recordingState(); result(cmd, state); event("recording.state", state); return;
     }
     if (mixerOps.contains(op)) {
+        if (op == "mixer.crossfader.curve") {
+            const auto curve = params["curve"].toString();
+            if (curve != "smooth" && curve != "standard" && curve != "sharp") { error(cmd, "invalid_params", "Expected smooth, standard or sharp crossfader curve"); return; }
+            backend_->crossfaderCurve(curve);
+            ++rev_; const auto state = backend_->mixer(); result(cmd, state); event("mixer.state", state); return;
+        }
+        if (op == "mixer.headphone.gain" || op == "mixer.headphone.mix") {
+            const bool mix = op == "mixer.headphone.mix";
+            const auto value = params[mix ? "mix" : "gain"];
+            if (!value.isDouble() || !std::isfinite(value.toDouble()) || value.toDouble() < (mix ? -1 : 0) || value.toDouble() > 1) {
+                error(cmd, "invalid_params", "Expected headphone gain 0..1 or mix -1..1"); return;
+            }
+            if (mix) backend_->headphoneMix(value.toDouble()); else backend_->headphoneGain(value.toDouble());
+            ++rev_; const auto state = backend_->mixer(); result(cmd, state); event("mixer.state", state); return;
+        }
         if (op == "mixer.channel.orientation") {
             const int channel = deckIndex(params["deck"].toString().toUpper());
             if (channel < 0 || !integer(params["orientation"]) || params["orientation"].toDouble() > 2) { error(cmd, "invalid_params", "Expected deck and orientation 0/1/2"); return; }
@@ -432,7 +467,7 @@ void Host::line(const QByteArray& bytes) {
         if (op == "mixer.channel.pfl") {
             const int channel = deckIndex(params["deck"].toString().toUpper());
             if (channel < 0 || !params["enabled"].isBool()) { error(cmd, "invalid_params", "Expected deck and boolean enabled"); return; }
-            if (!backend_->audio()["pflApplied"].toBool()) { error(cmd, "unsupported_operation", "Choose DDJ-1000 output to use its headphone cue bus"); return; }
+            if (!backend_->audio()["pflApplied"].toBool()) { error(cmd, "unsupported_operation", "Choose an output with a headphone cue bus"); return; }
             backend_->pfl(channel, params["enabled"].toBool());
             ++rev_; result(cmd, backend_->mixer()); event("mixer.state", backend_->mixer()); return;
         }
@@ -440,13 +475,22 @@ void Host::line(const QByteArray& bytes) {
             const int channel = deckIndex(params["deck"].toString().toUpper());
             if (channel < 0) { error(cmd, "deck_not_found", "Expected deck A, B, C or D"); return; }
             if (params.contains("trackId") && params["trackId"] != slots_[channel].state["track"].toObject()["trackId"]) { error(cmd, "invalid_params", "The loaded track changed"); return; }
-            const auto effect = params["effect"].toString();
+            auto effect = params["effect"].toString();
+            if (effect.startsWith("org.plumdeck.effects.")) effect.remove(0, QString("org.plumdeck.effects.").size());
             const auto mix = params["mix"];
             // 掛かりの強さ。省略時は従来どおりの中央値。
             const auto depthValue = params.contains("depth") ? params["depth"] : QJsonValue(0.5);
             if (!depthValue.isDouble() || !std::isfinite(depthValue.toDouble()) || depthValue.toDouble() < 0 || depthValue.toDouble() > 1) { error(cmd, "invalid_params", "depth must be 0..1"); return; }
             if (!padEffects.contains(effect) || !params["enabled"].isBool() || !mix.isDouble() || !std::isfinite(mix.toDouble()) || mix.toDouble() < 0 || mix.toDouble() > 1) { error(cmd, "invalid_params", "Expected a supported pad effect, boolean enabled, mix 0..1"); return; }
-            if (!backend_->fx(channel, effect, params["enabled"].toBool(), mix.toDouble(), depthValue.toDouble())) { error(cmd, "unsupported_operation", "Native effect processor is unavailable"); return; }
+            std::optional<double> beats;
+            if (params.contains("beats")) {
+                const auto value = params["beats"];
+                if (!value.isDouble() || !std::isfinite(value.toDouble()) || value.toDouble() < 1.0 / 16 || value.toDouble() > 16) { error(cmd, "invalid_params", "PAD FX beats must be 1/16..16"); return; }
+                beats = value.toDouble();
+            }
+            if (params.contains("params") && !params["params"].isObject()) { error(cmd, "invalid_params", "Expected an object of native effect parameters"); return; }
+            const auto failure = backend_->padFx(channel, effect, params["enabled"].toBool(), mix.toDouble(), depthValue.toDouble(), beats, params["params"].toObject());
+            if (!failure.isEmpty()) { error(cmd, "invalid_params", failure); return; }
             ++rev_; const auto state = backend_->mixer(); result(cmd, state); event("mixer.state", state); return;
         }
         if (op == "mixer.channel.eq" || op == "mixer.eq.set" || op == "mixer.filter.set" || op == "mixer.trim.set") {
@@ -513,11 +557,10 @@ void Host::line(const QByteArray& bytes) {
         if (op == "deck.key.shift") {
             const auto value = params["semitones"];
             if (!value.isDouble() || !std::isfinite(value.toDouble()) || value.toDouble() < -12 || value.toDouble() > 12) { error(cmd, "invalid_params", "Expected semitones -12..12"); return; }
-            backend_->keylock(index, true); deck_["keylock"] = true;
-            backend_->performanceControl(index, "pitch_adjust", value.toDouble());
+            if (std::floor(value.toDouble()) != value.toDouble()) { error(cmd, "invalid_params", "Expected a whole number of semitones"); return; }
+            backend_->keyShift(index, value.toDouble());
         } else if (op == "deck.key.reset" || op == "deck.key.sync") {
-            const QString control = op == "deck.key.reset" ? "reset_key" : "sync_key";
-            backend_->performanceControl(index, control, 1); backend_->performanceControl(index, control, 0);
+            if (op == "deck.key.reset") backend_->keyReset(index); else backend_->keySync(index);
         } else {
             if (!params["enabled"].isBool()) { error(cmd, "invalid_params", "Expected enabled boolean"); return; }
             backend_->performanceControl(index, op == "deck.slip.set" ? "slip_enabled" : op == "deck.reverse.set" ? "reverse" : "reverseroll", params["enabled"].toBool() ? 1 : 0);
@@ -565,7 +608,7 @@ void Host::line(const QByteArray& bytes) {
             }
         } else {
             const auto beats = params["beats"];
-            if (!beats.isDouble() || !std::isfinite(beats.toDouble()) || std::abs(beats.toDouble()) > 64 || (op == "deck.beatjump" ? beats.toDouble() == 0 : beats.toDouble() < 0.125)) { error(cmd, "invalid_params", "Beatjump needs nonzero signed beats up to 64; loop needs 0.125..64 beats"); return; }
+            if (!beats.isDouble() || !std::isfinite(beats.toDouble()) || std::abs(beats.toDouble()) > (op == "deck.beatjump" ? 128 : 512) || (op == "deck.beatjump" ? std::abs(beats.toDouble()) < 1.0 / 64 : beats.toDouble() < 1.0 / 64)) { error(cmd, "invalid_params", "Beatjump needs signed 1/64..128 beats; loop needs 1/64..512 beats"); return; }
             if (backend_->beatgridState(index).isEmpty()) { error(cmd, "invalid_params", "Apply a beat grid first"); return; }
             if (op == "deck.beatjump") backend_->beatjump(index, beats.toDouble());
             else backend_->beatloop(index, beats.toDouble());

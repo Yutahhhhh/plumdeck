@@ -7,7 +7,7 @@
   --d-decks: 2;
   --d-lane: 72px;
 
-  --d-meta: 32px;
+  --d-meta: 40px;
   --d-overview: 24px;
   --d-controls: 100px;
   --d-cover: 24px;
@@ -37,7 +37,7 @@
 .dj-workspace--four {
   --d-decks: 4;
   --d-lane: 48px;
-  --d-meta: 28px;
+  --d-meta: 34px;
   --d-overview: 16px;
   --d-controls: 86px;
   --d-cover: 21px;
@@ -58,7 +58,7 @@
 /* コンパクト: transport / tempo / level stay, browsing space grows. */
 .dj-workspace--compact {
   --d-lane: 46px;
-  --d-meta: 26px;
+  --d-meta: 30px;
   --d-overview: 14px;
   --d-controls: 72px;
   --d-cover: 20px;
@@ -80,7 +80,7 @@
 }
 .dj-workspace--compact.dj-workspace--four {
   --d-lane: 36px;
-  --d-meta: 24px;
+  --d-meta: 28px;
   --d-overview: 12px;
   --d-controls: 62px;
   --d-cover: 18px;
@@ -137,7 +137,7 @@
 }
 @media (max-height: 720px) {
   .dj-workspace { --d-lane: 46px; --d-controls: 92px; }
-  .dj-workspace--four { --d-lane: 31px; --d-controls: 74px; --d-meta: 25px; --d-overview: 13px; }
+  .dj-workspace--four { --d-lane: 31px; --d-controls: 74px; --d-meta: 30px; --d-overview: 13px; }
   .dj-workspace--vertical { --d-controls: 128px; }
   .dj-workspace--vertical.dj-workspace--four { --d-controls: 92px; }
 }

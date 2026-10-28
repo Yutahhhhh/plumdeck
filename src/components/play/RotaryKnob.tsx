@@ -17,11 +17,15 @@ type Props = {
   valueText?: (value: number) => string;
   onChange?: (value: number) => void;
   className?: string;
+  /** Makes the label a button (EQ kill). */
+  onLabelClick?: () => void;
+  labelActive?: boolean;
+  labelTitle?: string;
 };
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
-export function RotaryKnob({ label, value, min, max, step = .01, fineStep = step / 5, defaultValue, center, disabled, valueText, onChange, className }: Props) {
+export function RotaryKnob({ label, value, min, max, step = .01, fineStep = step / 5, defaultValue, center, disabled, valueText, onChange, className, onLabelClick, labelActive, labelTitle }: Props) {
   const pivot = center !== undefined && center > min && center < max ? center : null;
   // Travel is measured in sweep fraction, not value, so a pivoted knob still
   // follows the pointer at one uniform rate across both halves.
@@ -81,7 +85,9 @@ export function RotaryKnob({ label, value, min, max, step = .01, fineStep = step
   const rotation = -135 + ratio * 270;
 
   return <div className={cn("dj-knob-control", disabled && "is-disabled", className)}>
-    <span className="dj-knob-label">{label}</span>
+    {onLabelClick
+      ? <button type="button" className={cn("dj-knob-label dj-knob-label--button", labelActive && "is-on")} disabled={disabled} aria-pressed={Boolean(labelActive)} title={labelTitle} onClick={onLabelClick}>{label}</button>
+      : <span className="dj-knob-label">{label}</span>}
     <div className="dj-knob" role="slider" tabIndex={disabled ? -1 : 0} aria-label={label} aria-disabled={disabled || undefined}
       aria-valuemin={min} aria-valuemax={max} aria-valuenow={draft} aria-valuetext={valueText?.(draft)}
       title={`${label}: ${valueText?.(draft) ?? draft}（ドラッグ / ホイール / 矢印、Shiftで微調整、Home・ダブルクリックでリセット）`}

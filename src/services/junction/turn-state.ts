@@ -101,7 +101,7 @@ export const TAIL_LOCK_TEXT = 'このデッキは残りの曲として送出中�
 export const TAIL_MASTER_LOCK_TEXT = '残りの曲を送出中はマスター系を操作できません';
 /** Same table as native `TailLock::check`; the engine enforces, the UI explains. */
 export function tailLockReason(op: string, params: {deck?: string; leader?: string}, tailDecks: readonly string[]): string {
-  if (op === 'mixer.crossfader' || op === 'mixer.master.gain' || op === 'mixer.beatfx.set') return TAIL_MASTER_LOCK_TEXT;
+  if (op === 'mixer.crossfader' || op === 'mixer.crossfader.curve' || op === 'mixer.master.gain' || op === 'mixer.beatfx.set') return TAIL_MASTER_LOCK_TEXT;
   const tail = new Set(tailDecks.map((deck) => deck.toUpperCase()));
   if (op === 'deck.sync.set' && params.leader && tail.has(params.leader.toUpperCase())) return '残りの曲をSYNCのリーダーにはできません';
   const deckOp = op.startsWith('deck.') || op.startsWith('mixer.channel.') || ['mixer.eq.set', 'mixer.filter.set', 'mixer.trim.set', 'mixer.fx.set', 'mixer.colorfx.set'].includes(op);
