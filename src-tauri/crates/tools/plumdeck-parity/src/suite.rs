@@ -37,6 +37,52 @@ fn target(side: &Side) -> Target {
     Target { base: format!("http://127.0.0.1:{}", side.port), port: side.port }
 }
 
+/// The instant fixture timestamps and media mtimes are pinned to.
+const PINNED: &str = "2026-01-01 00:00:00";
+
+/// Pin what building the fixture stamped with the clock: media file mtimes
+/// and timestamp columns the builder left to their `CURRENT_TIMESTAMP`
+/// default. Both sides start from the same copy either way; pinned, a
+/// golden recording replays the same on any day.
+fn pin_times(db: &Path, media: &Path, built_at: chrono::NaiveDateTime) -> Result<()> {
+    let instant = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_767_225_600);
+    let mut stack = vec![media.to_owned()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                std::fs::File::options().write(true).open(&path)?.set_modified(instant)?;
+            }
+        }
+    }
+    // A fresh fixture has no library; opening one would create it.
+    if !db.is_file() {
+        return Ok(());
+    }
+    let Ok(conn) = duckdb::Connection::open(db) else { return Ok(()) };
+    let columns: Vec<(String, String)> = match conn.prepare(
+        "SELECT table_name, column_name FROM duckdb_columns() WHERE schema_name = 'main' AND data_type LIKE 'TIMESTAMP%'
+           AND (lower(column_default) LIKE '%current_timestamp%' OR lower(column_default) LIKE '%now()%')",
+    ) {
+        Ok(mut statement) => statement.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?,
+        Err(_) => return Ok(()),
+    };
+    let since = built_at.format("%Y-%m-%d %H:%M:%S").to_string();
+    for (table, column) in columns {
+        conn.execute(
+            &format!("UPDATE \"{table}\" SET \"{column}\" = TIMESTAMP '{PINNED}' WHERE \"{column}\" >= CAST(? AS TIMESTAMP)"),
+            [&since],
+        )?;
+    }
+    conn.execute_batch("CHECKPOINT")?;
+    Ok(())
+}
+
+/// The work directory of golden recordings and replays.
+pub const GOLDEN_WORK: &str = "/tmp/plumdeck-parity-golden";
+
 /// Where side A comes from (see [`crate::golden`]).
 pub enum Golden {
     /// The live Python oracle.
@@ -69,12 +115,14 @@ fn run_one(
     // ported so far).
     let media = dir.join("media");
     crate::media::write(&media)?;
+    let built_at = chrono::Local::now().naive_local() - chrono::Duration::days(1);
     fixture::build(case, &master, &media).with_context(|| format!("build fixture {}", case.name()))?;
     if let Some(sql) = &loaded.fixture_sql {
         let conn = duckdb::Connection::open(master.join(DB_NAME))?;
         conn.execute_batch(&fixture::with_media(sql, &media)).context("fixture_sql")?;
         conn.execute_batch("CHECKPOINT")?;
     }
+    pin_times(&master.join(DB_NAME), &media, built_at)?;
     let vars = scenario::Vars { media: media.to_string_lossy().into_owned() };
     for side in ["a", "b"] {
         fixture::copy_dir(&master, &dir.join(side).join("ud"))?;

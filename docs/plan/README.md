@@ -133,24 +133,25 @@
 
 | 項目 | 状態 | 主な場所 |
 |---|---|---|
-| S0 基盤 | 完了 | `src-tauri/Cargo.toml`（workspace）、`src-tauri/crates/plumdeck-core`（Python 互換部品）、`contracts/`（schema / http / mcp / compat-vectors）、`tools/parity/`（Python オラクルと補助）、`src-tauri/crates/tools/plumdeck-parity`、ヘッドレス bin `plumdeck-backend` |
+| S0 基盤 | 完了 | `src-tauri/Cargo.toml`（workspace）、`src-tauri/crates/plumdeck-core`（Python 互換部品）、`contracts/`（schema / http / mcp / compat-vectors / parity）、`src-tauri/crates/tools/plumdeck-parity`、ヘッドレス bin `plumdeck-backend` |
 | S1 DB 層と起動・停止 | 完了（起動時の compaction は判定と `features_extra_clean` の印まで。再構築は未移植。解析ジョブキューは起動時に開いて回復するが、待機中ジョブの起動と埋め込みのバックフィルは S11） | `src-tauri/crates/plumdeck-db`（DuckDB 1.5.5 固定、ハンドルとゲート、スキーマ初期化、新しい版の DB の拒否、restore の回復、SQLite ジョブキュー、BLOB コーデック）、`plumdeck-backend/src/startup.rs` |
 | S2 settings / dashboard / ミドルウェア | 完了（save / reveal の Tauri 置換は S13 で） | `plumdeck-backend/src/routes`、`middleware.rs`、`contracts/parity/scenarios/s2-*.yaml` |
 | S3 ライブラリの中核 | 完了（tracks / page / count / ids、info / genre の編集、歌詞の取得と検索、`PUT /api/tracks/{id}/lyrics` の復活（D-02）、genres の一覧・未判定・表記揺れ・一括更新・解析結果の適用、`/api/stream`、`/api/metadata`。`/api/fs/list` は移植しない（D-15）） | `plumdeck-domain`（キー表記、ジャンル規則、LRC）、`plumdeck-media`（lofty のタグ読み、Content-Type 表、NFC/NFD 解決）、`plumdeck-db/src/repos/{tracks,lyrics,genres}.rs`、`plumdeck-backend/src/{lax,query,models}.rs` と `routes/{tracks,lyrics,genres,media}.rs`、`contracts/parity/scenarios/s3-*.yaml` |
-| S4〜S10、S12 バックエンドの主要スライス | 実装済み（セットリストはパリティ 0 差分。推薦・wordplay・ジャンル提案、S5〜S10 のシナリオは未作成。D-17〜D-23） | `plumdeck-backend/src/routes/{setlists,recommendations,performance,assist,set_planner,play,waveform_detail,mcp,workflows,junction,metadata_jobs,file_tags,csv_io}.rs`、`tasks.rs`、`plumdeck-domain/src/assist.rs` |
-| W1-08 / S11 解析 | 実装済み（`plumdeck-analysis`：テンポ・拍・キー・音色・波形の v1 と `--analysis-worker` の V1 プロトコル。ingest、grid-jobs、選択解析、Play 取り込み、WS 2 本、MCP の analysis。埋め込みは未対応で待機のまま。D-24 / D-25） | `src-tauri/crates/plumdeck-analysis`、`plumdeck-backend/src/analysis.rs`、`routes/ingest.rs` |
-| S13 Tauri 統合 | 実装済み・未検証（`--features rust-backend` で同梱。ここでは GTK / WebKit が無く Tauri をビルドできない） | `plumdeck-backend/src/embed.rs`、`src-tauri/src/{lib,main}.rs` |
+| S4〜S12 バックエンドの主要スライス | 完了（全スライスにパリティシナリオ。D-17〜D-23、D-50、D-51） | `plumdeck-backend/src/routes/{setlists,recommendations,performance,assist,set_planner,play,waveform_detail,mcp,workflows,junction,metadata_jobs,file_tags,csv_io}.rs`、`tasks.rs`、`plumdeck-domain/src/assist.rs` |
+| W1-08 / S11 解析 | 完了（`plumdeck-analysis`：テンポ・拍・キー・音色・波形の v1、MusiCNN の埋め込み（同梱の TensorFlow グラフを tract で実行。TensorFlow と 1e-5 以内で一致）、`--analysis-worker` の V1 プロトコル。ingest、grid-jobs、選択解析、Play 取り込み、WS 2 本、MCP の analysis、埋め込みの自動キューと起動時のバックフィル。D-24 / D-25） | `src-tauri/crates/plumdeck-analysis`（`musicnn.rs`、`models/msd-musicnn-1.pb`）、`plumdeck-backend/src/analysis.rs`、`routes/ingest.rs` |
+| S13 Tauri 統合 | 完了・実機未確認（Rust バックエンドを既定で in-process 起動。サイドカーと feature は削除。FFmpeg は externalBin として同梱） | `plumdeck-backend/src/embed.rs`、`src-tauri/src/{lib,main}.rs`、`scripts/packaging-ffmpeg.mjs` |
+| S14 Python 撤去 | 完了（`backend/`、`tools/parity/*.py`、Python のスクリプトと CI を削除。ビルド補助は Node に移植。保守コマンドは `plumdeck-maintenance`。パリティは記録済みの Python 応答（ゴールデン）と比較。`rekordbox-mcp/` は独立したツールなので残す） | `contracts/parity/golden/`、`plumdeck-parity suite --golden`、`plumdeck-backend/src/bin/plumdeck-maintenance.rs`、`scripts/*.mjs` |
 | RB-03〜RB-06 キー表示 | 実装済み（表記の設定、Traffic Light、MASTER 基準の色、推薦のキー相性フィルタ。D-26） | `src/lib/key-display.ts`、各ビュー、`routes/mcp.rs` の `camelot` |
 | `plumdeck-rekordbox` | RB-10（master.db）と RB-11（ANLZ）完了 | `src-tauri/crates/plumdeck-rekordbox`（DuckDB 非依存） |
 | `plumdeck-decode` | W1-04 / W1-05 相当完了（HE-AAC と Opus は型付きの Unsupported） | `src-tauri/crates/plumdeck-decode`（`spec.rs` にクリーンルーム仕様） |
-| 差分台帳 | D-01、D-02、D-06、D-10、D-12〜D-26 を記録済み | `contracts/parity/deviations.yaml` |
+| 差分台帳 | D-01、D-02、D-06、D-10、D-12〜D-26、D-50、D-51 を記録済み | `contracts/parity/deviations.yaml` |
 | CI | `pr-checks.yml` の `backend-port` ジョブ（Linux）、Windows で `plumdeck-core` | `.github/workflows/pr-checks.yml` |
 
 ### 3.3 未着手（主なもの）
 
-- バックエンド：S14（S13 のオーナー smoke の後）。S4〜S11 のうち未作成のパリティシナリオ。
+- バックエンド：台帳の差分（proposed）の承認と、S14 で直す予定だった既知のバグの修正。WebSocket（`/ws/*`）と、実 rekordbox・ネットワーク・実デバイスが要る経路のパリティ。
 - rekordbox 同等化：RB-01 の残り（HOT CUE マーカーの色の食い違いは要確認。Setlist 自動生成のキー変換の部分一致バグは修正済み）、RB-13（3 層モデル）、RB-20（PDW3）、RB-21（フレーズ表示）、RB-40、MEMORY CUE の DB 化など。
-- 解析：A6（Rust の MusiCNN。埋め込みは未対応）、Essentia 撤去（S14）、評価ハーネス RB-30 と精度の評価、フレーズ検出。
+- 解析：評価ハーネス RB-30 と精度の評価、フレーズ検出。
 - エンジンと Junction：W2-01 以降すべて、切替 W3-01〜W3-04。
 - 取り込み UX：Explorer 撤去、ドラッグ＆ドロップ、「曲を追加」、Dashboard の要対応と rekordbox コレクション取り込み。
 - ジャンル分類器、アプリ内 AI キー、STEMS の調査。
@@ -194,8 +195,8 @@
 
 ### 段 4：切替とその後
 
-- **S13** Tauri への統合と本番切替（実装済み・未検証。§6 #11）（Mac / Win の smoke、Assist の再生一致、手動チェックリスト、初回起動前の自動バックアップ）。
-- **S14** Python 撤去、台帳の差分の修正、フロントのデッドコード削除。
+- ~~**S13**~~ Tauri への統合と本番切替（完了。実機確認は §6 #11）。
+- ~~**S14**~~ Python 撤去（完了）。残り：台帳の差分の修正、フロントのデッドコード削除。
 - **RB-13**（3 層のデータモデルと解決器）、**RB-40**（自前パイプラインを既定に）、取り込み UX、~~キー表示系（RB-03〜RB-06）~~（実装済み）、フレーズ表示（RB-21）、PDW3（RB-20）。
 
 ### 段 5：エンジンと Junction（段 1 以降と並行）
@@ -219,7 +220,7 @@
 
 - Linux、オーナーの Mac にはアクセスできない前提。オーナーの音源・DB・rekordbox データは**クラウドに一切置かない**。
 - Rust は stable（`rust-version = "1.91"` 以上）。DuckDB と SQLCipher は C/C++ からビルドされるので、初回ビルドは重い。
-- パリティのオラクルには Python 3.12 の venv が要る（`backend/requirements-pr.txt` を基準に、`contracts/oracle.json` に記録された版に合わせる。パッチ版まで合わせること：3.12.3 と 3.12.13 では float の divmod のベクタが変わる。`uv python install 3.12.13` で入る）。`PLUMDECK_ORACLE_PYTHON` でその python を指定する。`backend/main.py` が aiohttp を import するので venv に入れる。互換ベクタ（`contracts/compat-vectors`）は darwin（arm64）で作ったもので、x86 で作り直すと NaN の符号だけが変わる。作り直さない。
+- Python のオラクルは S14 で削除した。パリティは `contracts/parity/golden/` に記録した Python の応答と比較する（下の §5.4）。以下は記録時の条件の記録：オラクルには Python 3.12 の venv が要った（`backend/requirements-pr.txt` を基準に、`contracts/oracle.json` に記録された版に合わせる。パッチ版まで合わせること：3.12.3 と 3.12.13 では float の divmod のベクタが変わる。`uv python install 3.12.13` で入る）。`PLUMDECK_ORACLE_PYTHON` でその python を指定する。`backend/main.py` が aiohttp を import するので venv に入れる。互換ベクタ（`contracts/compat-vectors`）は darwin（arm64）で作ったもので、x86 で作り直すと NaN の符号だけが変わる。作り直さない。
 
 ### 5.2 ブランチと PR
 
@@ -233,7 +234,7 @@
 
   ```sh
   cd src-tauri
-  cargo test -p plumdeck-core -p plumdeck-db -p plumdeck-domain -p plumdeck-media -p plumdeck-key -p plumdeck-backend -p plumdeck-parity
+  cargo test -p plumdeck-core -p plumdeck-db -p plumdeck-domain -p plumdeck-media -p plumdeck-key -p plumdeck-backend -p plumdeck-parity -p plumdeck-analysis
   ```
 
   別々に回すと build-dependency の feature が分かれ、bundled DuckDB を何度もビルドし直すことになる。新しく DuckDB を使う crate を足したら、このリストと CI の `backend-port` ジョブに加える。
@@ -244,7 +245,7 @@
 ### 5.4 パリティ
 
 - **既定はバグ互換**。応答と DB 書込みを Python と一致させる。意図的な差分は `contracts/parity/deviations.yaml` に、`status: proposed` で理由と現状を書いてから入れる（承認はオーナー）。既知のバグは S14 まで直さない。
-- **パリティは Python オラクルとフィクスチャ DB だけで行う**（`plumdeck-parity suite --work <dir> contracts/parity/scenarios/<file>.yaml`）。実 DB のコピーでの比較はオーナーのローカル作業として §6 に積む。シナリオに `db: real` を書かない（ランナーが拒否する）。
+- **パリティはゴールデンとフィクスチャ DB だけで行う**（`plumdeck-parity suite --work <dir> --golden contracts/parity/golden contracts/parity/scenarios/<file>.yaml`。Python は要らない。作業ディレクトリは `/tmp/plumdeck-parity-golden` に固定される）。ゴールデンは S14 の直前に Python オラクルで `--record-golden` して作った。新しいシナリオや挙動の変更は、`deviations.yaml` に記録したうえでゴールデンを更新する。実 DB のコピーでの比較はオーナーのローカル作業として §6 に積む。シナリオに `db: real` を書かない（ランナーが拒否する）。
 - スライスを閉じる条件：担当エンドポイント / ツールごとに正常・境界・異常のシナリオ、説明のつかない差分 0、更新系の後の db-diff 0、Rust のユニットテスト（Python から書き出したベクタ）、自己レビュー。
 - Python の挙動を知るにはソース（`backend/`）とオラクルの応答を見る。推測で書かない。
 
@@ -277,10 +278,14 @@
 | 8 | Junction の B2B（Rust⇄Rust、Rust⇄C++、スマホの Lite、フェーダースタート、2 時間の運用） | W2-47 | Mac / Win |
 | 9 | 実ライブラリで `/api/metadata` のタグ（title / artist / album / artwork）を Python（TinyTag 2.x）と Rust（lofty）で比べる。手順：DB コピーで両方を起動し、全曲の `GET /api/metadata?track_id=` を流して差分 0（合成音源では一致を確認済み。ID3 の複数値、APE、WAV の INFO、AIFF は未確認） | S3 | Mac |
 | 10 | `/api/stream` の Content-Type（D-16）。Mac の旧アプリと Rust 版で mp3 / m4a / flac / wav / aiff の値が一致すること、Windows で再生に支障がないこと | S3 | Mac / Win |
-| 11 | `cargo tauri build --features rust-backend` が通り、同梱アプリが Python なしで起動・終了すること（`backend://startup` の段階表示、終了時の CHECKPOINT）。合格後に S14 へ進む | S13 | Mac / Win |
+| 11 | `pnpm package` が通り、同梱アプリが Python なしで起動・終了すること（`backend://startup` の段階表示、終了時の CHECKPOINT、Library / Play と録音 / Assist / USB / backup・restore / Junction の手動チェック） | S13 | Mac / Win |
 | 12 | Rust 解析（`rust-attacks-v1` / `rust-chroma-v1` / `rust-timbre-v1`）の BPM・キー・拍の精度を、手持ちの曲で Python 版の結果や rekordbox と比べる（合成音源では 124 BPM を 123.99 と検出） | W1-08 / S11 | Mac |
 | 13 | キー表記の切替、Traffic Light（レベル 2 を含む）、MASTER デッキ基準の色、推薦のキー相性フィルタの見た目と挙動（D-26） | RB-03〜06 | Mac |
 | 14 | MCP クライアント（Claude Desktop など）から Rust 版の `/mcp` に接続し、主要ツール（推薦、ルート、解析、Junction）が動くこと | S9 / S12 | Mac |
+| 15 | リリースビルドに同梱した FFmpeg で録音の書き出し（FLAC / MP3）ができること。macOS では Homebrew の無い環境で動くこと（dylib を `Contents/Resources/ffmpeg-libs` に同梱） | S14 | Mac / Win |
+| 16 | Rust の MusiCNN 埋め込みで、類似曲の並びが既存の埋め込み（Essentia / ONNX 版）と大きく変わらないこと。手順：DB コピーで数曲を再解析し、`/api/tracks/{id}/similar` の上位を比べる | S14 | Mac |
+| 17 | Windows のリリース CI：pip を使わなくなったので、Visual Studio 付属の CMake / Ninja で Mixxx ホストがビルドできること（`build-windows.mjs`） | S14 | Win |
+| 18 | `pnpm tauri`（開発起動）と `pnpm backend:dev`、保守コマンド（`pnpm backup:db` など）が Rust 版で動くこと | S14 | Mac |
 
 ---
 

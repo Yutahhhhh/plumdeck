@@ -176,25 +176,51 @@ pub fn dump(path: &Path, work: &str, scratch: &Path) -> Result<Library> {
 }
 
 /// Rebuild a recorded library at `path` with paths under `work`.
+///
+/// What `last_value` reads after the file is reopened depends on how the
+/// counter was persisted, so each used sequence is first built one below
+/// its recorded value and advanced once; the file is then reopened and any
+/// sequence that reads differently is rebuilt with its start corrected.
 pub fn restore(library: &Library, path: &Path, work: &str) -> Result<()> {
+    let mut starts: BTreeMap<String, i64> =
+        library.sequences.iter().filter_map(|(name, last)| last.map(|last| (name.clone(), (last - 1).max(1)))).collect();
+    for _ in 0..3 {
+        build(library, path, work, &starts)?;
+        let conn = Connection::open(path)?;
+        let mut statement = conn.prepare("SELECT sequence_name, last_value FROM duckdb_sequences() WHERE schema_name = 'main'")?;
+        let read: BTreeMap<String, Option<i64>> = statement.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
+        let mut changed = false;
+        for (name, start) in starts.iter_mut() {
+            if let (Some(Some(got)), Some(Some(want))) = (read.get(name), library.sequences.get(name)) {
+                if got != want && *start + want - got >= 1 {
+                    *start += want - got;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+fn build(library: &Library, path: &Path, work: &str, starts: &BTreeMap<String, i64>) -> Result<()> {
     if path.exists() {
         std::fs::remove_file(path)?;
     }
     let _ = std::fs::remove_file(path.with_extension("duckdb.wal"));
     let conn = Connection::open(path)?;
-    // `last_value` of a reopened file is the persisted counter (one past the
-    // last id), so a used sequence starts one below the recorded value and
-    // is advanced once: reopened, it reads the same and continues the same.
     let schema: String = library
         .schema
         .lines()
         .map(|line| {
             let name = line.strip_prefix("CREATE SEQUENCE ").and_then(|rest| rest.split_whitespace().next()).map(|n| n.trim_matches('"'));
-            match (name.and_then(|n| library.sequences.get(n)).copied().flatten(), line.find(" START ")) {
-                (Some(last), Some(at)) => {
+            match (name.and_then(|n| starts.get(n)), line.find(" START ")) {
+                (Some(start), Some(at)) => {
                     let rest = &line[at + 7..];
                     let end = rest.find(' ').unwrap_or(rest.len());
-                    format!("{} START {}{}", &line[..at], (last - 1).max(1), &rest[end..])
+                    format!("{} START {start}{}", &line[..at], &rest[end..])
                 }
                 _ => line.to_owned(),
             }
@@ -202,10 +228,8 @@ pub fn restore(library: &Library, path: &Path, work: &str) -> Result<()> {
         .collect::<Vec<_>>()
         .join("\n");
     conn.execute_batch(&schema).context("recorded schema")?;
-    for (name, value) in &library.sequences {
-        if value.is_some() {
-            conn.execute_batch(&format!("SELECT nextval({})", quote_literal(name)))?;
-        }
+    for name in starts.keys() {
+        conn.execute_batch(&format!("SELECT nextval({})", quote_literal(name)))?;
     }
     conn.execute_batch("BEGIN")?;
     for (name, table) in &library.tables {

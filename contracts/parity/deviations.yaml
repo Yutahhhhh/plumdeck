@@ -199,8 +199,12 @@ deviations:
       decode. Values differ from Essentia's; results carry their own
       component versions (rust-attacks-v1, rust-chroma-v1, rust-timbre-v1)
       so stored rows say which implementation produced them. Embeddings
-      are not computed yet (W1-27/W1-28) and answer an error.
-    current: analysis-quality gates (RB-30) and the owner's replay check decide when it becomes the default.
+      run the same msd-musicnn-1 graph (tract) on the light path's three
+      3-second 16 kHz windows; the stored model name and pipeline version
+      stay msd-musicnn-1:musicnn-16khz-v1, so existing vectors remain
+      comparable. The Light/Full/Auto analysis profile is accepted but both
+      paths run this analyzer.
+    current: the only analyzer since S14; analysis-quality gates (RB-30) and the owner's checks (plan §6 #12, #16) judge it.
   - id: D-25
     status: proposed
     source: backend/app/services/ingestion_app_service.py, analysis_job_service.py, play_import_service.py

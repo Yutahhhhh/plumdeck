@@ -10,6 +10,9 @@
 //!   each fixture library, stops them, and compares the files they leave.
 //! - `plumdeck-parity suite --work DIR SCENARIO...` starts both backends on
 //!   each scenario's fixture, runs it, stops them and diffs the libraries.
+//!   `--golden contracts/parity/golden` replaces the live oracle with its
+//!   recorded answers (the Python backend was removed in S14; see golden.rs),
+//!   and `--record-golden DIR` records them.
 //! - `plumdeck-parity media --out DIR` writes the synthetic audio files the
 //!   media scenarios use (to inspect them with other tag readers).
 //!
@@ -76,7 +79,8 @@ enum Command {
         /// Python with the backend's dependencies (the oracle's interpreter).
         #[arg(long, env = "PLUMDECK_ORACLE_PYTHON", default_value = "python3")]
         python: PathBuf,
-        /// tools/parity/oracle_server.py.
+        /// tools/parity/oracle_server.py (removed with the Python backend in
+        /// S14; restore both from git history to record new golden files).
         #[arg(long, default_value = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../tools/parity/oracle_server.py"))]
         oracle: PathBuf,
         /// The Rust backend (default: plumdeck-backend next to this binary).
@@ -108,7 +112,8 @@ enum Command {
         /// Python with the backend's dependencies (the oracle's interpreter).
         #[arg(long, env = "PLUMDECK_ORACLE_PYTHON", default_value = "python3")]
         python: PathBuf,
-        /// tools/parity/oracle_server.py.
+        /// tools/parity/oracle_server.py (removed with the Python backend in
+        /// S14; restore both from git history to record new golden files).
         #[arg(long, default_value = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../tools/parity/oracle_server.py"))]
         oracle: PathBuf,
         /// The Rust backend (default: plumdeck-backend next to this binary).
@@ -168,6 +173,16 @@ fn run_command(command: Command) -> Result<bool> {
                 (Some(dir), _) => suite::Golden::Record(dir),
                 (None, Some(dir)) => suite::Golden::Replay(dir),
                 (None, None) => suite::Golden::Off,
+            };
+            // Some answers hash file paths (USB handoff snapshots), so a
+            // recording and its replays run in one fixed directory.
+            let work = match golden {
+                suite::Golden::Off => work,
+                _ => {
+                    let fixed = PathBuf::from(suite::GOLDEN_WORK);
+                    std::fs::create_dir_all(&fixed)?;
+                    fixed
+                }
             };
             let reports = suite::run(&programs, &work, &scenarios, report.as_deref(), &golden)?;
             Ok(reports.iter().all(|report| report.unexplained() == 0))
