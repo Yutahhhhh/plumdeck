@@ -23,7 +23,7 @@ import { performanceMetadataService } from "@/services/performance-metadata";
 import { workflowsService } from "@/services/workflows";
 import { cuePositions, persistCue, persistLoop } from "@/services/performance-cue-metadata";
 import type { Track } from "@/types";
-import { DECK_IDS, type DeckId, type MicrophoneSettings, type RecordingState, type TrackDescriptor } from "@/types/dj-engine";
+import { DECK_IDS, DJ_ENGINE_CAPABILITIES, type DeckId, type MicrophoneSettings, type RecordingState, type TrackDescriptor } from "@/types/dj-engine";
 import { savedMicrophoneSettings, saveMicrophoneSettings } from "@/services/dj-engine/audio-settings";
 import { usePlayerStore } from "@/stores/playerStore";
 import { cn } from "@/lib/utils";
@@ -32,6 +32,7 @@ import { DeckWaveform, type WaveformLayout } from "./DeckWaveform";
 
 import { Fader, SoftwareDeck, formatTime } from "./SoftwareDeck";
 import { MixerPanel } from "./MixerPanel";
+import { chooseSyncLeader } from "./sync-leader";
 import { PanelToolbar, PANEL_DEFAULTS, type PanelId, type PanelVisibility } from "./PanelToolbar";
 import { FxPanel, FX_UNIT_DEFAULTS, type FxUnitState } from "./FxPanel";
 import "./play-workspace.css";
@@ -729,11 +730,25 @@ export function PlayWorkspace() {
     });
   };
 
-  const activeLeaderFor = (id: DeckId): DeckId | undefined => {
-    const decks = snapshot?.engine.decks ?? [];
-    const leader = decks.find((deck) => deck !== id && snapshot?.decks[deck]?.syncLeader === deck && snapshot.decks[deck]?.syncEnabled);
-    return leader ?? decks.find((deck) => deck !== id);
-  };
+  // The host mirrors the leader only onto the leading deck itself.
+  const syncLeader = DECK_IDS.find((deck) => snapshot?.decks[deck]?.syncLeader === deck) ?? null;
+  const makeMaster = (id: DeckId) => run(async () => {
+    const current = client.getState().snapshot;
+    if (!current?.decks[id]?.track) return;
+    if (current.decks[id].syncLeader === id) { await client.setSync(id, false); return; }
+    // Mixxx couples MASTER with sync: the leader must itself be synced.
+    await client.setSync(id, true, id);
+    for (const other of current.engine.decks) {
+      if (other !== id && client.getState().snapshot?.decks[other]?.syncEnabled) await client.setSync(other, true, id);
+    }
+    // Mixxx elects the leader asynchronously and this host publishes it only
+    // on sync ops. Until it re-reads it every tick, assert once more so the
+    // settled leader reaches the telemetry.
+    if (current.engine.capabilities.includes(DJ_ENGINE_CAPABILITIES.deckSyncLeaderTelemetry)) return;
+    const session = client.getSessionId(), generation = client.getDeckGeneration(id);
+    await new Promise((resolve) => window.setTimeout(resolve, 120));
+    if (session === client.getSessionId() && generation === client.getDeckGeneration(id) && client.getState().snapshot?.decks[id]?.syncEnabled) await client.setSync(id, true, id);
+  });
 
   const cueColorsFor = (id:DeckId) => Array.from({length:16},(_,slot)=>trackMetadata[(localTrackId(snapshot?.decks[id]?.track) ?? -1)]?.cue_points.find(cue=>cue.slot===slot)?.color??null);
   const softwareDeck = (id: DeckId) => <SoftwareDeck key={id} id={id} deck={displayedDeck(id)} active={activeDeck === id} connected={connected}
@@ -762,16 +777,10 @@ export function PlayWorkspace() {
     })}
     onSeek={(delta) => seekRelative(id, delta)} onSeekAbsolute={(ms) => seekAbsolute(id, ms)}
     onTempo={(rate) => void run(() => client.setTempo(id, rate))}
-    onKeylock={(enabled) => void run(() => client.setKeylock(id, enabled))} onSync={(enabled) => void run(() => client.setSync(id, enabled, activeLeaderFor(id)))}
-    onMaster={() => void run(async () => {
-      // エンジンにマスター指定の op は無いので、他デッキの sync をこのデッキ基準で張り直す。
-      const decks = client.getState().snapshot?.engine.decks ?? [];
-      for (const other of decks) {
-        if (other === id) continue;
-        if (client.getState().snapshot?.decks[other]?.syncEnabled) await client.setSync(other, true, id);
-      }
-      await client.setSync(id, false);
-    })}
+    onKeylock={(enabled) => void run(() => client.setKeylock(id, enabled))}
+    onSync={(enabled) => void run(() => client.setSync(id, enabled, enabled ? chooseSyncLeader(id, snapshot?.engine.decks ?? [], snapshot?.decks ?? {}) : undefined))}
+    syncLeader={syncLeader}
+    onMaster={() => void makeMaster(id)}
     onUnload={() => void run(async () => { ++deckLoadRequests.current[id]; cuePoints.current[id] = 0; manualLoopIn.current[id] = null; await client.unload(id); await finalizeHistory(id, "ejected"); })}
     onHotCue={(index, clear) => void editHotCue(id, index, clear)}
     onLoopIn={() => void run(async () => {

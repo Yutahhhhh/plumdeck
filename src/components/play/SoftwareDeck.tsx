@@ -37,6 +37,8 @@ type Props = {
   onActivate: () => void; onToggle: () => void; onCue: () => void;
   onSeek: (delta: number) => void; onSeekAbsolute: (ms: number) => void; onTempo: (rate: number) => void;
   onKeylock: (enabled: boolean) => void; onSync: (enabled: boolean) => void; onMaster?: () => void; onUnload: () => void;
+  /** The deck the engine reports as sync leader (MASTER), if any. */
+  syncLeader?: DeckId | null;
   onHotCue: (index: number, clear: boolean) => void; onLoop: (beats: number) => void;
   onBeatJump?: (beats: number) => void; onBeatLoop?: (beats: number) => void; onLoopEnable?: (enabled: boolean) => void;
   onQuantize?: (enabled: boolean) => void; onFx?: (effect: FxEffect, enabled: boolean, mix: number, depth: number) => void; onSaveLoop?: () => void;
@@ -48,7 +50,7 @@ type Props = {
   onGridEdit: () => void; onGridClose?: () => void; gridEditor?: ReactNode;
 };
 
-export function SoftwareDeck({ id, deck, channel, active, connected, capability, capabilities, tailLock, onActivate, onToggle, onCue, onSeekAbsolute, onTempo, onKeylock, onSync, onMaster, onUnload, onHotCue, onLoop, onBeatJump, onBeatLoop, onLoopEnable, onQuantize, onFx, onSaveLoop, onLoopIn, onLoopOut, savedLoops, onRecallLoop, trackKey, cueColors, onGridEdit, onGridClose, gridEditor }: Props) {
+export function SoftwareDeck({ id, deck, channel, active, connected, capability, capabilities, tailLock, onActivate, onToggle, onCue, onSeekAbsolute, onTempo, onKeylock, onSync, onMaster, onUnload, syncLeader, onHotCue, onLoop, onBeatJump, onBeatLoop, onLoopEnable, onQuantize, onFx, onSaveLoop, onLoopIn, onLoopOut, savedLoops, onRecallLoop, trackKey, cueColors, onGridEdit, onGridClose, gridEditor }: Props) {
   const deckDrop = usePlayDeckDrop(`play-deck-controls-${id}`, id);
   const left = id === "A" || id === "C";
   const [loopBeats, setLoopBeats] = useState(4);
@@ -138,7 +140,8 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
   const status = !capability ? "N/A" : !connected ? "OFFLINE" : deck?.status === "error" ? "ERROR"
     : deck?.status === "playing" ? "PLAYING" : deck?.status === "loading" ? "LOADING"
     : deck?.track ? deck.status === "paused" ? "PAUSED" : "READY" : "EMPTY";
-  const leading = deck?.syncLeader === id && deck.syncEnabled;
+  // MASTER lights from the engine's leader only, never from local intent.
+  const leading = deck?.syncLeader === id;
   const stateKind = leading ? "master" : deck?.status === "error" ? "error" : deck?.status === "playing" ? "playing" : "idle";
 
   return <article ref={deckDrop.setNodeRef} aria-label={`Deck ${id}`} data-deck={id} data-track-drop-deck={id} data-track-drop-label={`DECK ${id} へロード`} data-track-drop-active={deckDrop.isOver ? "true" : undefined} onClick={onActivate}
@@ -156,7 +159,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
       </div>
       <div className="dj-deck-flags">
         {tailLock && <span className="dj-chip dj-chip--tail" title={tailLock}>残りの曲 · ループのみ</span>}
-        <span className="dj-chip dj-chip--state" data-state={stateKind}>{leading ? "MASTER" : deck?.syncEnabled ? `→ ${deck.syncLeader || "—"}` : status}</span>
+        <span className="dj-chip dj-chip--state" data-state={stateKind}>{leading ? "MASTER" : deck?.syncEnabled ? `→ ${syncLeader && syncLeader !== id ? syncLeader : "—"}` : status}</span>
         {/* rekordbox のデッキヘッダ：左に KEY SYNC とキー表示、右に BEAT SYNC / MASTER。 */}
         <div className="dj-sync-block" role="group" aria-label={`Deck ${id} SYNC`}>
           <button className="dj-chip dj-chip--keysync" disabled
@@ -170,7 +173,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
             <button type="button" disabled aria-label="キーを上げる">›</button>
           </div>
           <button className={cn("dj-chip dj-chip--master", leading && "is-on")} disabled={!supported("deck.sync") || !onMaster} aria-pressed={leading}
-            title="シンクマスター：ビート/BPMシンクのマスターに設定します" onClick={() => onMaster?.()}>MASTER</button>
+            title={leading ? "MASTER を解除します（この音声エンジンではこのデッキの BEAT SYNC も解除されます）" : "シンクマスター：このデッキを BEAT SYNC の基準にします（この音声エンジンではこのデッキの SYNC も ON になります）"} onClick={() => onMaster?.()}>MASTER</button>
         </div>
       </div>
     </div>
