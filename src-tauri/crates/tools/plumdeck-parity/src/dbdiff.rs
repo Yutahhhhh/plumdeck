@@ -1,6 +1,11 @@
 //! `db-diff A.duckdb B.duckdb`: compares two plumdeck databases table by
 //! table in primary-key order (plan §4.4, N13 without normalization yet).
 //!
+//! The schema is compared too: every column's type, nullability and default
+//! in physical order, constraints (PRIMARY KEY, UNIQUE, CHECK, NOT NULL,
+//! FOREIGN KEY), indexes, views and sequence settings, so a Rust init_db or
+//! compaction rebuild that drops one shows up even when the rows agree.
+//!
 //! Both files are attached read-only to one in-memory DuckDB, so neither is
 //! modified. Values are compared as DuckDB's VARCHAR rendering, which is
 //! exact for every type the schema uses (DOUBLE/FLOAT print round-trip digits).
@@ -70,6 +75,67 @@ fn primary_key(conn: &Connection, db: &str, table: &str) -> Result<Vec<String>> 
     Ok(found.first().map(|k| k.split('\u{1f}').map(str::to_owned).collect()).unwrap_or_default())
 }
 
+/// `(key, text)` rows grouped by key, in query order.
+fn grouped(conn: &Connection, sql: &str, db: &str) -> Result<BTreeMap<String, Vec<String>>> {
+    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (key, text) in pairs(conn, sql, &[db])? {
+        out.entry(key).or_default().push(text.unwrap_or_default());
+    }
+    Ok(out)
+}
+
+/// The schema of `db` as comparable items: `"<kind> <name>" -> definition`.
+fn schema(conn: &Connection, db: &str) -> Result<BTreeMap<String, String>> {
+    let mut out = BTreeMap::new();
+    let columns = grouped(
+        conn,
+        // duckdb_columns() also lists view columns; keep base tables only.
+        "SELECT c.table_name, c.column_name || ' ' || c.data_type
+                || CASE WHEN c.is_nullable THEN '' ELSE ' NOT NULL' END
+                || COALESCE(' DEFAULT ' || c.column_default, '')
+         FROM duckdb_columns() c JOIN duckdb_tables() t USING (table_oid)
+         WHERE c.database_name = ? AND c.schema_name = 'main'
+         ORDER BY c.table_name, c.column_index",
+        db,
+    )?;
+    for (table, defs) in columns {
+        out.insert(format!("table {table} columns"), defs.join(", "));
+    }
+    // constraint_index is a database-wide counter, so it is left out.
+    let constraints = grouped(
+        conn,
+        "SELECT table_name, constraint_type || ' ' || constraint_text
+                || ' (' || array_to_string(constraint_column_names, ', ') || ')' AS def
+         FROM duckdb_constraints() WHERE database_name = ? AND schema_name = 'main'
+         ORDER BY table_name, def",
+        db,
+    )?;
+    for (table, defs) in constraints {
+        out.insert(format!("table {table} constraints"), defs.join("; "));
+    }
+    let named = [
+        ("index", "SELECT index_name, sql FROM duckdb_indexes() WHERE database_name = ? AND schema_name = 'main'"),
+        (
+            "view",
+            "SELECT view_name, sql FROM duckdb_views()
+             WHERE database_name = ? AND schema_name = 'main' AND NOT internal",
+        ),
+        (
+            "sequence",
+            // start_value follows the persisted counter; last_value is compared below.
+            "SELECT sequence_name, format('increment {} min {} max {} cycle {}',
+                    increment_by, min_value, max_value, cycle)
+             FROM duckdb_sequences() WHERE database_name = ? AND schema_name = 'main'",
+        ),
+    ];
+    for (kind, sql) in named {
+        for (name, def) in pairs(conn, sql, &[db])? {
+            out.insert(format!("{kind} {name}"), def.unwrap_or_default());
+        }
+    }
+    Ok(out)
+}
+
 fn rows(conn: &Connection, db: &str, table: &str, cols: &[String], order: &[String]) -> Result<Vec<Row>> {
     let select: Vec<String> =
         cols.iter().map(|c| format!("CAST({} AS VARCHAR)", quote_ident(c))).collect();
@@ -103,18 +169,22 @@ pub fn diff(a: &Path, b: &Path, max_rows: usize) -> Result<DbDiff> {
             .with_context(|| format!("attach {path}"))?;
     }
     let mut out = DbDiff { lines: Vec::new(), differences: 0 };
-    let (ta, tb) = (tables(&conn, "a")?, tables(&conn, "b")?);
-    for table in ta.symmetric_difference(&tb) {
-        out.differences += 1;
-        let side = if ta.contains(table) { "A" } else { "B" };
-        out.lines.push(format!("table {table}: only in {side}"));
-    }
-    for table in ta.intersection(&tb) {
-        let (ca, cb) = (columns(&conn, "a", table)?, columns(&conn, "b", table)?);
-        if ca != cb {
-            out.differences += 1;
-            out.lines.push(format!("table {table}: columns differ\n    A {ca:?}\n    B {cb:?}"));
+    let (sa, sb) = (schema(&conn, "a")?, schema(&conn, "b")?);
+    for item in sa.keys().chain(sb.keys()).collect::<BTreeSet<_>>() {
+        match (sa.get(item), sb.get(item)) {
+            (Some(da), Some(db)) if da == db => {}
+            (da, db) => {
+                out.differences += 1;
+                out.lines.push(format!("schema {item}:\n    A {da:?}\n    B {db:?}"));
+            }
         }
+    }
+    let (ta, tb) = (tables(&conn, "a")?, tables(&conn, "b")?);
+    // A table on one side only is already reported as a schema difference.
+    for table in ta.intersection(&tb) {
+        // Column definitions were compared with the schema; rows use the
+        // columns both sides have.
+        let (ca, cb) = (columns(&conn, "a", table)?, columns(&conn, "b", table)?);
         let names_b: BTreeSet<&String> = cb.iter().map(|(n, _)| n).collect();
         let common: Vec<String> =
             ca.iter().map(|(n, _)| n.clone()).filter(|n| names_b.contains(n)).collect();
@@ -222,6 +292,37 @@ mod tests {
         let result = diff(&a, &c, 10).unwrap();
         // Row 2 changed, row 3 added, and the sequence advanced.
         assert_eq!(result.differences, 3, "{:#?}", result.lines);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn reports_schema_differences_with_equal_rows() {
+        let dir = std::env::temp_dir().join(format!("plumdeck-dbdiff-schema-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (dir.join("s1.duckdb"), dir.join("s2.duckdb"));
+        for path in [&a, &b] {
+            let _ = std::fs::remove_file(path);
+        }
+        Connection::open(&a)
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE t(id INTEGER PRIMARY KEY, name VARCHAR NOT NULL DEFAULT 'x', u VARCHAR UNIQUE);
+                 INSERT INTO t VALUES (1, 'a', 'u');
+                 CREATE INDEX idx_t_name ON t(name);
+                 CREATE VIEW v AS SELECT id FROM t;",
+            )
+            .unwrap();
+        Connection::open(&b)
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE t(id INTEGER PRIMARY KEY, name VARCHAR, u VARCHAR);
+                 INSERT INTO t VALUES (1, 'a', 'u');",
+            )
+            .unwrap();
+        let result = diff(&a, &b, 10).unwrap();
+        // Columns (NOT NULL, DEFAULT), constraints (NOT NULL, UNIQUE), index, view.
+        assert_eq!(result.differences, 4, "{:#?}", result.lines);
+        assert!(diff(&a, &a, 10).unwrap().differences == 0);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

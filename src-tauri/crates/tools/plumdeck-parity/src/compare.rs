@@ -1,13 +1,23 @@
 //! Response normalization and comparison (plan §4.5).
 //!
 //! Implemented rules:
-//! - N1: bodies are parsed as JSON; object key order is ignored, key sets
-//!   must match.
+//! - N1: JSON bodies (`application/json`, `*+json`) are parsed; object key
+//!   order is ignored, key sets must match. Every other body must match byte
+//!   for byte (N8).
 //! - N2: numbers compare exactly (and must agree on int vs float) unless a
-//!   tolerance rule for their JSON path says otherwise.
-//! - N7: error responses compare status and `detail` only; 422 validation
-//!   errors only need an array detail on both sides.
+//!   tolerance rule for their JSON path says otherwise. HTTP JSON is compared
+//!   by value, not by spelling: FastAPI writes response-model floats with
+//!   pydantic-core (`0.00001`, `1e-7`) and dict routes with `json.dumps`
+//!   (`1e-05`), so the text differs by route while the value does not.
+//!   serde_json parses with `float_roundtrip`, so values are exact doubles.
+//! - N7: errors compare the whole body like any other response; only a 422
+//!   whose `detail` is an array on both sides compares that array by shape.
 //! - N12: a 500 from side A (Python) is undefined behavior and skipped.
+//! - N14: Content-Type must match in full (media type and parameters);
+//!   other headers (date, content-length, server) are ignored.
+//!
+//! There is no deviation mechanism yet: until the owner approves entries in
+//! contracts/parity/deviations.yaml, every difference is unexplained.
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -215,24 +225,17 @@ pub struct Captured {
 }
 
 impl Captured {
-    fn media_type(&self) -> &str {
-        self.content_type.split(';').next().unwrap_or("").trim()
+    fn media_type(&self) -> String {
+        self.content_type.split(';').next().unwrap_or("").trim().to_ascii_lowercase()
+    }
+
+    fn is_json(&self) -> bool {
+        let media = self.media_type();
+        media == "application/json" || media.ends_with("+json")
     }
 
     fn json(&self) -> Option<Value> {
         serde_json::from_slice(&self.body).ok()
-    }
-
-    /// FastAPI's `{"detail": ...}`, or the text of a Starlette plain-text
-    /// error (unmatched routes fall through to the MCP mount in Python).
-    pub fn detail(&self) -> Option<Value> {
-        if let Some(Value::Object(map)) = self.json() {
-            return map.get("detail").cloned();
-        }
-        if self.media_type() == "text/plain" {
-            return Some(Value::String(String::from_utf8_lossy(&self.body).into_owned()));
-        }
-        None
     }
 
     pub fn snippet(&self) -> String {
@@ -256,6 +259,21 @@ pub struct Verdict {
     pub skipped: bool,
 }
 
+/// N7: a pydantic validation 422 compares `detail` by shape only (an array
+/// on both sides); the rest of the body still compares under N1.
+fn without_validation_detail(a: &mut Value, b: &mut Value) -> bool {
+    match (a, b) {
+        (Value::Object(ma), Value::Object(mb))
+            if ma.get("detail").is_some_and(Value::is_array) && mb.get("detail").is_some_and(Value::is_array) =>
+        {
+            ma.insert("detail".into(), Value::Null);
+            mb.insert("detail".into(), Value::Null);
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Compare A (Python) with B (Rust).
 pub fn compare_responses(a: &Captured, b: &Captured, comparer: &JsonComparer) -> Verdict {
     let mut verdict = Verdict::default();
@@ -268,40 +286,20 @@ pub fn compare_responses(a: &Captured, b: &Captured, comparer: &JsonComparer) ->
         verdict.diffs.push(format!("status {} vs {}", a.status, b.status));
         return verdict;
     }
-    if a.status >= 400 {
-        match (a.detail(), b.detail()) {
-            (Some(Value::Array(_)), Some(Value::Array(_))) if a.status == 422 => {
-                verdict.notes.push("N7: 422 validation detail compared by shape only".into());
-            }
-            (Some(da), Some(db)) => {
-                let diffs = comparer.diff(&da, &db);
-                if diffs.is_empty() {
-                    verdict.notes.push(format!("N7: status and detail match ({})", short(&da)));
-                } else {
-                    verdict.diffs.extend(diffs.into_iter().map(|d| format!("detail {d}")));
-                }
-            }
-            (da, db) => verdict.diffs.push(format!(
-                "error body without detail: {} vs {}",
-                da.map_or_else(|| a.snippet(), |v| short(&v)),
-                db.map_or_else(|| b.snippet(), |v| short(&v)),
-            )),
-        }
-        if a.media_type() != b.media_type() {
-            verdict.notes.push(format!(
-                "N7: error content-type {:?} vs {:?} (detail compared instead)",
-                a.content_type, b.content_type
-            ));
-        }
-        return verdict;
-    }
-    if a.media_type() != b.media_type() {
+    if a.content_type != b.content_type {
         verdict.diffs.push(format!("content-type {:?} vs {:?}", a.content_type, b.content_type));
     }
-    match (a.json(), b.json()) {
-        (Some(ja), Some(jb)) => verdict.diffs.extend(comparer.diff(&ja, &jb)),
-        _ if a.body == b.body => {}
-        _ => verdict.diffs.push(format!("body bytes differ: {} vs {}", a.snippet(), b.snippet())),
+    if a.is_json() && b.is_json() {
+        if let (Some(mut ja), Some(mut jb)) = (a.json(), b.json()) {
+            if a.status == 422 && without_validation_detail(&mut ja, &mut jb) {
+                verdict.notes.push("N7: 422 validation detail compared by shape only".into());
+            }
+            verdict.diffs.extend(comparer.diff(&ja, &jb));
+            return verdict;
+        }
+    }
+    if a.body != b.body {
+        verdict.diffs.push(format!("body bytes differ: {} vs {}", a.snippet(), b.snippet()));
     }
     verdict
 }
@@ -340,16 +338,55 @@ mod tests {
     }
 
     #[test]
-    fn errors_compare_status_and_detail() {
+    fn exact_numbers_see_one_ulp() {
+        // Python's text and a one-ULP-off re-encoding parse to different
+        // doubles only with a correctly rounding parser (float_roundtrip).
+        let comparer = JsonComparer::new(&[]);
+        let a: Value = serde_json::from_str("[-0.11218375712633133]").unwrap();
+        let b: Value = serde_json::from_str("[-0.11218375712633132]").unwrap();
+        assert_eq!(a[0].as_f64().unwrap().to_bits(), 0xbfbcb81320000000);
+        assert_eq!(comparer.diff(&a, &b).len(), 1);
+    }
+
+    #[test]
+    fn errors_compare_the_whole_body_and_content_type() {
         let comparer = JsonComparer::new(&[]);
         let python = captured(404, "text/plain; charset=utf-8", "Not Found");
-        let rust = captured(404, "application/json", r#"{"detail":"Not Found"}"#);
-        let verdict = compare_responses(&python, &rust, &comparer);
-        assert!(verdict.diffs.is_empty(), "{:?}", verdict.diffs);
-        let other = captured(404, "application/json", r#"{"detail":"Track not found"}"#);
-        assert_eq!(compare_responses(&python, &other, &comparer).diffs.len(), 1);
+        let same = captured(404, "text/plain; charset=utf-8", "Not Found");
+        assert!(compare_responses(&python, &same, &comparer).diffs.is_empty());
+        // FastAPI's JSON spelling of the same message is still a difference.
+        let json = captured(404, "application/json", r#"{"detail":"Not Found"}"#);
+        assert_eq!(compare_responses(&python, &json, &comparer).diffs.len(), 2);
+        let detail = captured(404, "application/json", r#"{"detail":"Lyrics not found"}"#);
+        let extra = captured(404, "application/json", r#"{"detail":"Lyrics not found","extra":1}"#);
+        assert_eq!(compare_responses(&detail, &extra, &comparer).diffs.len(), 1);
         let crash = captured(500, "text/plain", "Internal Server Error");
-        assert!(compare_responses(&crash, &rust, &comparer).skipped);
-        assert_eq!(compare_responses(&rust, &crash, &comparer).diffs.len(), 1);
+        assert!(compare_responses(&crash, &json, &comparer).skipped);
+        assert_eq!(compare_responses(&json, &crash, &comparer).diffs.len(), 1);
+    }
+
+    #[test]
+    fn validation_errors_compare_detail_by_shape() {
+        let comparer = JsonComparer::new(&[]);
+        let a = captured(422, "application/json", r#"{"detail":[{"type":"missing","loc":["body"]}]}"#);
+        let b = captured(422, "application/json", r#"{"detail":[{"type":"int_parsing"}]}"#);
+        let verdict = compare_responses(&a, &b, &comparer);
+        assert!(verdict.diffs.is_empty(), "{:?}", verdict.diffs);
+        let c = captured(422, "application/json", r#"{"detail":"Track is locked"}"#);
+        assert_eq!(compare_responses(&a, &c, &comparer).diffs.len(), 1);
+    }
+
+    #[test]
+    fn content_type_parameters_matter() {
+        let comparer = JsonComparer::new(&[]);
+        let a = captured(200, "application/json", "{}");
+        let b = captured(200, "application/json; charset=latin-1", "{}");
+        assert_eq!(compare_responses(&a, &b, &comparer).diffs.len(), 1);
+        let m3u = captured(200, "application/x-mpegurl", "#EXTM3U\n");
+        let m3u_utf8 = captured(200, "application/x-mpegurl; charset=utf-8", "#EXTM3U\n");
+        assert_eq!(compare_responses(&m3u, &m3u_utf8, &comparer).diffs.len(), 1);
+        let text = captured(200, "text/plain", "1.0");
+        let other = captured(200, "text/plain", "1");
+        assert_eq!(compare_responses(&text, &other, &comparer).diffs.len(), 1);
     }
 }

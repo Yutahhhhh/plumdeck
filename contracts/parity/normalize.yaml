@@ -1,7 +1,14 @@
 # Global comparison rules for plumdeck-parity (plan §4.5).
-# N1 (JSON parse, key order ignored), N7 (errors: status + detail) and N12
-# (skip when Python answers 500) are built into the runner. N2 numeric
-# tolerances are declared per JSONPath; anything not listed compares exactly.
+# Built into the runner: N1 (JSON bodies parsed, key order ignored; other
+# bodies byte for byte), N7 (errors compare the whole body; a 422 detail
+# array by shape only), N12 (skip when Python answers 500) and N14 (full
+# Content-Type must match). HTTP JSON is compared by value, not float
+# spelling: FastAPI writes response-model routes with pydantic-core (0.00001,
+# 1e-7) and dict routes with json.dumps (1e-05); see the per-operation
+# serializer in contracts/http/routes.v5.json. Byte-exact float text matters
+# for stored JSON (pyjson) and N8 text responses.
+# N2 numeric tolerances are declared per JSONPath; anything not listed
+# compares exactly.
 #   - {path: "$..bpm", mode: f32}          # DuckDB FLOAT columns
 #   - {path: "$..score", mode: rel, value: 1e-9}
 tolerances: []

@@ -1,7 +1,8 @@
-# S0: the health check the desktop polls while starting, and unknown routes.
-# Python answers unmatched paths from the MCP mount with text/plain
-# "Not Found"; Rust answers FastAPI's JSON {"detail": "Not Found"}. N7
-# compares status and detail, so the content-type difference is a note.
+# S0: the health check the desktop polls while starting, and every request
+# no route takes. Python mounts the MCP app at "/" (main.py), so unknown
+# paths, other methods on "/", HEAD on GET routes and a plain OPTIONS all get
+# Starlette's text/plain 404 "Not Found"; Rust answers the same bytes
+# (bug-compatible). CORS preflights (S2) and /mcp itself (S9) come later.
 name: s0-root
 db: fixture
 steps:
@@ -14,3 +15,24 @@ steps:
   - name: unknown top-level route with query
     expect_status: 404
     http: {method: GET, path: /nope, query: {q: "日本語 ß"}}
+  - name: list query on an unknown route
+    expect_status: 404
+    http: {method: GET, path: /api/tracks/unknown, query: {ids: [1, 2]}}
+  - name: trailing slash is not redirected (the mount answers first)
+    expect_status: 404
+    http: {method: GET, path: /api/settings/}
+  - name: POST on the GET-only root
+    expect_status: 404
+    http: {method: POST, path: /, body: {x: 1}}
+  - name: DELETE on the GET-only root
+    expect_status: 404
+    http: {method: DELETE, path: /}
+  - name: HEAD on the GET-only root
+    expect_status: 404
+    http: {method: HEAD, path: /}
+  - name: plain OPTIONS (no preflight headers)
+    expect_status: 404
+    http: {method: OPTIONS, path: /}
+  - name: PUT on an unknown API route
+    expect_status: 404
+    http: {method: PUT, path: /api/does-not-exist, body: {a: [1.5, 1e-05]}}

@@ -1,0 +1,27 @@
+# Intentional differences between the Python backend (A) and the Rust port (B)
+# (plan §0.4, §4.9). Only entries the owner has approved may excuse a parity
+# difference; until then the Rust side stays bug-compatible.
+#
+# plumdeck-parity does not read this file yet: no entry is approved, so every
+# difference is reported as unexplained. Runner support (match on method,
+# path pattern and status) lands together with the first approved entry.
+#
+# status: proposed | approved
+deviations:
+  - id: D-12
+    status: proposed
+    source: plan §1.5 (Router)
+    summary: >
+      Unmatched requests answer FastAPI's JSON errors (404 {"detail": "Not Found"},
+      405 {"detail": "Method Not Allowed"}, HEAD served by GET routes) instead of
+      the MCP mount's text/plain 404. The frontend reads body.detail only from
+      JSON, so the visible text stays "Not Found".
+    current: B answers text/plain 404 "Not Found" like A (s0-root.yaml).
+  - id: D-13
+    status: proposed
+    source: contracts/http/routes.v5.json outside_openapi
+    summary: >
+      FastAPI's built-in documentation routes are not ported: GET/HEAD
+      /openapi.json, /docs, /docs/oauth2-redirect, /redoc. Nothing in the app
+      calls them; B answers them with the unmatched-request 404.
+    current: not ported; no scenario covers them.

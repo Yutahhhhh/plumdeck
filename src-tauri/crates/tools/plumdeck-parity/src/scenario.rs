@@ -2,16 +2,23 @@
 //!
 //! ```yaml
 //! name: s0-root
-//! db: fixture            # fixture | real
+//! db: fixture            # fixture | real (real is refused for now)
 //! steps:
 //!   - name: health check
 //!     expect_status: 200 # optional: both sides must answer this
-//!     http: {method: GET, path: /, query: {q: x}, headers: {}, body: null}
+//!     http: {method: GET, path: /, query: {q: x, ids: [1, 2]}, headers: {}, body: null}
 //! compare_overrides:
 //!   tolerances: [{path: "$..score", mode: rel, value: 1e-9}]
 //! ```
 //! S0 executes `http` steps; other step kinds are rejected so a scenario
-//! never silently passes without being run.
+//! never silently passes without being run. Query arrays are sent as
+//! repeated keys (`ids=1&ids=2`, FastAPI's list parameters); `body` is sent as
+//! JSON. Raw, form and multipart bodies arrive with the slices that use them.
+//!
+//! `db: real` is refused until plan §4.2's safety rails exist: the runner's
+//! denylist of operations that rewrite or delete the owner's audio files and
+//! the matching oracle monkeypatches. A real-DB copy's file paths point at the
+//! owner's actual music.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -102,8 +109,14 @@ pub fn load(path: &Path) -> Result<Scenario> {
     let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let scenario: Scenario =
         serde_yaml::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
-    if !matches!(scenario.db.as_str(), "fixture" | "real") {
-        bail!("{}: db must be fixture or real, got {:?}", path.display(), scenario.db);
+    match scenario.db.as_str() {
+        "fixture" => {}
+        "real" => bail!(
+            "{}: db: real is not supported until the plan §4.2 denylist and oracle patches exist \
+             (a real-DB copy's file paths point at the owner's music)",
+            path.display()
+        ),
+        other => bail!("{}: db must be fixture or real, got {other:?}", path.display()),
     }
     if scenario.freeze_now.is_some() || !scenario.side_effects.is_empty() {
         bail!("{}: freeze_now and side_effects are not supported yet", path.display());
@@ -113,11 +126,38 @@ pub fn load(path: &Path) -> Result<Scenario> {
         if kinds.iter().filter(|k| **k).count() != 1 {
             bail!("{}: step {} needs exactly one of http/mcp/ws/wait", path.display(), index + 1);
         }
-        if step.http.is_none() {
+        let Some(http) = &step.http else {
             bail!("{}: step {}: only http steps are supported yet", path.display(), index + 1);
+        };
+        for (key, value) in &http.query {
+            let scalar = |v: &Value| matches!(v, Value::String(_) | Value::Number(_) | Value::Bool(_));
+            let ok = match value {
+                Value::Array(items) => items.iter().all(scalar),
+                other => scalar(other),
+            };
+            if !ok {
+                bail!(
+                    "{}: step {}: query {key:?} must be a scalar or an array of scalars",
+                    path.display(),
+                    index + 1
+                );
+            }
         }
     }
     Ok(scenario)
+}
+
+/// Query pairs in order; an array becomes one pair per element.
+fn query_pairs(query: &BTreeMap<String, Value>) -> Vec<(String, String)> {
+    let text = |v: &Value| v.as_str().map_or_else(|| v.to_string(), str::to_owned);
+    let mut pairs = Vec::new();
+    for (key, value) in query {
+        match value {
+            Value::Array(items) => pairs.extend(items.iter().map(|item| (key.clone(), text(item)))),
+            other => pairs.push((key.clone(), text(other))),
+        }
+    }
+    pairs
 }
 
 /// `contracts/parity/normalize.yaml` next to `scenarios/`, if present.
@@ -142,12 +182,7 @@ async fn send(client: &reqwest::Client, base: &str, step: &HttpStep) -> Result<(
     let url = format!("{}{}", base.trim_end_matches('/'), step.path);
     let mut request = client.request(method, &url);
     if !step.query.is_empty() {
-        let pairs: Vec<(String, String)> = step
-            .query
-            .iter()
-            .map(|(k, v)| (k.clone(), v.as_str().map_or_else(|| v.to_string(), str::to_owned)))
-            .collect();
-        request = request.query(&pairs);
+        request = request.query(&query_pairs(&step.query));
     }
     for (name, value) in &step.headers {
         request = request.header(name, value);
@@ -268,4 +303,40 @@ pub async fn run(scenario: &Scenario, global: &NormalizeFile, a: &str, b: &str) 
         });
     }
     Ok(RunReport { scenario: scenario.name.clone(), steps })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write(name: &str, text: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("plumdeck-scenario-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    #[test]
+    fn real_db_scenarios_are_refused() {
+        let path = write("real.yaml", "name: r\ndb: real\nsteps:\n  - http: {method: GET, path: /}\n");
+        let error = load(&path).unwrap_err().to_string();
+        assert!(error.contains("db: real is not supported"), "{error}");
+        let path = write("fixture.yaml", "name: f\nsteps:\n  - http: {method: GET, path: /}\n");
+        assert_eq!(load(&path).unwrap().db, "fixture");
+    }
+
+    #[test]
+    fn query_arrays_repeat_the_key() {
+        let path = write(
+            "query.yaml",
+            "name: q\nsteps:\n  - http: {method: GET, path: /, query: {ids: [1, 2], q: x, on: true}}\n",
+        );
+        let scenario = load(&path).unwrap();
+        let pairs = query_pairs(&scenario.steps[0].http.as_ref().unwrap().query);
+        let expected = [("ids", "1"), ("ids", "2"), ("on", "true"), ("q", "x")];
+        assert_eq!(pairs, expected.map(|(k, v)| (k.to_owned(), v.to_owned())));
+        let path = write("bad.yaml", "name: b\nsteps:\n  - http: {method: GET, path: /, query: {f: {a: 1}}}\n");
+        assert!(load(&path).is_err());
+    }
 }
