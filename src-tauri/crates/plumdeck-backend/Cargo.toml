@@ -13,6 +13,7 @@ path = "src/bin/plumdeck-backend.rs"
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
+chrono.workspace = true
 clap.workspace = true
 plumdeck-core.workspace = true
 plumdeck-db.workspace = true

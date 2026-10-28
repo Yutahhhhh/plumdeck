@@ -10,8 +10,10 @@
 //! `--parity` (side B of plumdeck-parity) refuses to start unless DB_PATH,
 //! USER_DATA_DIR and PLUMDECK_REKORDBOX_DB are set and nothing resolves inside
 //! the live library or rekordbox's folders.
+//!
+//! Logs go to stderr and `<PLUMDECK_LOG_DIR>/plumdeck.log` in the Python
+//! backend's format (see `plumdeck_backend::logging`).
 
-use std::io::IsTerminal;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,14 +40,6 @@ struct Args {
 
 fn main() -> ExitCode {
     let args = Args::parse();
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .with_writer(std::io::stderr)
-        .with_ansi(std::io::stderr().is_terminal())
-        .init();
 
     println!("{}", StartupStage::Settings.line());
     let config = match Config::from_env() {
@@ -66,6 +60,8 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     }
+    // After the sandbox check: the log directory may be the live one.
+    plumdeck_backend::logging::init(&config.log_dir);
     if let Err(error) = std::fs::create_dir_all(&config.user_data_dir) {
         eprintln!("plumdeck-backend: cannot create {}: {error}", config.user_data_dir.display());
         return ExitCode::from(1);

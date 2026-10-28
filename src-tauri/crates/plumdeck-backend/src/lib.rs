@@ -6,8 +6,9 @@
 //! serving and closes it after ([`startup`]). Startup progress lines
 //! (`PLUMDECK_STARTUP:{...}`) and the managed-sidecar stdin shutdown line keep
 //! the desktop's and scripts/smoke-backend.py's contracts with the Python
-//! sidecar.
+//! sidecar. Logs go where Python's go ([`logging`]).
 
+pub mod logging;
 pub mod sandbox;
 pub mod startup;
 
