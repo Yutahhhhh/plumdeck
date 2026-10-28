@@ -15,6 +15,7 @@ from sqlalchemy import text, func
 from config import settings
 from domain.models.track import Track, TrackAnalysis, TrackEmbedding
 from domain.models.setlist import SetlistTrack
+from domain.services import value_sources
 from domain.services.analysis.constants import COMPONENT_VERSIONS, EMBEDDING_MODEL, GRID_COMPONENT_VERSION
 from infra.database import connection
 from infra.repositories.analysis_job_repository import AnalysisJobRepository
@@ -228,7 +229,9 @@ class AnalysisJobService:
                 raise ValueError("Track removed or path changed since this job was created")
             return self.outdated(config["features"], session.get(TrackAnalysis, track.id), session.get(TrackEmbedding, track.id)) if config["only_outdated"] else config["features"]
 
-    def _save(self, item, result, features):
+    def _save(self, item, result, features, grid_only=False):
+        """Store one result. BPM/key follow manual > rekordbox > own; a grid
+        re-analysis (``grid_only``) updates beats and never replaces a BPM."""
         # Deliberately bypass metadata ingestion: it may update tags and lyrics.
         with connection.db_lock, Session(self.engine) as session:
             track = session.get(Track, item["track_id"])
@@ -241,16 +244,38 @@ class AnalysisJobService:
             analysis = session.get(TrackAnalysis, track.id) or TrackAnalysis(track_id=track.id)
             extra = dict(analysis.features_extra)
             update = dict(result.get("features_extra", {}))
+            stored = value_sources.stored_sources(extra)
+            rekordbox = None
+            sources = {}
             for feature in features:
                 for name in allowed.get(feature, ()):
                     value = result[name]
                     if not isinstance(value, str) and not np.isfinite(value):
                         raise ValueError(f"Invalid {name} result")
-                    if name == "bpm" and extra.get("bpm_authority"):
-                        # A rekordbox-synced BPM wins; keep the estimate beside it.
+                    if name == "scale":
+                        continue  # follows the chosen key below
+                    if name not in value_sources.FIELDS:
+                        setattr(track, name, value)
+                        continue
+                    if name == "bpm" and grid_only and value_sources.valid("bpm", track.bpm):
                         update["analysis_bpm"] = value
                         continue
-                    setattr(track, name, value)
+                    if rekordbox is None:
+                        rekordbox = value_sources.lookup(
+                            track.filepath, keys=value_sources.key_source_enabled(session))
+                    chosen, source = value_sources.choose(
+                        name, value, value_sources.OWN, getattr(track, name), stored.get(name), rekordbox)
+                    if source is None:
+                        continue
+                    sources[name] = source
+                    setattr(track, name, chosen)
+                    if name == "key":
+                        track.scale = value_sources.scale_of(chosen) or result.get("scale", track.scale)
+                    elif source == value_sources.OWN:
+                        extra.pop("analysis_bpm", None)
+                    else:
+                        # Keep the analyzer's estimate beside the winning value.
+                        update["analysis_bpm"] = value
             components = {**extra.get("analysis_components", {}), **update.pop("analysis_components", {})}
             if "rhythm" in features:
                 analysis.beat_positions = update.pop("beat_positions")
@@ -263,6 +288,8 @@ class AnalysisJobService:
                 analysis.waveform_peaks = update.pop("waveform_peaks")
             extra.update(persisted_features_extra(update))
             extra["analysis_components"] = components
+            if sources:
+                extra = value_sources.with_sources(extra, sources)
             analysis.features_extra_json = json.dumps(extra, allow_nan=False)
             if "embedding" in features:
                 vec = np.asarray(result["embedding"], dtype=float)
@@ -309,7 +336,7 @@ class AnalysisJobService:
                             item, features = futures.pop(future)
                             try:
                                 result, seconds = future.result()
-                                self._save(item, result, features)
+                                self._save(item, result, features, grid_only=config["features"] == ["rhythm"])
                                 self.repository.finish(job_id, item["track_id"], "completed", seconds)
                             except Exception as exc:
                                 self.repository.finish(job_id, item["track_id"], "failed", error=str(exc))

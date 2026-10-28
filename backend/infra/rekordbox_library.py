@@ -2,7 +2,9 @@
 
 Assist mode needs three things from rekordbox: what a given open file actually
 is, which of plumdeck's tracks rekordbox knows about at all, and what the DJ has
-actually played (the HISTORY playlists). All are answered with plain SELECTs over the encrypted master.db through the same read-only,
+actually played (the HISTORY playlists). Analysis also reads the collection's
+BPM and key, which outrank plumdeck's own detection (domain/services/value_sources.py).
+All are answered with plain SELECTs over the encrypted master.db through the same read-only,
 ``query_only`` connection the beat-grid reader uses. Nothing here writes, and no
 higher-level pyrekordbox API is instantiated, so the running rekordbox is never
 disturbed.
@@ -45,6 +47,27 @@ class RekordboxEntry:
     title: str
     artist: str
     bpm: float | None
+
+
+@dataclass(frozen=True)
+class CollectionValues:
+    """What the rekordbox collection holds for one file."""
+
+    bpm: float | None  # None when rekordbox has not analysed the tempo (BPM 0)
+    key: str | None  # djmdKey.ScaleName as rekordbox spells it ('Fm', '4A')
+    analysis_path: str | None  # AnalysisDataPath of the ANLZ .DAT holding PQTZ
+
+
+class CollectionIndex:
+    """Every collection file with its values, matched like ``is_registered_path``."""
+
+    def __init__(self, entries: dict[str, CollectionValues]) -> None:
+        self.entries = entries
+        self.paths = frozenset(entries)
+
+    def get(self, filepath: str) -> CollectionValues | None:
+        spelling = _registered_spelling(filepath, self.paths) if filepath else None
+        return self.entries[spelling] if spelling is not None else None
 
 
 @dataclass(frozen=True)
@@ -105,14 +128,19 @@ def _windows_path_index(registered: frozenset[str]) -> dict[str, tuple[str, ...]
     return {key: tuple(values) for key, values in grouped.items()}
 
 
-def is_registered_path(filepath: str, registered: frozenset[str]) -> bool:
+def _registered_spelling(filepath: str, registered: frozenset[str]) -> str | None:
+    """The spelling under which ``registered`` holds this file, if any."""
     if sys.platform == "win32":
         candidates = _windows_path_index(registered).get(ntpath.normcase(normalize_path(filepath)), ())
         # Case-insensitive candidate lookup must still prove filesystem identity:
         # Windows can also have directories with case-sensitive filenames.
-        return any(same_path(filepath, path) for path in candidates)
-    return any(path in registered and same_path(filepath, path)
-               for path in path_variants(filepath))
+        return next((path for path in candidates if same_path(filepath, path)), None)
+    return next((path for path in path_variants(filepath)
+                 if path in registered and same_path(filepath, path)), None)
+
+
+def is_registered_path(filepath: str, registered: frozenset[str]) -> bool:
+    return _registered_spelling(filepath, registered) is not None
 
 
 def normalize_text(value: str | None) -> str:
@@ -310,6 +338,39 @@ class _CollectionPathCache(_MasterDbCache):
         return frozenset(str(row[0]) for row in rows if row[0])
 
 
+class _CollectionValuesCache(_MasterDbCache):
+    """BPM, key and ANLZ path per collection file (~0.2 s for 25k rows)."""
+
+    @staticmethod
+    def _load(database: Path) -> CollectionIndex:
+        connection = _connect(database)
+        try:
+            rows = connection.execute(
+                "SELECT c.FolderPath, c.BPM, k.ScaleName, c.AnalysisDataPath "
+                "FROM djmdContent c LEFT JOIN djmdKey k ON k.ID = c.KeyID "
+                "WHERE c.rb_local_deleted = 0 AND c.FolderPath IS NOT NULL"
+            ).fetchall()
+        except Exception as error:
+            raise RekordboxLibraryUnavailable(
+                "rekordbox のライブラリを読み取れませんでした"
+            ) from error
+        finally:
+            connection.close()
+        entries: dict[str, CollectionValues] = {}
+        for folder_path, bpm, key, analysis_path in rows:
+            if not folder_path:
+                continue
+            # rekordbox stores BPM scaled by 100; 0 means "no tempo analysed".
+            values = CollectionValues(float(bpm) / 100 if bpm else None, str(key) if key else None,
+                                      str(analysis_path) if analysis_path else None)
+            previous = entries.get(str(folder_path))
+            if previous is not None and previous != values:
+                # Two rows for one file that disagree: trust neither.
+                values = CollectionValues(None, None, None)
+            entries[str(folder_path)] = values
+        return CollectionIndex(entries)
+
+
 class _PlayHistoryCache(_MasterDbCache):
     """Every HISTORY playlist, oldest first (~50 ms for 46k plays)."""
 
@@ -347,12 +408,22 @@ def _parse_time(value) -> datetime | None:
 
 
 _collection_paths = _CollectionPathCache()
+_collection_values = _CollectionValuesCache()
 _play_history = _PlayHistoryCache()
 
 
 def registered_paths() -> frozenset[str]:
     """Every file path currently in the rekordbox collection."""
     return _collection_paths.get()
+
+
+def collection_index() -> CollectionIndex:
+    """BPM, key and ANLZ path of every collection file.
+
+    Raises RekordboxLibraryUnavailable when master.db is missing or unreadable;
+    a file absent from the index is simply not in the collection.
+    """
+    return _collection_values.get()
 
 
 def play_sessions() -> tuple[PlaySession, ...]:
@@ -363,4 +434,5 @@ def play_sessions() -> tuple[PlaySession, ...]:
 def reset_cache() -> None:
     """Drops the cached collection. Used by tests and after an import."""
     _collection_paths.invalidate()
+    _collection_values.invalidate()
     _play_history.invalidate()

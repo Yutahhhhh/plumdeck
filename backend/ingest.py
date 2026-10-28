@@ -34,17 +34,23 @@ def get_analyzer() -> Optional["AudioAnalyzer"]:
 
 def analyze_track_file(filepath: str, high_precision: bool = True, skip_basic: bool = False,
                        skip_waveform: bool = False, external_lyrics: Optional[str] = None,
-                       analysis_profile: str = "full") -> Optional[dict]:
+                       analysis_profile: str = "full",
+                       skip_components: Optional[list] = None) -> Optional[dict]:
     """
     Wrapper function for backward compatibility.
 
     ``high_precision`` is ignored. It stays in the signature because workers
     receive these arguments positionally (ingestion_domain_service.run_args).
+    ``skip_components`` lists full-analysis components ('rhythm', 'key') whose
+    values the parent already took from rekordbox.
     """
     report("initializing", "解析ワーカーを初期化しています")
     analyzer = get_analyzer()
     if analyzer:
         if analysis_profile == "light" and hasattr(analyzer, "analyze_light"):
             return analyzer.analyze_light(filepath, external_lyrics=external_lyrics)
+        if skip_components:
+            return analyzer.analyze(filepath, skip_basic=skip_basic, skip_waveform=skip_waveform,
+                                    external_lyrics=external_lyrics, skip_components=tuple(skip_components))
         return analyzer.analyze(filepath, skip_basic=skip_basic, skip_waveform=skip_waveform, external_lyrics=external_lyrics)
     return None

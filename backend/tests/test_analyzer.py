@@ -80,6 +80,32 @@ def test_selected_timbre_and_key_return_only_read_outputs(mock_analyzer, mocker)
     }
     assert set(result["features_extra"]) == {"analysis_components"}
 
+def test_analyze_leaves_out_components_rekordbox_provides(mock_analyzer, mocker):
+    tag = MagicMock(title="Song", artist="Artist", album="Album", genre="House", year="2020", duration=180.0, extra={})
+    mocker.patch.object(mock_analyzer, "_extract_metadata", return_value=tag)
+    mocker.patch.object(mock_analyzer, "_load_audio", return_value=np.ones(44100, dtype=np.float32))
+    mocker.patch.object(mock_analyzer, "_extract_timbre_features", return_value={
+        "energy": 0.5, "danceability": 0.25, "brightness": 0.75, "noisiness": 0.1})
+    mocker.patch("domain.services.analysis.analyzer.align_beats", side_effect=lambda audio, ticks, rate: ticks)
+    mock_analyzer.rhythm_extractor = MagicMock(return_value=(120.0, np.array([0.5, 1.0, 1.5]), 3.0, None, None))
+    mock_analyzer.key_extractor = MagicMock(return_value=("F", "minor", 0.9))
+    mock_analyzer.embedding_algo = None
+
+    result = mock_analyzer.analyze("/song.wav", skip_components=("rhythm", "key"))
+    mock_analyzer.rhythm_extractor.assert_not_called()
+    mock_analyzer.key_extractor.assert_not_called()
+    assert (result["bpm"], result["key"], result["scale"]) == (0.0, "", "")
+    extra = result["features_extra"]
+    assert extra["analysis_components"] == {"timbre": constants.COMPONENT_VERSIONS["timbre"]}
+    assert not {"beat_positions", "playback_grid", "bpm_confidence"} & extra.keys()
+    assert len(extra["waveform_peaks"]) == 500 and result["analysis_level"] == "full"
+
+    full = mock_analyzer.analyze("/song.wav")
+    assert (full["bpm"], full["key"]) == (120.0, "F minor")
+    assert set(full["features_extra"]["analysis_components"]) == {"rhythm", "key", "timbre"}
+    assert full["features_extra"]["beat_positions"] == [0.5, 1.0, 1.5]
+
+
 def test_format_result_without_lyrics(mock_analyzer, mocker):
     # Mock TinyTag
     mock_tag = MagicMock()

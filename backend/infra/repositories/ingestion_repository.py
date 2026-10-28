@@ -6,6 +6,7 @@ from sqlmodel import Session, select, text
 from domain.models.track import Track, TrackAnalysis, TrackEmbedding
 from domain.models.lyrics import Lyrics
 from utils.array_codec import pack_f32, pack_u8_waveform
+from domain.services import value_sources
 from utils.features_extra import persisted_features_extra
 from utils.ingestion import has_valid_embedding
 import infra.database.connection as db_connection
@@ -16,7 +17,27 @@ class IngestionRepository:
 
     def _prepare_track_models(self, session: Session, result: Dict[str, Any], update_metadata: bool = True) -> int:
         filepath = result["filepath"]
-        
+        extras = result.get("features_extra", {})
+        sources: Dict[str, str] = {}
+        own_bpm = None
+        # PRAGMA foreign_keys は DuckDB で未サポートのため削除
+        # 代わりに no_autoflush で ORM レベルの整合性チェックタイミングを調整
+        with session.no_autoflush:
+            existing_track = session.exec(select(Track).where(Track.filepath == filepath)).first()
+            existing_analysis = session.get(TrackAnalysis, existing_track.id) if existing_track else None
+            existing_fx = existing_analysis.features_extra if existing_analysis else {}
+            preserve_full_analysis = bool(
+                existing_track
+                and result.get("analysis_level") == "light"
+                and existing_track.analysis_level != "light"
+                and isinstance(existing_track.bpm, (int, float))
+                and existing_track.bpm > 0
+                and has_valid_embedding(session.get(TrackEmbedding, existing_track.id))
+            )
+            # Only analysis results resolve BPM/key; tag and lyrics updates keep them.
+            if isinstance(extras, dict) and "analysis_components" in extras and not preserve_full_analysis:
+                result, sources, own_bpm = self._settle_values(session, result, existing_track, existing_fx)
+
         track_update_data = {
             "title": result.get("title"), "artist": result.get("artist"),
             "album": result.get("album"), "genre": result.get("genre"), "year": result.get("year"),
@@ -31,27 +52,11 @@ class IngestionRepository:
             "spectral_rolloff": float(result.get("spectral_rolloff", 0.0)),
         }
 
-        # PRAGMA foreign_keys は DuckDB で未サポートのため削除
-        # 代わりに no_autoflush で ORM レベルの整合性チェックタイミングを調整
         with session.no_autoflush:
-            existing_track = session.exec(select(Track).where(Track.filepath == filepath)).first()
             track_id = None
-            bpm_authority = None
 
             if existing_track:
                 track_id = existing_track.id
-                existing_embedding = session.get(TrackEmbedding, track_id)
-                existing_analysis = session.get(TrackAnalysis, track_id)
-                existing_fx = existing_analysis.features_extra if existing_analysis else {}
-                # A rekordbox-synced BPM outranks re-analysis, including forced re-imports.
-                bpm_authority = existing_fx.get("bpm_authority") if isinstance(existing_fx, dict) else None
-                preserve_full_analysis = bool(
-                    result.get("analysis_level") == "light"
-                    and existing_track.analysis_level != "light"
-                    and isinstance(existing_track.bpm, (int, float))
-                    and existing_track.bpm > 0
-                    and has_valid_embedding(existing_embedding)
-                )
                 if update_metadata:
                     for k, v in track_update_data.items():
                         # Partial metadata updates must not erase absent audio features.
@@ -63,8 +68,6 @@ class IngestionRepository:
                             "loudness", "loudness_range", "spectral_flux",
                             "spectral_rolloff",
                         }:
-                            continue
-                        if k == "bpm" and bpm_authority:
                             continue
                         if isinstance(v, str) and v and v.lower() != "unknown":
                             setattr(existing_track, k, v)
@@ -98,7 +101,6 @@ class IngestionRepository:
 
             # DuckDB は UPDATE で空き領域を OS に返さないため、値が実際に変わった時だけ
             # 行を書き換える (再解析/一括処理での無駄な UPDATE によるファイル肥大化を防ぐ)。
-            extras = result.get("features_extra", {})
             analysis = session.get(TrackAnalysis, track_id)
             analysis_changed = analysis is None
             if analysis is None:
@@ -107,13 +109,13 @@ class IngestionRepository:
             if extras and not (existing_track and preserve_full_analysis):
                 # Persist an allow-listed copy; callers still validate the full result.
                 fx = persisted_features_extra(extras)
-                if bpm_authority:
-                    fx["bpm_authority"] = bpm_authority
-                    if "analysis_bpm" in existing_fx:
-                        fx["analysis_bpm"] = existing_fx["analysis_bpm"]
-                    bpm = result.get("bpm")
-                    if isinstance(bpm, (int, float)) and not isinstance(bpm, bool) and math.isfinite(bpm) and bpm > 0:
-                        fx["analysis_bpm"] = bpm
+                recorded = {**value_sources.stored_sources(existing_fx), **sources}
+                if recorded:
+                    fx = value_sources.with_sources(fx, recorded)
+                if own_bpm is not None:
+                    fx["analysis_bpm"] = own_bpm
+                elif recorded.get("bpm") not in (None, value_sources.OWN) and "analysis_bpm" in existing_fx:
+                    fx["analysis_bpm"] = existing_fx["analysis_bpm"]
                 new_fx = json.dumps(fx)
                 if new_fx != (analysis.features_extra_json or "{}"):
                     analysis.features_extra_json = new_fx
@@ -159,6 +161,38 @@ class IngestionRepository:
                     ly.updated_at = datetime.now()
                     session.add(ly)
             return int(track_id)
+
+    @staticmethod
+    def _settle_values(session: Session, result: Dict[str, Any], existing_track, existing_fx):
+        """Apply manual > rekordbox > own to bpm/key on a copy of ``result``.
+
+        Returns the copy, the chosen source per field and the analyzer's own
+        BPM when another source won (kept as features_extra.analysis_bpm).
+        """
+        fields = [field for field in value_sources.FIELDS if field in result]
+        if not fields:
+            return result, {}, None
+        components = result["features_extra"].get("analysis_components") or {}
+        incoming_sources = components.get("sources") if isinstance(components.get("sources"), dict) else {}
+        stored = value_sources.stored_sources(existing_fx)
+        rekordbox = value_sources.lookup(
+            result["filepath"], keys=value_sources.key_source_enabled(session))
+        settled, sources, own_bpm = dict(result), {}, None
+        for field in fields:
+            incoming_source = incoming_sources.get(field, value_sources.OWN)
+            value, source = value_sources.choose(
+                field, result.get(field), incoming_source,
+                getattr(existing_track, field, None), stored.get(field), rekordbox)
+            if source is None:
+                continue
+            sources[field] = source
+            settled[field] = value
+            if field == "key":
+                settled["scale"] = value_sources.scale_of(value) or result.get("scale", "")
+            elif (source != value_sources.OWN and incoming_source == value_sources.OWN
+                  and value_sources.valid("bpm", result.get("bpm"))):
+                own_bpm = result["bpm"]
+        return settled, sources, own_bpm
 
     def save_track(self, result: Dict[str, Any], update_metadata: bool = True):
         # Callers use success to advance the progress counter. Propagate a DB

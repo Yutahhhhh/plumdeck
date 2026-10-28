@@ -18,6 +18,7 @@ from utils.ingestion import (
 import infra.database.connection as db_connection
 from domain.models.track import Track, TrackEmbedding
 from domain.models.lyrics import Lyrics
+from domain.services import value_sources
 from infra.repositories.ingestion_repository import IngestionRepository
 
 class IngestionDomainService:
@@ -58,6 +59,25 @@ class IngestionDomainService:
             print(f"ERROR: Fast metadata update failed for {filename}: {e}")
             return None
 
+    @staticmethod
+    def _fill_from_rekordbox(result: Dict[str, Any], rekordbox, skipped: List[str]) -> None:
+        """Put the rekordbox values of skipped components into the result."""
+        sources = {}
+        if "rhythm" in skipped:
+            result["bpm"] = rekordbox.bpm
+            sources["bpm"] = value_sources.REKORDBOX
+        if "key" in skipped:
+            result["key"] = rekordbox.key
+            result["scale"] = value_sources.scale_of(rekordbox.key)
+            sources["key"] = value_sources.REKORDBOX
+        extra = result.get("features_extra")
+        if not isinstance(extra, dict):
+            extra = result["features_extra"] = {}
+        components = extra.get("analysis_components")
+        components = dict(components) if isinstance(components, dict) else {}
+        components["sources"] = {**(components.get("sources") or {}), **sources}
+        extra["analysis_components"] = components
+
     async def process_track_ingestion(
         self,
         filepath: str, 
@@ -93,9 +113,11 @@ class IngestionDomainService:
         metadata_update_only = False
         existing_data_cache = {}
         existing_embedding = None
+        rekordbox_keys = value_sources.KEY_SOURCE_DEFAULT
 
         try:
             with Session(db_connection.engine) as session:
+                rekordbox_keys = value_sources.key_source_enabled(session)
                 track = session.exec(select(Track).where(Track.filepath == filepath)).first()
                 if track:
                     # Read fallback values even for forced/incomplete imports.
@@ -163,6 +185,14 @@ class IngestionDomainService:
                     await loop.run_in_executor(None, self.repository.save_track, result, True)
             return result
 
+        rekordbox = value_sources.RekordboxValues()
+        skip_components = []
+        if analysis_profile == "full":
+            # Registered tracks take BPM (and key) from rekordbox, so the worker
+            # skips those components. The light path keeps its bounded grid.
+            rekordbox = value_sources.lookup(filepath, keys=rekordbox_keys)
+            skip_components = [name for name, value in (("rhythm", rekordbox.bpm), ("key", rekordbox.key)) if value]
+
         try:
             if analysis_profile not in {"light", "full"}:
                 raise ValueError(f"Unknown analysis profile: {analysis_profile}")
@@ -170,10 +200,12 @@ class IngestionDomainService:
             # Keep the established full-profile arity for integrations and
             # tests that wrap the legacy function.
             run_args = (filepath, force_update, skip_basic, skip_waveform)
-            if lyrics_content is not None or analysis_profile == "light":
+            if lyrics_content is not None or analysis_profile == "light" or skip_components:
                 run_args += (lyrics_content,)
-            if analysis_profile == "light":
+            if analysis_profile == "light" or skip_components:
                 run_args += (analysis_profile,)
+            if skip_components:
+                run_args += (skip_components,)
 
             if on_progress and hasattr(executor, "submit_with_progress"):
                 future = asyncio.wrap_future(executor.submit_with_progress(
@@ -190,6 +222,8 @@ class IngestionDomainService:
         if not result:
             raise RuntimeError(f"Audio analysis produced no result for {filename}")
         if result:
+            if skip_components:
+                self._fill_from_rekordbox(result, rekordbox, skip_components)
             # 外部歌詞の反映
             if lyrics_content:
                 result["lyrics"] = lyrics_content

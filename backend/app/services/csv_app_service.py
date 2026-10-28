@@ -6,6 +6,7 @@ import unicodedata
 from typing import List, Dict, Any, Tuple
 from sqlmodel import Session, select
 from domain.models.track import Track, TrackAnalysis
+from domain.services import value_sources
 from api.schemas.settings import (
     CsvImportRow, ImportAnalysisResult, ImportExecuteRequest,
     MetadataImportRow, MetadataImportAnalysisResult, MetadataImportExecuteRequest
@@ -70,11 +71,24 @@ class CsvAppService:
                 filepath = data.get("filepath")
                 norm_path = self._normalize_path(filepath)
                 track = self.session.exec(select(Track).where(Track.filepath == norm_path)).first()
+                before = (track.bpm, track.key) if track else None
                 if track and self._apply_track_metadata_safely(track, data):
                     self.session.add(track)
+                    edited = [field for field, old in zip(value_sources.FIELDS, before)
+                              if getattr(track, field) != old]
+                    if edited:
+                        self._mark_manual(track.id, edited)
                     updated_count += 1
         self.session.commit()
         return updated_count
+
+    def _mark_manual(self, track_id: int, fields: List[str]) -> None:
+        """A BPM/key edited here outranks rekordbox and re-analysis from now on."""
+        analysis = self.session.get(TrackAnalysis, track_id) or TrackAnalysis(track_id=track_id)
+        extra = analysis.features_extra if isinstance(analysis.features_extra, dict) else {}
+        updated = value_sources.with_sources(extra, {field: value_sources.MANUAL for field in fields})
+        analysis.features_extra_json = json.dumps(updated)
+        self.session.add(analysis)
 
     def execute_import(self, data: ImportExecuteRequest) -> Tuple[int, int]:
         import_count, update_count = 0, 0

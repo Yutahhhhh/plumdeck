@@ -1,4 +1,7 @@
-"""What analysis saves: allow-listed features_extra, protected rekordbox BPM."""
+"""What analysis saves: allow-listed features_extra, protected rekordbox BPM.
+
+rekordbox itself is unreadable here (conftest), as on a machine without it.
+"""
 import copy
 import json
 
@@ -63,7 +66,8 @@ def test_ingestion_persists_only_allow_listed_features_extra(session):
     assert result == original
     analysis = session.get(TrackAnalysis, track_id)
     assert analysis.features_extra == {
-        "analysis_components": original["features_extra"]["analysis_components"],
+        "analysis_components": {**original["features_extra"]["analysis_components"],
+                                "sources": {"bpm": "own", "key": "own"}},
         "playback_grid": GRID, "playback_grid_version": 2,
     }
     # Arrays live only in the BLOB columns.
@@ -73,7 +77,7 @@ def test_ingestion_persists_only_allow_listed_features_extra(session):
     assert track.loudness == -60.0 and track.contrast == 0.0 and track.spectral_rolloff == 0.0
 
 
-def test_forced_reingest_keeps_rekordbox_bpm_and_its_marker(session):
+def test_forced_reingest_keeps_synced_bpm_while_rekordbox_is_offline(session):
     track = add_synced_track(session)
     IngestionRepository()._prepare_track_models(session, analysis_result(track.filepath, energy=0.9))
     session.commit()
@@ -82,7 +86,9 @@ def test_forced_reingest_keeps_rekordbox_bpm_and_its_marker(session):
     assert track.bpm == 128.0
     assert track.energy == pytest.approx(0.9)
     extra = session.get(TrackAnalysis, track.id).features_extra
-    assert extra["bpm_authority"] == AUTHORITY
+    # The one-off sync marker becomes the recorded source.
+    assert extra["analysis_components"]["sources"]["bpm"] == "rekordbox"
+    assert "bpm_authority" not in extra
     assert extra["analysis_bpm"] == 64.0
     assert "beat_positions" not in extra and "key_strength" not in extra
 
@@ -124,15 +130,24 @@ def test_rhythm_job_does_not_overwrite_rekordbox_bpm(session, tmp_path):
     assert not {"bpm_confidence", "analysis_source", "beat_positions"} & extra.keys()
 
 
-def test_rhythm_job_updates_bpm_without_marker(session, tmp_path):
+def test_grid_job_never_replaces_bpm_but_selective_rhythm_job_updates_own_bpm(session, tmp_path):
     track = Track(filepath="/lib/plain.mp3", title="Song", artist="Artist", bpm=120.0, duration=180.0)
     session.add(track)
     session.commit()
-    _run_job(session, tmp_path, ["rhythm"], {"bpm": 124.0, "features_extra": {
+    rhythm = {"bpm": 124.0, "key": "A minor", "scale": "minor", "features_extra": {
         "beat_positions": [0.5, 1.0, 1.5], "playback_grid": GRID, "playback_grid_version": 2,
-        "analysis_components": {"rhythm": "rhythm-attacks-v4"}}})
-    assert session.get(Track, track.id).bpm == 124.0
-    assert "analysis_bpm" not in session.get(TrackAnalysis, track.id).features_extra
+        "analysis_components": {"rhythm": "rhythm-attacks-v4"}}}
+    _run_job(session, tmp_path, ["rhythm"], rhythm)
+    assert session.get(Track, track.id).bpm == 120.0
+    assert session.get(TrackAnalysis, track.id).beat_positions == [0.5, 1.0, 1.5]
+    assert session.get(TrackAnalysis, track.id).features_extra["analysis_bpm"] == 124.0
+
+    _run_job(session, tmp_path, ["rhythm", "key"], rhythm)
+    saved = session.get(Track, track.id)
+    assert (saved.bpm, saved.key, saved.scale) == (124.0, "A minor", "minor")
+    extra = session.get(TrackAnalysis, track.id).features_extra
+    assert "analysis_bpm" not in extra
+    assert extra["analysis_components"]["sources"] == {"bpm": "own", "key": "own"}
 
 
 def test_timbre_job_saves_the_four_descriptors(session, tmp_path):

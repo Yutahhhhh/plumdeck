@@ -62,7 +62,11 @@ class AudioAnalyzer:
             except Exception as e:
                 logger.warning(f"Failed to load MusiCNN: {e}")
 
-    def analyze(self, filepath: str, skip_basic: bool = False, skip_waveform: bool = False, external_lyrics: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def analyze(self, filepath: str, skip_basic: bool = False, skip_waveform: bool = False,
+                external_lyrics: Optional[str] = None,
+                skip_components: Tuple[str, ...] = ()) -> Optional[Dict[str, Any]]:
+        """Full analysis. ``skip_components`` ('rhythm', 'key') are values the
+        caller already has from rekordbox; they are left out of the result."""
         filename = os.path.basename(filepath)
 
         try:
@@ -74,7 +78,7 @@ class AudioAnalyzer:
 
             result = {}
             if not skip_basic:
-                features = self._extract_features(audio)
+                features = self._extract_features(audio, skip_components)
                 # 確実に引数を渡す
                 result = self._format_result(filepath, tag, features, external_lyrics=external_lyrics)
             else:
@@ -210,18 +214,19 @@ class AudioAnalyzer:
         try: return es.MonoLoader(filename=filepath, sampleRate=constants.SAMPLE_RATE)()
         except: return None
 
-    def _extract_features(self, audio: np.ndarray) -> Dict[str, Any]:
-        report("rhythm", "BPM・ビート位置を解析しています")
-        bpm, ticks, confidence, _, _ = self.rhythm_extractor(audio)
-        ticks = align_beats(audio, ticks, constants.SAMPLE_RATE)
-        report("key", "キーを解析しています")
-        key, scale, _ = self.key_extractor(audio)
+    def _extract_features(self, audio: np.ndarray, skip: Tuple[str, ...] = ()) -> Dict[str, Any]:
+        features: Dict[str, Any] = {}
+        if "rhythm" not in skip:
+            report("rhythm", "BPM・ビート位置を解析しています")
+            bpm, ticks, confidence, _, _ = self.rhythm_extractor(audio)
+            ticks = align_beats(audio, ticks, constants.SAMPLE_RATE)
+            features.update(bpm=bpm, beat_positions=ticks, bpm_confidence=confidence)
+        if "key" not in skip:
+            report("key", "キーを解析しています")
+            key, scale, _ = self.key_extractor(audio)
+            features.update(key=key, scale=scale)
         report("timbre", "音量・音色の詳細を解析しています")
-        return {
-            "bpm": bpm, "beat_positions": ticks, "bpm_confidence": confidence,
-            "key": key, "scale": scale,
-            **self._extract_timbre_features(audio),
-        }
+        return {**features, **self._extract_timbre_features(audio)}
 
     def _extract_timbre_features(self, audio: np.ndarray) -> Dict[str, Any]:
         # Loudness, loudness range, rolloff, flux and contrast had no reader
@@ -240,6 +245,18 @@ class AudioAnalyzer:
         # 正確な変数名で処理
         lyrics_val = external_lyrics if external_lyrics else (tag.extra.get('lyrics') if hasattr(tag, 'extra') else None)
         
+        rhythm, key = "bpm" in features, "key" in features
+        computed = [name for name, done in (("rhythm", rhythm), ("key", key), ("timbre", True)) if done]
+        extra: Dict[str, Any] = {
+            "analysis_components": {name: constants.COMPONENT_VERSIONS[name] for name in computed},
+        }
+        if rhythm:
+            extra.update({
+                "bpm_confidence": round(safe_s(features['bpm_confidence']), 2),
+                "playback_grid": playback_grid(features['beat_positions'], features['bpm'], float(features['bpm_confidence'])),
+                "playback_grid_version": GRID_VERSION,
+                "beat_positions": features['beat_positions'].tolist() if hasattr(features['beat_positions'], 'tolist') else []
+            })
         return {
             "filepath": filepath,
             "title": (tag.title or "").strip() or os.path.splitext(os.path.basename(filepath))[0],
@@ -249,18 +266,13 @@ class AudioAnalyzer:
             "year": int(str(tag.year).strip()[:4]) if tag.year and str(tag.year).strip()[:4].isdigit() else None,
             "lyrics": lyrics_val,
             "duration": safe_s(tag.duration or 0.0),
-            "bpm": round(float(features['bpm']), 2),
-            "key": f"{features['key']} {features['scale']}",
-            "scale": features['scale'],
+            # Skipped components are filled from rekordbox by the caller.
+            "bpm": round(float(features['bpm']), 2) if rhythm else 0.0,
+            "key": f"{features['key']} {features['scale']}" if key else "",
+            "scale": features['scale'] if key else "",
             "energy": round(norm(features['energy'], *constants.NORM_ENERGY), 2),
             "danceability": round(norm(features['danceability'], *constants.NORM_DANCEABILITY), 2),
             "brightness": round(norm(features['brightness'], *constants.NORM_BRIGHTNESS), 2),
             "noisiness": round(norm(features['noisiness'], *constants.NORM_NOISINESS), 2),
-            "features_extra": {
-                "analysis_components": {name: constants.COMPONENT_VERSIONS[name] for name in ("rhythm", "key", "timbre")},
-                "bpm_confidence": round(safe_s(features['bpm_confidence']), 2),
-                "playback_grid": playback_grid(features['beat_positions'], features['bpm'], float(features['bpm_confidence'])),
-                "playback_grid_version": GRID_VERSION,
-                "beat_positions": features['beat_positions'].tolist() if hasattr(features['beat_positions'], 'tolist') else []
-            }
+            "features_extra": extra,
         }
