@@ -129,8 +129,18 @@ def test_save_takes_bpm_from_rekordbox_when_it_has_one(session, mocker, case, bp
     assert extra["analysis_components"]["sources"]["bpm"] == source
     assert extra.get("analysis_bpm") == (64.0 if source == "rekordbox" else None)
     assert result["bpm"] == 64.0  # the caller's result is not modified
-    # The key flag is off by default: own detection stays.
-    assert (track.key, extra["analysis_components"]["sources"]["key"]) == ("A minor", "own")
+    # The key flag is on by default: rekordbox's key wins whenever it has one.
+    expected_key = ("F minor", "rekordbox") if case in {"bpm", "bpm_zero"} else ("A minor", "own")
+    assert (track.key, extra["analysis_components"]["sources"]["key"]) == expected_key
+
+
+def test_save_keeps_own_key_when_the_key_flag_is_off(session, mocker):
+    use_rekordbox_keys(session, enabled=False)
+    use_rekordbox(mocker, "bpm")
+    track_id = IngestionRepository()._prepare_track_models(session, analysis_result())
+    session.commit()
+    track, extra = saved(session, track_id)
+    assert (track.bpm, track.key, extra["analysis_components"]["sources"]["key"]) == (128.0, "A minor", "own")
 
 
 @pytest.mark.parametrize("case, key, scale, source", [
