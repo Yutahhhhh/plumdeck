@@ -13,6 +13,30 @@ interface MetadataImportDialogProps {
   onExecute: () => void;
 }
 
+/** Rows as they will look after the import (unchanged fields keep the current value). */
+function previewTracks(analysis: MetadataAnalysisResult): Track[] {
+  return analysis.updates.map((u, idx) => ({
+    id: idx,
+    filepath: u.filepath,
+    title: u.new.title ?? u.current.title,
+    artist: u.new.artist ?? u.current.artist,
+    album: u.new.album ?? u.current.album,
+    genre: u.new.genre ?? u.current.genre,
+    subgenre: u.new.subgenre ?? u.current.subgenre,
+    year: u.new.year ?? u.current.year,
+    is_genre_verified: u.new.is_genre_verified ?? u.current.is_genre_verified,
+    bpm: u.new.bpm ?? u.current.bpm,
+    key: u.new.key || u.current.key,
+    duration: 0,
+    energy: 0,
+    danceability: 0,
+    brightness: 0,
+    contrast: 0,
+    noisiness: 0,
+    loudness: 0,
+  }));
+}
+
 export function MetadataImportDialog({
   open,
   onOpenChange,
@@ -29,27 +53,7 @@ export function MetadataImportDialog({
 
   useEffect(() => {
     if (analysis?.updates) {
-      const allTracks = analysis.updates.map((u, idx) => ({
-        id: idx,
-        filepath: u.filepath,
-        title: u.new.title ?? u.current.title,
-        artist: u.new.artist ?? u.current.artist,
-        album: u.new.album ?? u.current.album,
-        genre: u.new.genre ?? u.current.genre,
-        subgenre: u.new.subgenre ?? u.current.subgenre,
-        year: u.new.year ?? u.current.year,
-        is_genre_verified:
-          u.new.is_genre_verified ?? u.current.is_genre_verified,
-        bpm: 0,
-        key: "",
-        duration: 0,
-        energy: 0,
-        danceability: 0,
-        brightness: 0,
-        contrast: 0,
-        noisiness: 0,
-        loudness: 0,
-      }));
+      const allTracks = previewTracks(analysis);
 
       // Reset pagination
       setPage(1);
@@ -60,26 +64,7 @@ export function MetadataImportDialog({
   const loadMoreTracks = useCallback(() => {
     if (!analysis?.updates) return;
 
-    const allTracks = analysis.updates.map((u, idx) => ({
-      id: idx,
-      filepath: u.filepath,
-      title: u.new.title ?? u.current.title,
-      artist: u.new.artist ?? u.current.artist,
-      album: u.new.album ?? u.current.album,
-      genre: u.new.genre ?? u.current.genre,
-      subgenre: u.new.subgenre ?? u.current.subgenre,
-      year: u.new.year ?? u.current.year,
-      is_genre_verified: u.new.is_genre_verified ?? u.current.is_genre_verified,
-      bpm: 0,
-      key: "",
-      duration: 0,
-      energy: 0,
-      danceability: 0,
-      brightness: 0,
-      contrast: 0,
-      noisiness: 0,
-      loudness: 0,
-    }));
+    const allTracks = previewTracks(analysis);
 
     const nextPage = page + 1;
     const nextTracks = allTracks.slice(0, nextPage * ITEMS_PER_PAGE);

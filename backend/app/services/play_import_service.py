@@ -14,7 +14,7 @@ from sqlalchemy import text
 from sqlmodel import Session, select
 
 from domain.constants import SUPPORTED_EXTENSIONS
-from domain.models.track import Track, TrackEmbedding
+from domain.models.track import Track, TrackEmbedding, TrackAnalysis
 from utils.ingestion import (
     has_completed_analysis_for_profile,
     has_completed_analysis_result,
@@ -202,6 +202,15 @@ def process_batch(batch_id: str) -> None:
             print(f"CRITICAL: could not finalize failed import {batch_id}: {cleanup_error}", flush=True)
     finally:
         analysis_progress.clear(batch_id)
+        try:
+            # Playable tracks get their optional embedding from the background
+            # job; it starts once this import releases the analysis slot.
+            from app.services.analysis_job_service import analysis_job_service
+            with db_connection.database_activity, Session(db_connection.engine) as session:
+                track_ids = list(session.exec(text("SELECT DISTINCT track_id FROM import_items WHERE batch_id=:id AND load_ready AND track_id IS NOT NULL"), params={"id": batch_id}).scalars())
+            analysis_job_service.enqueue_embedding(track_ids=track_ids)
+        except Exception as exc:
+            print(f"WARNING: could not queue optional embeddings: {exc}", flush=True)
         analysis_coordinator.release(token)
 
 
@@ -266,7 +275,7 @@ def _process_batch(batch_id: str) -> None:
                     if known and known[0] and known[0] != identity:
                         raise ValueError("登録済み音源の内容が変化しています。参照修復または再解析を行ってください")
                 reused = bool(track and has_completed_analysis_for_profile(
-                    track, existing_embedding, reuse_profile
+                    track, existing_embedding, reuse_profile, session.get(TrackAnalysis, track.id)
                 ))
                 if not track:
                     matches = _rows(session.exec(text("""
@@ -277,7 +286,7 @@ def _process_batch(batch_id: str) -> None:
                         track = session.get(Track, matches[0]["id"])
                         existing_embedding = session.get(TrackEmbedding, track.id) if track else None
                         reused = bool(track and has_completed_analysis_for_profile(
-                            track, existing_embedding, reuse_profile
+                            track, existing_embedding, reuse_profile, session.get(TrackAnalysis, track.id)
                         ))
                     elif len(matches) > 1:
                         raise ValueError("同じ内容の既存曲が複数あり、選択が必要です")

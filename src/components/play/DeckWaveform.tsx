@@ -32,6 +32,8 @@ type Props = {
   onScratchGrab?: () => { gestureId: string; positionMs: number } | null;
   scratching?: boolean;
   loopRegion?: LoopRegion | null;
+  /** Manual loop IN waiting for OUT: drawn as a dotted line. */
+  pendingLoopInMs?: number | null;
   /** 曲頭より前に置いた無音の助走（ms）。0 なら助走なし。 */
 };
 const NO_CUES: (number | null)[] = [];
@@ -52,7 +54,7 @@ type DragGesture = {
   /** 0 より大きければ、このジェスチャーはスクラッチではなくプリロール調整に切り替わっている。 */
 };
 
-export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform, trackId, positionMs, durationMs, layout, side, color, onSeek, mode = "overview", bpm, beatgridOffsetMs = 0, beatsPerBar = 4, hotCues = NO_CUES, label, compact, playing = false, rate = 1, beatTimesMs, beatNumbers, gridAvailable = true, onGridShift, onScratch, onScratchError, onBackspin, onScratchGrab, scratching = false, loopRegion = null }: Props) {
+export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform, trackId, positionMs, durationMs, layout, side, color, onSeek, mode = "overview", bpm, beatgridOffsetMs = 0, beatsPerBar = 4, hotCues = NO_CUES, label, compact, playing = false, rate = 1, beatTimesMs, beatNumbers, gridAvailable = true, onGridShift, onScratch, onScratchError, onBackspin, onScratchGrab, scratching = false, loopRegion = null, pendingLoopInMs = null }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sizeRef = useRef({ width: 0, height: 0 });
   const paintRef = useRef<() => void>(() => undefined);
@@ -335,6 +337,11 @@ export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform
             ctx.textBaseline = "alphabetic";
           }
         }
+      }
+      if (pendingLoopInMs !== null && pendingLoopInMs >= startMs && pendingLoopInMs <= startMs + span) {
+        ctx.setLineDash([2, 3]);
+        line((pendingLoopInMs - startMs) / span * length, "#ff6b6b", compact ? 1 : 2);
+        ctx.setLineDash([]);
       }
       if (mode === "scroll" && gridAvailable && (beatTimesMs?.length || bpm && bpm > 0)) {
         const beatMs = bpm ? 60_000 / bpm : 0;

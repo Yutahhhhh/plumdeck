@@ -10,7 +10,7 @@
   height: auto;
   min-height: 0;
   color: var(--dj-text, #d8dadd);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .dj-grid-editor button,
@@ -22,8 +22,8 @@
   border-radius: 2px;
   background: #17191c;
   color: #c8cbd0;
-  font-size: 9px;
-  line-height: 18px;
+  font-size: 10px;
+  line-height: 19px;
 }
 
 .dj-grid-editor button { padding: 0 4px; white-space: nowrap; }
@@ -41,19 +41,19 @@
 .dj-grid-editor__row { display: flex; min-width: 0; align-items: center; gap: 2px; }
 .dj-grid-editor__row { flex-wrap: wrap; }
 .dj-grid-editor__head { color: var(--dj-faint, #6a6e75); }
-.dj-grid-editor__head strong { color: #b9bdc3; font-size: 9px; letter-spacing: .1em; }
+.dj-grid-editor__head strong { color: #b9bdc3; font-size: 10px; letter-spacing: .1em; }
 .dj-grid-editor__head button { height: 16px; line-height: 14px; }
-.dj-grid-editor__head button:nth-last-child(2) { margin-left: auto; font-size: 8px; }
-.dj-grid-editor__unsaved { margin-left: 4px; color: #e2b36f; font-size: 8px; letter-spacing: .04em; }
+.dj-grid-editor__head button:nth-last-child(2) { margin-left: auto; font-size: 10px; }
+.dj-grid-editor__unsaved { margin-left: 4px; color: #e2b36f; font-size: 10px; letter-spacing: .04em; }
 .dj-grid-editor__close { width: 18px; padding: 0 !important; color: var(--dj-dim, #8b8f96); font-size: 13px !important; }
 
-.dj-grid-editor__row > label { flex: 0 0 auto; color: var(--dj-faint, #6a6e75); font-size: 8px; font-weight: 600; white-space: nowrap; }
+.dj-grid-editor__row > label { flex: 0 0 auto; color: var(--dj-faint, #6a6e75); font-size: 10px; font-weight: 600; white-space: nowrap; }
 .dj-grid-editor__number { width: 58px; }
 .dj-grid-editor__row > select:not(.dj-grid-editor__step):not(.dj-grid-editor__scope) { width: 34px; }
 .dj-grid-editor__scope { width: auto; flex: 0 0 auto; }
 .dj-grid-editor__row--offset { gap: 2px; }
 .dj-grid-editor__offset { width: 59px; }
-.dj-grid-editor__unit { padding-right: 3px; color: #80858c; font-size: 7px; pointer-events: none; }
+.dj-grid-editor__unit { padding-right: 3px; color: #80858c; font-size: 10px; pointer-events: none; }
 .dj-grid-editor__step { width: 50px; flex-shrink: 0; }
 .dj-grid-editor__row--offset > button { flex: 0 0 auto; padding-inline: 4px; }
 .dj-grid-editor__cancel { margin-left: auto; color: #a6aab0 !important; }
@@ -73,8 +73,8 @@
   border-radius: 2px;
   background: #351f1ee8;
   color: #efb0aa;
-  font-size: 8px;
-  line-height: 12px;
+  font-size: 10px;
+  line-height: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
   pointer-events: none;
@@ -89,8 +89,8 @@
 .dj-deck-controls:has(.dj-grid-editor) { height: 132px; min-height: 132px; grid-template-columns: minmax(0, 1fr); grid-template-areas: "perf"; }
 .dj-deck-controls:has(.dj-grid-editor) > :not(.dj-perf) { display: none; }
 .dj-deck-controls:has(.dj-grid-editor) .dj-perf-main { overflow: auto; }
-.dj-grid-editor__source { color: #93b2dc; font-size: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.dj-grid-editor__hint { color: #8a949e; font-size: 8px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dj-grid-editor__source { color: #93b2dc; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dj-grid-editor__hint { color: #8a949e; font-size: 10px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dj-grid-editor__row > select { flex-shrink: 0; width: auto !important; }
 .dj-grid-editor__head { gap: 4px; }
 .dj-grid-editor__head > button:first-of-type { margin-left: auto; }
@@ -101,7 +101,7 @@
 .dj-workspace--compact .dj-grid-editor__unsaved { margin-left: 2px; }
 
 @media (max-width: 1280px) {
-  .dj-grid-editor { font-size: 8px; }
+  .dj-grid-editor { font-size: 10px; }
   .dj-grid-editor__row { gap: 1px; }
   .dj-grid-editor__number { width: 54px; }
   .dj-grid-editor__offset { width: 55px; }
@@ -111,6 +111,6 @@
 
 /* rekordbox の GRID EDIT に合わせた記号ボタン。等幅で ||| の位置を揃える。 */
 .dj-grid-editor__row button { font-variant-ligatures: none; white-space: nowrap; }
-.dj-grid-editor__bars { min-width: 54px; padding: 0 4px; border: 1px solid #34383f; border-radius: 2px; background: #17191c; color: #d3d7dd; font-size: 9px; text-align: center; line-height: 18px; }
+.dj-grid-editor__bars { min-width: 54px; padding: 0 4px; border: 1px solid #34383f; border-radius: 2px; background: #17191c; color: #d3d7dd; font-size: 10px; text-align: center; line-height: 19px; }
 .dj-grid-editor__downbeat { color: #e2564b; font-size: 12px; line-height: 1; }
 .dj-grid-editor__row button.is-on { border-color: #2f6fd0; background: #2f6fd0; color: #fff; }

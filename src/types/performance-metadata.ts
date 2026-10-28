@@ -29,6 +29,8 @@ export interface PerformanceMetadata {
   loops: PerformanceLoop[];
   beat_grid: PerformanceBeatGrid | null;
   grid_warning?: string | null;
+  /** The missing grid is analyzed in the background; GET again for it. */
+  grid_pending?: boolean;
   created_at: string | null;
   updated_at: string | null;
 }

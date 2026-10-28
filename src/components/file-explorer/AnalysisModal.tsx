@@ -65,7 +65,8 @@ export function AnalysisModal({
           <DialogTitle>Confirm Analysis</DialogTitle>
           <DialogDescription>
             You are about to analyze {selectedPaths.size} items. This process
-            extracts BPM, Key, and MusiCNN embeddings for similarity search.
+            extracts BPM, Key, timbre and the waveform. MusiCNN embeddings for
+            similarity search are computed in the background afterwards.
           </DialogDescription>
         </DialogHeader>
 

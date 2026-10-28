@@ -5,6 +5,8 @@ import { PAD_MODES, type PadMode } from "./PerformancePads";
 
 type Props = {
   value: PadMode;
+  /** Modes to offer; defaults to all. */
+  modes?: typeof PAD_MODES;
   disabled?: boolean;
   deckId: string;
   onChange: (mode: PadMode) => void;
@@ -14,15 +16,15 @@ type Props = {
  * rekordbox の `HOT CUE ∨` セレクタ。ネイティブ select だと macOS のポップアップが
  * そのまま出てデッキの見た目から外れるので、同じ形のリストボックスを自前で出す。
  */
-export function PadModeSelect({ value, disabled, deckId, onChange }: Props) {
+export function PadModeSelect({ value, modes = PAD_MODES, disabled, deckId, onChange }: Props) {
   const [open, setOpen] = useState(false);
-  const [cursor, setCursor] = useState(() => PAD_MODES.findIndex((entry) => entry.mode === value));
+  const [cursor, setCursor] = useState(() => modes.findIndex((entry) => entry.mode === value));
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLUListElement>(null);
   // デッキ側が overflow:hidden なので、メニューは body に出して座標で置く。
   const [anchor, setAnchor] = useState({ left: 0, top: 0 });
-  const label = PAD_MODES.find((entry) => entry.mode === value)?.label ?? "HOT CUE";
+  const label = modes.find((entry) => entry.mode === value)?.label ?? "HOT CUE";
 
   useEffect(() => {
     if (!open) return;
@@ -34,7 +36,7 @@ export function PadModeSelect({ value, disabled, deckId, onChange }: Props) {
     return () => document.removeEventListener("mousedown", onPointerDown);
   }, [open]);
 
-  useEffect(() => { if (open) setCursor(PAD_MODES.findIndex((entry) => entry.mode === value)); }, [open, value]);
+  useEffect(() => { if (open) setCursor(modes.findIndex((entry) => entry.mode === value)); }, [open, value]);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -57,7 +59,7 @@ export function PadModeSelect({ value, disabled, deckId, onChange }: Props) {
   }, [open]);
 
   const commit = (index: number) => {
-    const entry = PAD_MODES[index];
+    const entry = modes[index];
     if (!entry) return;
     onChange(entry.mode);
     setOpen(false);
@@ -77,11 +79,11 @@ export function PadModeSelect({ value, disabled, deckId, onChange }: Props) {
       ref={(node) => { menu.current = node; node?.focus(); }}
       onKeyDown={(event) => {
         if (event.key === "Escape") { event.preventDefault(); setOpen(false); return; }
-        if (event.key === "ArrowDown") { event.preventDefault(); setCursor((index) => Math.min(PAD_MODES.length - 1, index + 1)); return; }
+        if (event.key === "ArrowDown") { event.preventDefault(); setCursor((index) => Math.min(modes.length - 1, index + 1)); return; }
         if (event.key === "ArrowUp") { event.preventDefault(); setCursor((index) => Math.max(0, index - 1)); return; }
         if (event.key === "Enter" || event.key === " ") { event.preventDefault(); commit(cursor); }
       }}>
-      {PAD_MODES.map((entry, index) => <li key={entry.mode} role="option" aria-selected={entry.mode === value}
+      {modes.map((entry, index) => <li key={entry.mode} role="option" aria-selected={entry.mode === value}
         className={cn("dj-pad-mode-option", entry.mode === value && "is-current", index === cursor && "is-cursor")}
         onMouseEnter={() => setCursor(index)}
         onClick={() => commit(index)}>

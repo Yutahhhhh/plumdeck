@@ -101,8 +101,9 @@ class PerformanceMetadataAppService:
         track = self._track(track_id)
         item = self._item(track_id, self.repository.get(track_id))
         if item["beat_grid"] is None:
-            candidate, warning = GridCandidateService(self.session).automatic(track)
+            candidate, warning, pending = GridCandidateService(self.session).automatic(track)
             item["grid_warning"] = warning
+            item["grid_pending"] = pending
             if candidate:
                 item["beat_grid"] = candidate.model_dump(mode="json")
         return item

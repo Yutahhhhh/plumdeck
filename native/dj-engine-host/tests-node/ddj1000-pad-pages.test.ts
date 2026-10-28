@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {BEAT_JUMP_PAGES,BEAT_LOOP_PAGES,keyPad,padPreset} from "../../../src/services/midi/pad-presets.ts";
-import {getPadSelection,selectPads} from "../../../src/services/midi/pad-state.ts";
+import {BEAT_JUMP_PAGES,BEAT_LOOP_PAGES,beatJumpPages,keyPad,padPreset} from "../../../src/services/midi/pad-presets.ts";
+import {getPadSelection,PAD_MODE_LAST_PAGE,selectPads} from "../../../src/services/midi/pad-state.ts";
 import {coloredPadFeedback,padColor,padColorCode} from "../../../src/services/midi/pad-colors.ts";
 import {jogSetting} from "../../../src/services/midi/jog-settings.ts";
 import type {EngineSnapshot} from "../../../src/types/dj-engine.ts";
@@ -24,7 +24,11 @@ test("each supported pad assignment exposes two distinct pages of eight slots",(
   }
   for(const mode of [1,5]) assert.notDeepEqual(Array.from({length:8},(_,i)=>padPreset(mode,i)),Array.from({length:8},(_,i)=>padPreset(mode,i+8)));
   assert.notDeepEqual(Array.from({length:8},(_,i)=>keyPad(0,i)),Array.from({length:8},(_,i)=>keyPad(1,i)));
-  for(let mode=0;mode<8;mode++) { selectPads("A",mode,9);assert.equal(getPadSelection("A").page,1); }
+  for(let mode=0;mode<8;mode++) { selectPads("A",mode,9);assert.equal(getPadSelection("A").page,PAD_MODE_LAST_PAGE[mode]); }
+  // KEY SHIFT covers -12..+12 over four pages; BEAT JUMP adds FINE and 128 on hosts with range v2.
+  const keys=[0,1,2,3].flatMap(page=>Array.from({length:8},(_,i)=>keyPad(page,i))).filter(v=>v!==null).sort((a,b)=>a!-b!);
+  assert.deepEqual(keys,Array.from({length:25},(_,i)=>i-12));
+  assert.equal(beatJumpPages([]).length,2);assert.deepEqual(beatJumpPages(["deck.loop.range.v2"])[2],[-1/8,1/8,-1/4,1/4,-1/2,1/2,-128,128]);
   selectPads("A",0);
 });
 test("pad output uses explicit color indices, propagates saved cue colors and deduplicates addresses",()=>{

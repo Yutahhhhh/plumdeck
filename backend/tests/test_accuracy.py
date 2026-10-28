@@ -64,12 +64,11 @@ def test_musicnn_receives_resampled_audio_with_preserved_pitch(mocker):
     analyzer = AudioAnalyzer.__new__(AudioAnalyzer)
     audio = np.sin(2 * np.pi * 440 * np.arange(44100 * 4) / 44100).astype(np.float32)
     mocker.patch.object(analyzer, "_load_audio", return_value=audio)
-    mocker.patch.object(analyzer, "_extract_metadata", return_value=MagicMock())
-    mocker.patch.object(analyzer, "_extract_features", return_value={})
-    mocker.patch.object(analyzer, "_format_result", return_value={"features_extra": {"bpm_confidence": 0.8}})
     analyzer.embedding_algo = MagicMock(return_value=np.array([[1., 0.], [0., 1.]]))
+    analyzer._embedding_initialized = True
 
-    result = analyzer.analyze("/accuracy/example.wav", skip_waveform=True)
+    # Embeddings come from the background job's embedding-only analysis.
+    result = analyzer.analyze_selected("/accuracy/example.wav", ["embedding"])
 
     received = analyzer.embedding_algo.call_args.args[0]
     assert len(received) == 16000 * 4
@@ -78,16 +77,14 @@ def test_musicnn_receives_resampled_audio_with_preserved_pitch(mocker):
     assert result["embedding"] == [0.5, 0.5]
     assert result["features_extra"]["embedding_sample_rate"] == 16000
     assert result["features_extra"]["embedding_pipeline_version"] == "musicnn-16khz-v1"
-    assert result["features_extra"]["bpm_confidence"] == 0.8
 
 
 def test_bpm_output_preserves_hundredths():
     analyzer = AudioAnalyzer.__new__(AudioAnalyzer)
     tag = MagicMock(year=None, duration=180, title="T", artist="A", album="B", genre="G", extra={})
     features = dict(
-        bpm=127.87, key="C", scale="major", bpm_confidence=1, key_strength=1,
-        beat_positions=[], energy=0.1, danceability=1, brightness=2000,
-        noisiness=0.01, flux=0.1, loudness=-10, loudness_range=5, rolloff=4000,
+        bpm=127.87, key="C", scale="major", bpm_confidence=1,
+        beat_positions=[], energy=0.1, danceability=1, brightness=2000, noisiness=0.01,
     )
     assert analyzer._format_result("/test.wav", tag, features)["bpm"] == 127.87
 
@@ -111,7 +108,8 @@ def test_reanalysis_updates_all_audio_features_and_model_provenance(session):
                     "contrast", "loudness", "loudness_range", "spectral_flux", "spectral_rolloff"):
         assert getattr(track, feature) == pytest.approx(result[feature])
     assert session.get(TrackEmbedding, track.id).model_name == "msd-musicnn-1"
-    assert session.get(TrackAnalysis, track.id).features_extra["embedding_pipeline_version"] == "musicnn-16khz-v1"
+    # Diagnostic keys stay in the worker result but are not persisted.
+    assert session.get(TrackAnalysis, track.id).features_extra == {}
 
     # A later metadata-only edit must keep the newly measured features.
     repo._prepare_track_models(session, {"filepath": track.filepath, "title": "New title"})

@@ -16,6 +16,7 @@ def analyze_file(path):
     else:
         from domain.services.analysis.portable import PortableAudioAnalyzer
         result = PortableAudioAnalyzer().analyze_light(path)
+    embedded = _background_embedding(path)
     forbidden = {"librosa", "numba", "tensorflow"}.intersection(sys.modules)
     assert not forbidden, f"Light worker loaded heavy dependencies: {forbidden}"
     assert result is not None
@@ -23,9 +24,9 @@ def analyze_file(path):
     assert result["key"] == "C major", result["key"]
     assert result["analysis_level"] == "light"
     import numpy as np
-    embedding = np.asarray(result["embedding"])
-    assert embedding.shape == (200,) and np.isfinite(embedding).all() and np.linalg.norm(embedding) > 0
-    assert result["features_extra"]["embedding_patch_count"] == 3
+    assert "embedding" not in result
+    from utils.ingestion import has_completed_analysis_result
+    assert has_completed_analysis_result(result)
     ticks = np.asarray(result["features_extra"]["beat_positions"])
     assert ticks[0] < .3 and ticks[-1] > 299
     assert np.max(np.abs(np.diff(ticks) - 60 / 126)) < .015
@@ -39,8 +40,27 @@ def analyze_file(path):
     if sys.platform != "win32":
         import resource
         memory["peak_rss_mb"] = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 * 1024 if sys.platform == "darwin" else 1024), 1)
-    return {"bpm": result["bpm"], "key": result["key"], "beats": len(ticks), "embedding_dimensions": len(embedding), **memory,
+    return {"bpm": result["bpm"], "key": result["key"], "beats": len(ticks), **embedded, **memory,
             "worker_seconds": round(time.monotonic() - started, 3)}
+
+
+def _background_embedding(path):
+    """The background job's embedding path: bounded ONNX windows, no librosa."""
+    import numpy as np
+    from domain.services.analysis.constants import EMBEDDING_MODEL
+    if sys.platform == "win32":
+        from ingest import get_analyzer
+        analyzer = get_analyzer()  # the factory the background job uses
+    else:
+        from domain.services.analysis.portable import PortableAudioAnalyzer
+        analyzer = PortableAudioAnalyzer()
+    started = time.monotonic()
+    result = analyzer.analyze_selected(path, ["embedding"])
+    embedding = np.asarray(result["embedding"], dtype=float)
+    assert embedding.shape == (200,) and np.isfinite(embedding).all() and np.linalg.norm(embedding) > 0
+    assert result["embedding_model"] == EMBEDDING_MODEL, result["embedding_model"]
+    assert result["features_extra"]["embedding_patch_count"] == 3
+    return {"embedding_dimensions": len(embedding), "embedding_seconds": round(time.monotonic() - started, 3)}
 
 
 def run():

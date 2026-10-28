@@ -11,7 +11,12 @@ def audit(path, check_files=False):
     try:
         protected = {}
         for table in ("tracks", "lyrics", "setlists", "setlist_tracks"):
-            count, fingerprint = con.execute(f"SELECT COUNT(*), BIT_XOR(HASH(t)) FROM {table} t").fetchone()
+            # Hash columns in name order: a rebuilt file may order them differently.
+            columns = sorted(row[0] for row in con.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_schema = 'main' AND table_name = ?",
+                [table]).fetchall())
+            values = ", ".join('"' + column.replace('"', '""') + '"' for column in columns)
+            count, fingerprint = con.execute(f"SELECT COUNT(*), BIT_XOR(HASH({values})) FROM {table}").fetchone()
             protected[table] = {"count": count, "fingerprint": str(fingerprint)}
         count, fingerprint = con.execute("SELECT COUNT(*), BIT_XOR(HASH(track_id, beats_f32, waveform_u8)) FROM track_analyses").fetchone()
         protected["beats_and_waveforms"] = {"count": count, "fingerprint": str(fingerprint)}

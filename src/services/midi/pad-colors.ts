@@ -9,12 +9,13 @@ const PALETTE = [
   ["#ff923a",36], ["#ff435a",41], ["#ed64d5",52], ["#a878ff",60], ["#ffffff",64],
 ] as const;
 export const CUE_COLORS = ["#00df80","#ffe052","#ff923a","#ff435a","#ed64d5","#a878ff","#448aff","#40cfff"];
-export function padColor(mode:number,slot:number,custom?:string|null):string {
+// PAD FX colour by effect family: delays blue, rolls/gates green, space violet,
+// filters yellow, modulation magenta/cyan, dirt orange/red, noise white.
+const FX_COLORS:Record<string,string>={echo:"#448aff",lowcutecho:"#448aff",mtdelay:"#448aff",spiral:"#40cfff",reverb:"#a878ff",flanger:"#40cfff",enigmajet:"#40cfff",phaser:"#ed64d5",
+  filter:"#ffe052",moogladder4filter:"#ffe052",autopan:"#00df80",tremolo:"#00df80",roll:"#00df80",sliproll:"#00df80",bitcrusher:"#ff923a",distortion:"#ff435a",pitchshift:"#ed64d5",whitenoise:"#ffffff"};
+export function padColor(mode:number,slot:number,custom?:string|null,capabilities:readonly string[]=[]):string {
   if(mode===0) return custom && /^#[0-9a-f]{6}$/i.test(custom)?custom:CUE_COLORS[slot&7];
-  if(mode===1 || mode===5) {
-    const colors:Record<string,string>={echo:"#448aff",reverb:"#a878ff",flanger:"#40cfff",filter:"#ffe052",phaser:"#ed64d5",autopan:"#00df80",bitcrusher:"#ff923a",distortion:"#ff435a",tremolo:"#ed64d5",moogladder4filter:"#ffe052"};
-    return colors[padPreset(mode,slot).effect];
-  }
+  if(mode===1 || mode===5) return FX_COLORS[padPreset(mode,slot,capabilities).effect] ?? "#448aff";
   return mode===3?"#ed64d5":mode===6?"#ff923a":mode===2?"#448aff":mode===4?"#00df80":"#40cfff";
 }
 export function padColorCode(color:string):number {
@@ -35,7 +36,7 @@ export function coloredPadFeedback(messages:number[][], snapshot:EngineSnapshot|
     const mode=selected.software?selected.mode:note>>4,slot=selected.software?selected.page*8+(note&7):note&15;
     const state=snapshot?.decks[deck];
     const on=mode===0?state?.hotCues[slot]!=null:mode===3?["ready","playing"].includes(sampler?.slots[(slot&7)+(ch%2===0?8:0)]?.status??""):Boolean(state?.track);
-    const value=on?padColorCode(padColor(mode,slot,colors?.[deck]?.[slot])):0;
+    const value=on?padColorCode(padColor(mode,slot,colors?.[deck]?.[slot],snapshot?.engine?.capabilities)):0;
     // Include the SHIFT pad channel. One canonical value per address prevents
     // core/page feedback duplicates from repeatedly repainting the same pad.
     for(const output of [0x97+ch*2,0x98+ch*2]) result.set(`${output}:${note}`,[output,note,value]);

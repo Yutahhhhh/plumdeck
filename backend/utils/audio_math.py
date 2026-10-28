@@ -67,6 +67,23 @@ def normalize_key(key_str: Optional[str]) -> Optional[str]:
     return KEY_TO_CAMELOT.get(f"{note.upper()}{accidental.lower()} {mode}")
 
 
+# The spelling tracks.key stores: what the key detectors emit ('F minor',
+# 'C# minor', 'Eb major'), so sorting, filters and KEY SYNC see one form.
+CAMELOT_TO_KEY = {
+    "1A": "Ab minor", "1B": "B major", "2A": "Eb minor", "2B": "F# major",
+    "3A": "Bb minor", "3B": "C# major", "4A": "F minor", "4B": "Ab major",
+    "5A": "C minor", "5B": "Eb major", "6A": "G minor", "6B": "Bb major",
+    "7A": "D minor", "7B": "F major", "8A": "A minor", "8B": "C major",
+    "9A": "E minor", "9B": "G major", "10A": "B minor", "10B": "D major",
+    "11A": "F# minor", "11B": "A major", "12A": "C# minor", "12B": "E major",
+}
+
+
+def key_name(key_str: Optional[str]) -> Optional[str]:
+    """Spell any accepted key ('Fm', 'Dbm', '4A') as stored ('F minor'); None if unreadable."""
+    return CAMELOT_TO_KEY.get(normalize_key(key_str) or "")
+
+
 def bpm_distance(target_bpm: float, candidate_bpm: float) -> float:
     """Symmetric tempo distance, allowing one half/double-time interpretation.
 
@@ -81,18 +98,28 @@ def bpm_distance(target_bpm: float, candidate_bpm: float) -> float:
     ratio = math.log2(candidate) - math.log2(target)
     return min(abs(ratio + shift) for shift in (-1, 0, 1))
 
+# Legacy recommenders, aligned with Assist: key carries no weight (the DJ
+# does not match keys) and a missing embedding is left out, not scored 0, with
+# the remaining weights renormalized (owner decision). Known cost: with only
+# tempo left, a pending track tends to outrank measured ones (99.9% of the top
+# 20 with 15% of embeddings removed); median imputation awaits owner sign-off.
+DEFAULT_MIXABILITY_WEIGHTS = {"bpm": 0.35, "key": 0.0, "vector": 0.4}
+# Set builders (Setlist Auto / phased sets) weigh tempo over timbre.
+SET_TRANSITION_WEIGHTS = {"bpm": 0.4, "key": 0.0, "vector": 0.3}
+
+
 def calculate_mixability_score(
     target_bpm: float, 
     target_key: Optional[str], 
     candidate_bpm: float, 
     candidate_key: Optional[str],
-    vector_similarity: float = 0.0,
+    vector_similarity: Optional[float] = None,
     weights: dict = None
 ) -> float:
     """
     Calculate a mixability score (0.0 - 1.0) between two tracks.
     """
-    w = weights or {"bpm": 0.35, "key": 0.25, "vector": 0.4}
+    w = DEFAULT_MIXABILITY_WEIGHTS if weights is None else weights
     
     # 1. BPM Score
     # Log ratios make A -> B and B -> A equally compatible.
@@ -114,8 +141,11 @@ def calculate_mixability_score(
     else:
         key_score = 0.5
         
-    # 3. Vector Score
-    vec_score = max(0.0, min(1.0, vector_similarity))
-    
-    final_score = (bpm_score * w["bpm"]) + (key_score * w["key"]) + (vec_score * w["vector"])
-    return final_score
+    # Missing or incompatible embeddings carry no evidence. Keep a measured
+    # zero similarity, but exclude unavailable components and normalize again.
+    components = {"bpm": bpm_score, "key": key_score}
+    if vector_similarity is not None and math.isfinite(vector_similarity):
+        components["vector"] = max(0.0, min(1.0, vector_similarity))
+    available = sum(w.get(name, 0.0) for name in components)
+    return (sum(value * w.get(name, 0.0) for name, value in components.items()) / available
+            if available > 0 else 0.0)

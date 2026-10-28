@@ -7,8 +7,9 @@ import re
 from domain.models.track import Track, TrackEmbedding
 from domain.models.lyrics import Lyrics
 from domain.constants import EMBEDDING_DIM
+from utils.ingestion import analyzed_track_ids, completed_analysis_condition
 from utils.embedding import LEGACY_MODELS, embedding_space
-from utils.audio_math import CAMELOT_ADJACENCY, KEY_TO_CAMELOT
+from utils.audio_math import CAMELOT_ADJACENCY, KEY_TO_CAMELOT, normalize_key
 
 # Camelot ホイール順。辞書順だと隣接キーがばらけて選曲に使えない。
 # 対応表はレコメンドと同じ utils.audio_math を唯一の出典にする（表記ゆれも同じ扱いになる）。
@@ -18,6 +19,14 @@ CAMELOT_ORDER = {
     **{code.lower(): (int(code[:-1]) - 1) * 2 + (1 if code[-1].upper() == "A" else 2)
        for code in CAMELOT_ADJACENCY},
 }
+
+def _key_spellings(key: str) -> list[str]:
+    """Lowercase spellings stored for the same key (e.g. 'D# Minor' -> 'eb minor', '2a')."""
+    code = normalize_key(key)
+    if code is None:
+        return [key.strip().lower()]
+    return [spelling.lower() for spelling, value in KEY_TO_CAMELOT.items() if value == code] + [code.lower()]
+
 
 # 一覧のヘッダから並べ替えられる列。ここに無い値は無視して既定順のままにする。
 SORTABLE_FIELDS = ("title", "artist", "album", "genre", "subgenre", "bpm", "key", "duration", "year", "energy", "danceability", "created_at")
@@ -139,10 +148,12 @@ class TrackRepository:
                 query = query.where(TrackEmbedding.model_name == target_embedding.model_name)
             
             results = self.session.exec(query).all()
+            analyzed = analyzed_track_ids(self.session, [track.id for track, _ in results])
             
             final_tracks = []
             for track, lyrics_content in results:
                 track_data = track.model_dump()
+                track_data["is_analyzed"] = track.id in analyzed
                 # 歌詞が存在し、かつ空文字でない場合に has_lyrics を True に設定
                 track_data["has_lyrics"] = bool(lyrics_content and lyrics_content.strip())
                 final_tracks.append(track_data)
@@ -222,9 +233,9 @@ class TrackRepository:
         
         # 2. 解析ステータスフィルタ
         if status == "analyzed":
-            query = query.where(Track.bpm > 0)
+            query = query.where(completed_analysis_condition())
         elif status == "unanalyzed":
-            query = query.where(or_(Track.bpm == None, Track.bpm == 0))
+            query = query.where(~completed_analysis_condition())
         
         # 3. 基本メタデータフィルタ
         if q:
@@ -272,11 +283,13 @@ class TrackRepository:
             query = query.where(col(Track.subgenre).in_(subgenres))
         
         # 8. キー / スケールフィルタ
+        # Stored keys are 'C minor' / 'Eb minor' while the UI sends 'C Minor' /
+        # 'D# Minor': match case-insensitively and across enharmonic spellings.
         if key and key != "":
             if key in ["Major", "Minor"]:
-                query = query.where(col(Track.key).like(f"%{key}"))
+                query = query.where(func.lower(Track.key).like(f"%{key.lower()}"))
             else:
-                query = query.where(Track.key == key)
+                query = query.where(func.lower(func.trim(Track.key)).in_(_key_spellings(key)))
         
         # 9. BPMフィルタ (± bpm_range)
         if bpm and bpm > 0:
@@ -371,10 +384,13 @@ class TrackRepository:
         # many imports share the same created_at or target distance.
         query = apply_sort(query, sort, order).offset(offset).limit(limit)
         results = self.session.exec(query).all()
+        # Per page, not inside the query: the rule joins track_analyses.
+        analyzed = analyzed_track_ids(self.session, [track.id for track, _ in results])
         
         final_tracks = []
         for track, lyrics_content in results:
             track_data = track.model_dump()
+            track_data["is_analyzed"] = track.id in analyzed
             track_data["lyrics"] = lyrics_content
             track_data["has_lyrics"] = bool(lyrics_content and lyrics_content.strip())
             final_tracks.append(track_data)

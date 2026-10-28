@@ -1,5 +1,6 @@
 #pragma once
 #include "deck_telemetry.h"
+#include "audio_meter.h"
 #include "scratch_prediction.h"
 
 #include <algorithm>
@@ -19,6 +20,8 @@
 class ScratchDeck final : public EngineDeck {
     struct Request { unsigned sequence,generation;bool enabled,finish,keepalive;double samples,sampleRate,at; quint64 loadGeneration,inputSequence; };
     deckclock::Ring<Request,1024> requests_;
+    AudioMeter meter_;
+    std::atomic<quint64> renderedBlocks_{0};
     std::atomic<unsigned> overflowGeneration_{0};
     unsigned blockedGeneration_=0;
     quint64 appliedNativeInput_=0;
@@ -47,6 +50,15 @@ public:
     }
 
     bool scratching() const { return observedScratching_.load(); }
+
+    // A synced start's phase seek, applied by the callback that first sees
+    // play=1, before EngineDeck::process() renders that block. Requesting it
+    // from the control thread after play left a window in which a callback
+    // rendered an unaligned block; requesting it before play let a paused
+    // callback consume (drop) it. Arm before play, disarm on pause/seek/load.
+    void armPhaseOnStart(bool armed) { phaseOnStart_.store(armed, std::memory_order_release); }
+    quint64 renderedBlocks() const { return renderedBlocks_.load(std::memory_order_acquire); }
+    QJsonObject levels() const { return {{"peak", meter_.takePeak()}, {"rms", meter_.rms()}}; }
 
     QJsonObject audioDiagnostics() const {
         return {{"buffers", static_cast<double>(diagnosticBuffers_.load())},
@@ -268,7 +280,14 @@ public:
         }
         beforeFrames_ = getEngineBuffer()->getExactPlayPos().value();
         requestAgeMs_ = traceEnabled_ ? monotonicMs() - requestAtMs_ : 0;
+        // EngineBuffer::process() reads play and then consumes the phase
+        // request in processSeek() within this same call (lock-free atomics).
+        if (phaseOnStart_.load(std::memory_order_acquire) && play_->get() > 0
+                && phaseOnStart_.exchange(false, std::memory_order_acq_rel))
+            getEngineBuffer()->requestSyncPhase();
         EngineDeck::process(output, bufferSize);
+        meter_.process(output, bufferSize);
+        renderedBlocks_.fetch_add(1, std::memory_order_release);
         deckclock::currentBoundary = nullptr;
         const bool scratching = getEngineBuffer()->getScratching();
         observedScratching_.store(scratching);
@@ -333,7 +352,7 @@ private:
     ControlObject* const play_;
     ControlObject* const tempo_;
     std::atomic<unsigned> sequence_{0}, generation_{0};
-    std::atomic<bool> observedScratching_{false};
+    std::atomic<bool> observedScratching_{false}, phaseOnStart_{false};
     std::atomic<unsigned> diagnosticBuffers_{0}, diagnosticSilent_{0};
     std::atomic<double> diagnosticPeak_{0}, diagnosticSpeed_{0}, diagnosticPosition_{0}, diagnosticAge_{0};
 

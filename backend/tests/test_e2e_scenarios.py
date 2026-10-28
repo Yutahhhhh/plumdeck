@@ -48,9 +48,7 @@ async def test_e2e_ingestion_flow(client: TestClient, session: Session, tmp_path
             "loudness_range": 2.0,
             "spectral_flux": 1.0,
             "spectral_rolloff": 1000.0,
-            "features_extra": {},
-            "embedding": [0.1] * 200,
-            "embedding_model": "test"
+            "features_extra": {"waveform_peaks": [0.2, 0.7]},
         }
     
     mocker.patch("domain.services.ingestion_domain_service.analyze_track_file", side_effect=mock_analyze)

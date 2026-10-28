@@ -77,6 +77,15 @@ const FileRow = memo(
               {item.analysis_level === "light" ? "軽量" : "解析済み"}
             </Badge>
           )}
+          {!item.is_dir && item.is_analyzed && !hideAnalyzed && item.embedding_ready === false && (
+            <Badge
+              variant="outline"
+              className="text-[10px] h-4 px-1 shrink-0 text-muted-foreground"
+              title="再生や推薦はできます。音色の比較は計算が済みしだい使えます"
+            >
+              音色計算待ち
+            </Badge>
+          )}
         </div>
       </div>
     );

@@ -109,3 +109,20 @@ def no_real_rekordbox_history(mocker):
     """Never let a test read the developer's own rekordbox HISTORY."""
     from infra import rekordbox_library
     mocker.patch.object(rekordbox_library, "play_sessions", return_value=())
+
+
+@pytest.fixture(autouse=True)
+def no_real_rekordbox_values(mocker):
+    """Saves read rekordbox BPM/key; by default the collection is unreadable,
+    as on a machine without rekordbox. Tests patch it to model a library."""
+    from infra import rekordbox_library
+    mocker.patch.object(rekordbox_library, "collection_index",
+                        side_effect=rekordbox_library.RekordboxLibraryUnavailable("not in tests"))
+
+
+@pytest.fixture(autouse=True)
+def no_automatic_embedding_jobs(monkeypatch):
+    """Imports queue background embeddings; tests that need the queue build
+    their own AnalysisJobService instead of starting native workers here."""
+    from app.services.analysis_job_service import analysis_job_service
+    monkeypatch.setattr(analysis_job_service, "enqueue_embedding", lambda **kwargs: {"status": "idle"})

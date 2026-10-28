@@ -149,8 +149,8 @@ private:
 /// THRU. Anything else is either a deliberate mix move (fader start) or a
 /// reason the receiver is not READY yet.
 inline bool junctionUnity(const QJsonObject& channel) {
-    const auto near=[&](const char* key){return std::abs(channel[key].toDouble(1)-1)<=.02;};
-    return channel["available"].toBool()&&near("volume")&&near("eqLow")&&near("eqMid")&&near("eqHigh")&&int(std::lround(channel["orientation"].toDouble(1)))==1;
+    const auto atUnity=[&](const char* key){return std::abs(channel[key].toDouble(1)-1)<=.02;};
+    return channel["available"].toBool()&&atUnity("volume")&&atUnity("eqLow")&&atUnity("eqMid")&&atUnity("eqHigh")&&int(std::lround(channel["orientation"].toDouble(1)))==1;
 }
 
 /// J path latency the next DJ adds before the venue: previous DJ -> next DJ
@@ -177,7 +177,7 @@ struct TailLock {
     /// Empty when allowed; otherwise the DJ-facing reason.
     static QString check(const QString& op,const QJsonObject& params,const QSet<int>& tailDecks) {
         // Program-wide controls shape the tail's post-fader level.
-        if(op=="mixer.crossfader"||op=="mixer.master.gain"||op=="mixer.beatfx.set")
+        if(op=="mixer.crossfader"||op=="mixer.crossfader.curve"||op=="mixer.master.gain"||op=="mixer.beatfx.set")
             return QStringLiteral("残りの曲を送出中はマスター系を操作できません");
         if(op=="deck.sync.set"&&params["leader"].isString()&&tailDecks.contains(deckIndex(params["leader"].toString())))
             return QStringLiteral("残りの曲をSYNCのリーダーにはできません");

@@ -138,7 +138,8 @@ function App() {
   return (
     <IngestionProvider>
       <MetadataProvider>
-        <div className="flex h-screen min-h-0 flex-col overflow-hidden bg-[#080b11]">
+        {/* Fades in once after the startup screen so the hand-off is not an abrupt cut. */}
+        <div className="flex h-screen min-h-0 flex-col overflow-hidden bg-[#080b11] animate-in fade-in-0 duration-300 motion-reduce:animate-none">
           <div className="z-[80] flex h-10 shrink-0 items-center border-b border-slate-700 bg-[#11151d] px-3 shadow-md">
             <span className="shrink-0 text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">plumdeck<span className="hidden sm:inline"> Workspace</span></span>
             <JunctionBar showRootButton={appMode === "play"} />

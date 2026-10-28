@@ -372,7 +372,7 @@ def test_a_track_without_analysis_is_still_ranked_and_says_what_is_missing(sessi
     result = AssistAppService(session).recommend(library["source"].id, "keep")
     candidate = result["candidates"][0]
     similarity = next(r for r in candidate["reasons"] if r["kind"] == "similarity")
-    assert "解析" in similarity["text"] or "音色比較" in similarity["text"]
+    assert similarity["text"] == "音色の比較は計算待ち"
     assert candidate["score"] > 0
 
 

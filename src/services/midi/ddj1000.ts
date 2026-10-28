@@ -1,4 +1,5 @@
 import { padPreset } from "./pad-presets.ts";
+import { padFxSounding } from "./pad-fx-send.ts";
 import type { DeckId, EngineSnapshot, MetersPayload } from "../../types/dj-engine";
 
 const DECKS: DeckId[] = ["A", "B", "C", "D"];
@@ -107,6 +108,9 @@ export class Ddj1000Decoder {
 
 /** Delta feedback is handled by the transport. Always derive LEDs from the
  * acknowledged engine state, so mouse and hardware controls stay in sync. */
+/** Set once the owner has checked B0+ch CC 02 on DDJ-1000 hardware. */
+export const DDJ1000_LEVEL_CC_VERIFIED = false;
+
 export function ddj1000Feedback(snapshot: EngineSnapshot | null, meters?: MetersPayload | null): number[][] {
   const out: number[][] = [];
   for (let ch = 0; ch < 4; ch++) {
@@ -134,13 +138,14 @@ export function ddj1000Feedback(snapshot: EngineSnapshot | null, meters?: Meters
     }
 
     for (let slot=0;slot<8;slot++) {
-      out.push([0x97+ch*2,0x10+slot,loaded ? mixer?.fx?.enabled && mixer.fx.effect===padPreset(1,slot).effect ? 127:32:0]);
+      out.push([0x97+ch*2,0x10+slot,loaded ? padFxSounding(padPreset(1,slot,snapshot?.engine?.capabilities),mixer,snapshot?.engine?.capabilities) ? 127:32:0]);
       for (const mode of [2,6]) out.push([0x97+ch*2,(mode<<4)+slot,loaded?32:0]);
     }
-    const peak = meters?.channels[DECKS[ch]]?.peak ?? 0;
     // Legacy, undocumented output: the official table does NOT define a deck
     // level meter. Retained pending visual hardware verification; B4 02/22 is
     // BEAT FX LEVEL/DEPTH input and must not be substituted for this address.
+    // Until verified it keeps sending 0, as it did before hosts had meters.
+    const peak = DDJ1000_LEVEL_CC_VERIFIED ? meters?.channels[DECKS[ch]]?.peak ?? 0 : 0;
     out.push([0xb0 + ch, 2, Math.round(Math.max(0, Math.min(1, peak)) * 127)]);
     out.push([0x9f, ch, loaded ? 127 : 0]);
   }
@@ -155,7 +160,7 @@ export function ddj1000ExtendedFeedback(snapshot: EngineSnapshot | null, sampler
     const note=(key:number,on:boolean)=>out.push([0x90+ch,key,on?127:0]);
     for(let slot=8;slot<16;slot++) out.push([0x97+ch*2,slot,deck?.hotCues[slot]!=null?127:0]);
     for (let slot = 0; slot < 16; slot++) {
-      for (const mode of [1,5]) out.push([0x97+ch*2,(mode<<4)+slot,loaded ? mixer?.fx?.enabled && mixer.fx.effect===padPreset(mode,slot).effect ? 127:32:0]);
+      for (const mode of [1,5]) out.push([0x97+ch*2,(mode<<4)+slot,loaded ? padFxSounding(padPreset(mode,slot,snapshot?.engine?.capabilities),mixer,snapshot?.engine?.capabilities) ? 127:32:0]);
       for (const mode of [2,6]) out.push([0x97+ch*2,(mode<<4)+slot,loaded?32:0]);
       for (const mode of [4,7]) out.push([0x97+ch*2,(mode<<4)+slot,loaded?32:0]);
       const sample=sampler?.slots[(slot&7)+(ch%2===0?8:0)];

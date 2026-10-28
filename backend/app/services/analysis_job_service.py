@@ -4,7 +4,7 @@ import os
 import threading
 import time
 import sys
-from domain.services.analysis.process_runner import AnalysisExecutor
+from domain.services.analysis.process_runner import AnalysisExecutor, run_isolated
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from datetime import datetime
 
@@ -15,10 +15,17 @@ from sqlalchemy import text, func
 from config import settings
 from domain.models.track import Track, TrackAnalysis, TrackEmbedding
 from domain.models.setlist import SetlistTrack
+from domain.services import value_sources
 from domain.services.analysis.constants import COMPONENT_VERSIONS, EMBEDDING_MODEL, GRID_COMPONENT_VERSION
+from infra import rekordbox_grid, rekordbox_library
 from infra.database import connection
 from infra.repositories.analysis_job_repository import AnalysisJobRepository
 from app.services.analysis_coordinator import analysis_coordinator
+from utils.features_extra import persisted_features_extra
+from utils.ingestion import completed_analysis_condition, pending_embedding_ids
+
+# Same per-track deadline as AnalysisExecutor.
+BACKGROUND_TASK_TIMEOUT = 570
 
 
 def analyze_components(filepath, features):
@@ -50,6 +57,50 @@ def analyze_components(filepath, features):
     return result, time.monotonic() - started
 
 
+def _rekordbox_grid_check():
+    """Return path -> whether rekordbox has a readable PQTZ grid for it.
+
+    Grid re-analysis skips those tracks: their PQTZ grid outranks plumdeck's
+    own beats. When master.db cannot be read, no track is skipped.
+    """
+    try:
+        index = rekordbox_library.collection_index()
+        database = rekordbox_grid.master_db_path()
+    except Exception:
+        return lambda path: False
+
+    def has_grid(path):
+        entry = index.get(path)
+        return bool(entry and entry.analysis_path and database
+                    and rekordbox_grid.has_usable_grid(entry.analysis_path, database))
+    return has_grid
+
+
+def _rekordbox_coverage(keys: bool):
+    """Return (filepath, needed) -> needed without the components whose
+    output rekordbox replaces: rhythm when it has a BPM and a usable PQTZ grid
+    (its BPM wins and the deck reads PQTZ), key when it has a key and the key
+    source is on. When master.db cannot be read, nothing is dropped."""
+    try:
+        index = rekordbox_library.collection_index()
+        database = rekordbox_grid.master_db_path()
+    except Exception:
+        return lambda path, needed: needed
+
+    def covered(path, needed):
+        entry = index.get(path) if {"rhythm", "key"} & set(needed) else None
+        if entry is None:
+            return needed
+        drop = set()
+        if "key" in needed and keys and entry.key:
+            drop.add("key")
+        if ("rhythm" in needed and entry.bpm and entry.analysis_path and database
+                and rekordbox_grid.has_usable_grid(entry.analysis_path, database)):
+            drop.add("rhythm")
+        return [feature for feature in needed if feature not in drop]
+    return covered
+
+
 class AnalysisJobService:
     def __init__(self, engine=None, queue_path=None, analyze_fn=None):
         self._engine = engine
@@ -62,6 +113,12 @@ class AnalysisJobService:
         self._stop = threading.Event()
         self._lock = threading.RLock()
         self._admission_token = None
+        self._shutdown = False
+        self._background = False
+        self._running = False
+        self._preempt_background = False
+        self._background_cancel = None
+        self._suspended = 0
 
     @property
     def engine(self):
@@ -78,7 +135,97 @@ class AnalysisJobService:
 
     @property
     def is_running(self):
-        return self._thread is not None and self._thread.is_alive()
+        return self._running
+
+    @property
+    def is_background_running(self):
+        return self.is_running and self._background
+
+    def enqueue_embedding(self, *, track_ids=None, filepaths=None):
+        """Durably enqueue only imported, ready tracks; never scan the library."""
+        if not track_ids and not filepaths:
+            return {"status": "idle"}
+        with connection.database_activity, self._lock:
+            # Project ids and vectors only; never load waveform/grid BLOBs here.
+            query = select(Track.id, Track.filepath, TrackEmbedding).outerjoin(
+                TrackEmbedding, Track.id == TrackEmbedding.track_id).where(completed_analysis_condition())
+            if track_ids is not None:
+                query = query.where(Track.id.in_(track_ids))
+            if filepaths is not None:
+                query = query.where(Track.filepath.in_(filepaths))
+            with Session(self.engine) as session:
+                tracks = [{"id": track_id, "filepath": filepath}
+                          for track_id, filepath, embedding in session.exec(query).all()
+                          if self.outdated(["embedding"], None, embedding)]
+            if not tracks:
+                return {"status": "idle"}
+            # Keep re-imports idempotent while existing work is queued or
+            # running. Items of failed or paused jobs may be queued again by a
+            # later import; a moved path must not be blocked by an old item.
+            with self.repository.connect() as queue:
+                outstanding = set()
+                rows = queue.execute(
+                    "SELECT i.track_id, i.filepath, j.config FROM items i "
+                    "JOIN jobs j ON j.id = i.job_id "
+                    "WHERE j.status IN ('queued', 'running', 'pausing') "
+                    "AND i.status IN ('pending', 'running')")
+                for row in rows:
+                    config = json.loads(row["config"])
+                    if config.get("background") and "embedding" in config.get("features", []):
+                        outstanding.add((row["track_id"], row["filepath"]))
+            tracks = [track for track in tracks if (track["id"], track["filepath"]) not in outstanding]
+            if not tracks:
+                return {"status": "idle"}
+            config = {"features": ["embedding"], "only_outdated": True,
+                      "workers": 1, "background": True}
+            job_id = self.repository.create(config, tracks, status="queued")
+            self._launch_next_queued()
+            return self.repository.get(job_id)
+
+    def enqueue_missing_embeddings(self):
+        """Startup backfill: analyzed tracks without a vector of the current
+        model, e.g. after an enqueue that failed. One projected query; queued
+        or running items are not added twice. Never raises."""
+        try:
+            with Session(self.engine) as session:
+                ids = session.exec(pending_embedding_ids()).all()
+            return self.enqueue_embedding(track_ids=list(ids)) if ids else {"status": "idle"}
+        except Exception as error:
+            print(f"WARNING: Embedding backfill was not queued: {error}", flush=True)
+            return {"status": "idle"}
+
+    def startup(self):
+        with self._lock:
+            if not self.is_running:
+                self._shutdown = False
+                if self._queue_path is None and self._repo is not None and self._repo.path != connection.DB_PATH + ".analysis-jobs.sqlite3":
+                    self._repo = None
+                self._launch_next_queued()
+
+    def suspend_background(self, timeout=15):
+        """Stop the automatic embedding job for backup/restore and keep queued
+        jobs from starting until ``resume_background``. Call it before taking
+        the database locks: the job thread needs them to put its track back."""
+        with self._lock:
+            self._suspended += 1
+            thread = self._thread if self.is_background_running else None
+            if thread is not None:
+                self._yield_background()
+        if thread is not None:
+            thread.join(timeout)
+
+    def resume_background(self):
+        with self._lock:
+            self._suspended = max(0, self._suspended - 1)
+            self._launch_next_queued()
+
+    def _launch_next_queued(self):
+        with self._lock:
+            if self._shutdown or self._suspended or self.is_running:
+                return
+            job_id = self.repository.next_queued()
+            if job_id:
+                self._launch(job_id, None)
 
     @staticmethod
     def validate_features(features):
@@ -125,29 +272,39 @@ class AnalysisJobService:
             query = query.where(Track.id.in_(track_ids))
         if genres:
             query = query.where(Track.genre.in_(genres))
+        rekordbox_grids = 0
         with Session(self.engine) as session:
             priority = set(session.exec(select(SetlistTrack.track_id)).all())
             rows = session.exec(query.order_by(Track.id)).all()
             if rhythm_only:
+                has_grid = _rekordbox_grid_check()
+                kept = [row for row in rows if not has_grid(row[1])]
+                rekordbox_grids = len(rows) - len(kept)
                 current_versions = {COMPONENT_VERSIONS["rhythm"], GRID_COMPONENT_VERSION}
                 candidates = [{"id": id, "filepath": path, "title": title, "genre": genre,
                                "features": [] if only_outdated and version in current_versions else features}
-                              for id, path, title, genre, version in rows]
+                              for id, path, title, genre, version in kept]
             else:
+                covered = _rekordbox_coverage(value_sources.key_source_enabled(session)) \
+                    if {"rhythm", "key"} & set(features) else (lambda path, needed: needed)
                 candidates = [{"id": t.id, "filepath": t.filepath, "title": t.title, "genre": t.genre,
-                               "features": self.outdated(features, a, e) if only_outdated else features}
+                               "features": covered(t.filepath, self.outdated(features, a, e) if only_outdated else features)}
                               for t, a, e in rows]
         eligible = [t for t in candidates if t["features"]]
         eligible.sort(key=lambda t: (t["id"] not in priority, t["id"]))
-        return features, candidates, eligible[:limit] if limit else eligible
+        return features, candidates, eligible[:limit] if limit else eligible, rekordbox_grids
 
     def plan(self, track_ids=None, genres=None, features=None, only_outdated=True, limit=None):
-        features, candidates, selected = self._select(track_ids, genres, features, only_outdated, limit)
+        features, candidates, selected, rekordbox_grids = self._select(track_ids, genres, features, only_outdated, limit)
+        grid_only = features == ["rhythm"]
         return {
-            "features": features, "versions": {f: GRID_COMPONENT_VERSION if features == ["rhythm"] else COMPONENT_VERSIONS[f] for f in features},
+            "features": features, "versions": {f: GRID_COMPONENT_VERSION if grid_only else COMPONENT_VERSIONS[f] for f in features},
             "matched_tracks": len(candidates), "already_current": sum(not t["features"] for t in candidates),
             "selected_tracks": len(selected), "sample": selected[:20],
-            "preserves": ["metadata", "genres", "lyrics", "audio_files", "unselected_features"],
+            # Grid re-analysis leaves tracks with a rekordbox grid out entirely.
+            "rekordbox_grid_tracks": rekordbox_grids,
+            "preserves": ["metadata", "genres", "lyrics", "audio_files", "unselected_features"]
+                         + (["manual_and_rekordbox_bpm"] if grid_only else []),
             "priority": "tracks used in setlists first", "resumable": True,
         }
 
@@ -156,11 +313,17 @@ class AnalysisJobService:
             workers = 1
         with connection.database_activity, self._lock:
             self._check_available(workers)
+            if self.is_background_running:
+                features, _, tracks, _ = self._select(track_ids, genres, features, only_outdated, limit)
+                job_id = self.repository.create({"features": features, "only_outdated": only_outdated,
+                                                 "workers": workers}, tracks, status="queued")
+                self._yield_background()
+                return self.repository.get(job_id)
             token = analysis_coordinator.acquire("選択解析")
             if token is None:
                 raise ValueError(f"{analysis_coordinator.owner or '別の'}解析が実行中です")
             try:
-                features, _, tracks = self._select(track_ids, genres, features, only_outdated, limit)
+                features, _, tracks, _ = self._select(track_ids, genres, features, only_outdated, limit)
                 config = {"features": features, "only_outdated": only_outdated, "workers": workers}
                 job_id = self.repository.create(config, tracks)
                 self._launch(job_id, token)
@@ -172,13 +335,16 @@ class AnalysisJobService:
     def _check_available(self, workers):
         if isinstance(workers, bool) or not 1 <= workers <= 4:
             raise ValueError("workers must be between 1 and 4")
-        if self.is_running:
+        if self.is_running and not self.is_background_running:
             raise ValueError("An analysis job is already running; pause it first")
         from app.services.ingestion_app_service import ingestion_app_service
         if ingestion_app_service.is_running:
             raise ValueError("Library import is running; wait for it to finish")
 
     def _launch(self, job_id, token):
+        self._background = bool(self.repository.get(job_id)["config"].get("background"))
+        self._preempt_background = False
+        self._running = True
         self._admission_token = token
         self._job_id = job_id
         self._stop.clear()
@@ -192,6 +358,8 @@ class AnalysisJobService:
             if self.is_running and self._job_id == job_id:
                 self._stop.set()
                 self.repository.update_job(job_id, "pausing")
+            elif self.repository.get(job_id)["status"] == "queued":
+                self.repository.update_job(job_id, "paused")
             return self.repository.get(job_id)
 
     def resume(self, job_id, workers=None, retry_failed=False):
@@ -200,9 +368,18 @@ class AnalysisJobService:
             workers = workers if workers is not None else job["config"]["workers"]
             if sys.platform == "win32":
                 workers = 1
+            if self.is_running and self._job_id == job_id:
+                raise ValueError("This analysis job is already running")
             self._check_available(workers)
-            token = analysis_coordinator.acquire("選択解析")
-            if token is None:
+            background = job["config"].get("background", False)
+            if self.is_background_running:
+                self.repository.prepare_resume(job_id, workers, retry_failed)
+                self.repository.update_job(job_id, "queued")
+                if not background:
+                    self._yield_background()
+                return self.repository.get(job_id)
+            token = None if background else analysis_coordinator.acquire("選択解析")
+            if token is None and not background:
                 raise ValueError(f"{analysis_coordinator.owner or '別の'}解析が実行中です")
             try:
                 self.repository.prepare_resume(job_id, workers, retry_failed)
@@ -213,10 +390,29 @@ class AnalysisJobService:
             return self.repository.get(job_id)
 
     def status(self, job_id=None):
+        """Without an id: the running or queued user job, else the latest
+        one. Automatic embedding jobs show only when no user job exists."""
+        if job_id is None:
+            if self.is_running and not self.is_background_running:
+                job_id = self._job_id
+            else:
+                job_id = self.repository.next_queued(background=False) or self.repository.latest_id(background=False)
         return self.repository.get(job_id)
 
-    def shutdown(self):
+    def _yield_background(self):
+        """Stop the background job now; its track in flight goes back to pending."""
+        self._preempt_background = True
         self._stop.set()
+        cancel = self._background_cancel
+        if cancel is not None:
+            cancel.set()
+
+    def shutdown(self):
+        self._shutdown = True
+        self._stop.set()
+        cancel = self._background_cancel
+        if cancel is not None:
+            cancel.set()
         if self._thread:
             self._thread.join(timeout=30)
 
@@ -225,9 +421,16 @@ class AnalysisJobService:
             track = session.get(Track, item["track_id"])
             if track is None or track.filepath != item["filepath"]:
                 raise ValueError("Track removed or path changed since this job was created")
-            return self.outdated(config["features"], session.get(TrackAnalysis, track.id), session.get(TrackEmbedding, track.id)) if config["only_outdated"] else config["features"]
+            needed = self.outdated(config["features"], session.get(TrackAnalysis, track.id), session.get(TrackEmbedding, track.id)) if config["only_outdated"] else config["features"]
+            if config["features"] != ["rhythm"] and {"rhythm", "key"} & set(needed):
+                # A grid job already left PQTZ tracks out when it was planned.
+                needed = _rekordbox_coverage(value_sources.key_source_enabled(session))(track.filepath, needed)
+            return needed
 
     def _save(self, item, result, features):
+        """Store one result. BPM/key follow manual > rekordbox > own, also for a
+        grid re-analysis: a manual or rekordbox BPM stays, an own one follows
+        the new beats."""
         # Deliberately bypass metadata ingestion: it may update tags and lyrics.
         with connection.db_lock, Session(self.engine) as session:
             track = session.get(Track, item["track_id"])
@@ -235,17 +438,41 @@ class AnalysisJobService:
                 raise ValueError("Track removed or path changed during analysis")
             allowed = {
                 "rhythm": ("bpm",), "key": ("key", "scale"),
-                "timbre": ("energy", "danceability", "brightness", "noisiness", "contrast", "loudness", "loudness_range", "spectral_flux", "spectral_rolloff"),
+                "timbre": ("energy", "danceability", "brightness", "noisiness"),
             }
+            analysis = session.get(TrackAnalysis, track.id) or TrackAnalysis(track_id=track.id)
+            extra = dict(analysis.features_extra)
+            update = dict(result.get("features_extra", {}))
+            stored = value_sources.stored_sources(extra)
+            rekordbox = None
+            sources = {}
             for feature in features:
                 for name in allowed.get(feature, ()):
                     value = result[name]
                     if not isinstance(value, str) and not np.isfinite(value):
                         raise ValueError(f"Invalid {name} result")
-                    setattr(track, name, value)
-            analysis = session.get(TrackAnalysis, track.id) or TrackAnalysis(track_id=track.id)
-            extra = dict(analysis.features_extra)
-            update = dict(result.get("features_extra", {}))
+                    if name == "scale":
+                        continue  # follows the chosen key below
+                    if name not in value_sources.FIELDS:
+                        setattr(track, name, value)
+                        continue
+                    if rekordbox is None:
+                        rekordbox = value_sources.lookup(
+                            track.filepath, keys=value_sources.key_source_enabled(session))
+                    chosen, source = value_sources.choose(
+                        name, value, value_sources.OWN, getattr(track, name), stored.get(name), rekordbox,
+                        extra.get(f"analysis_{name}"))
+                    if source is None:
+                        continue
+                    sources[name] = source
+                    setattr(track, name, chosen)
+                    if name == "key":
+                        track.scale = value_sources.scale_of(chosen) or result.get("scale", track.scale)
+                    if source == value_sources.OWN:
+                        extra.pop(f"analysis_{name}", None)
+                    else:
+                        # Keep the analyzer's own value beside the winning one.
+                        update[f"analysis_{name}"] = value
             components = {**extra.get("analysis_components", {}), **update.pop("analysis_components", {})}
             if "rhythm" in features:
                 analysis.beat_positions = update.pop("beat_positions")
@@ -256,8 +483,10 @@ class AnalysisJobService:
                 refresh_saved_analysis_grid(session, track.id, update.get("playback_grid"))
             if "waveform" in features:
                 analysis.waveform_peaks = update.pop("waveform_peaks")
-            extra.update(update)
+            extra.update(persisted_features_extra(update))
             extra["analysis_components"] = components
+            if sources:
+                extra = value_sources.with_sources(extra, sources)
             analysis.features_extra_json = json.dumps(extra, allow_nan=False)
             if "embedding" in features:
                 vec = np.asarray(result["embedding"], dtype=float)
@@ -271,6 +500,54 @@ class AnalysisJobService:
             session.add(analysis)
             session.commit()
 
+    def _run_background(self, job_id, config):
+        """Hold the native slot one track at a time; foreground work cancels
+        the track in flight, which goes back to pending and runs again later."""
+        started = time.monotonic()
+        elapsed = self.repository.get(job_id)["elapsed"]
+        while not self._stop.is_set():
+            token = analysis_coordinator.acquire("音色比較の計算", background=True)
+            if token is None:
+                self._stop.wait(0.25)
+                continue
+            cancel = analysis_coordinator.preemption(token)
+            self._background_cancel = cancel
+            try:
+                if self._stop.is_set():
+                    break
+                item = self.repository.claim(job_id)
+                if item is None:
+                    break
+                try:
+                    features = self._prepare_item(item, config)
+                    if not features:
+                        self.repository.finish(job_id, item["track_id"], "skipped")
+                        continue
+                    if self._test_executor:
+                        result, seconds = self.analyze_fn(item["filepath"], features)
+                    else:
+                        result, seconds = run_isolated(self.analyze_fn, (item["filepath"], features),
+                                                       BACKGROUND_TASK_TIMEOUT, cancel)
+                    self._save(item, result, features)
+                    self.repository.finish(job_id, item["track_id"], "completed", seconds)
+                except Exception as exc:
+                    if cancel.is_set():
+                        self.repository.finish(job_id, item["track_id"], "pending")
+                    else:
+                        self.repository.finish(job_id, item["track_id"], "failed", error=str(exc))
+            finally:
+                self._background_cancel = None
+                analysis_coordinator.release(token)
+            self.repository.update_job(job_id, "pausing" if self._stop.is_set() else "running",
+                                       elapsed + time.monotonic() - started)
+        latest = self.repository.get(job_id)
+        status = "paused" if latest["remaining"] else ("completed_with_errors" if latest["counts"]["failed"] else "completed")
+        # Work stopped by shutdown or by a foreground job resumes by itself;
+        # an explicit pause does not.
+        if (self._shutdown or self._preempt_background) and latest["remaining"]:
+            status = "queued"
+        self.repository.update_job(job_id, status, elapsed + time.monotonic() - started)
+
     def _run(self, job_id):
         started = time.monotonic()
         initial_elapsed = 0
@@ -278,7 +555,19 @@ class AnalysisJobService:
         try:
             job = self.repository.get(job_id)
             config = job["config"]
+            if config.get("background"):
+                self._run_background(job_id, config)
+                return
             initial_elapsed = job["elapsed"]
+            if self._admission_token is None:
+                with analysis_coordinator.foreground_request():
+                    while not self._stop.is_set() and self._admission_token is None:
+                        self._admission_token = analysis_coordinator.acquire("選択解析")
+                        if self._admission_token is None:
+                            self._stop.wait(0.05)
+                if self._admission_token is None:
+                    self.repository.update_job(job_id, "paused")
+                    return
             executor = (ThreadPoolExecutor(max_workers=config["workers"]) if self._test_executor else
                         AnalysisExecutor(max_workers=1 if sys.platform == "win32" else config["workers"]))
             with executor as pool:
@@ -322,6 +611,9 @@ class AnalysisJobService:
             token, self._admission_token = self._admission_token, None
             if token:
                 analysis_coordinator.release(token)
+            with self._lock:
+                self._running = False
+                self._launch_next_queued()
 
 
 analysis_job_service = AnalysisJobService()

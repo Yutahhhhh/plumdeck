@@ -857,7 +857,8 @@ class AssistAppService:
             intent,
             vector_similarity=similarity,
             pair=pairs.get(payload["id"]),
-            has_analysis=candidate.get("vector") is not None,
+            # Both vectors stored: a missing similarity means another space.
+            has_analysis=source_vector is not None and candidate.get("vector") is not None,
             transition=transition,
             tempo_tolerance=tempo_tolerance,
         )

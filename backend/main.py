@@ -48,6 +48,8 @@ async def lifespan(app: FastAPI):
     # マウントされたサブアプリは lifespan イベントを直接受け取らないため、
     # MCP の session_manager は親アプリの lifespan 内で明示的に起動する。
     # session_manager は run() 完了後に再利用できないため、lifespan のたびに作り直す。
+    analysis_job_service.startup()
+    analysis_job_service.enqueue_missing_embeddings()
     mcp_app_holder.refresh()
     async with mcp_server.session_manager.run():
         startup_report("ready", "起動処理が完了しました。接続を確認しています", 5)

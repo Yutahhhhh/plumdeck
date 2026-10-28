@@ -2,6 +2,9 @@
 // plumdeck-owned adapter. Upstream APIs pinned to Mixxx 2.5.6 / 3ebac449.
 #include "backend.h"
 #include "scratch_deck.h"
+#include "slip_return.h"
+#include "ddj_ring.h"
+#include "engine/enginexfader.h"
 #include "sampler_bank.h"
 #include "beat_fx.h"
 #include "engine/effects/engineeffectsmanager.h"
@@ -101,6 +104,10 @@ public:
         ControlObject::set(ConfigKey(kMixerProfile, kLowEqFrequency), 250);
         ControlObject::set(ConfigKey(kMixerProfile, kHighEqFrequency), 2500);
         mixer_ = std::make_unique<EngineMixer>(settings_, "[Master]", effects_.get(), handles_, true);
+        // Hosts before H-12 never set the mixer profile, so Mixxx ran its
+        // unconfigured ControlPotmeter defaults: additive, transform ~500, a
+        // sharp cut. Keep that as the default and apply what we report.
+        crossfaderCurve("sharp");
         const QString defaultRecordingDir = QDir(QStandardPaths::writableLocation(QStandardPaths::MusicLocation)).filePath("plumdeck Recordings");
         const QString recordingDir = qEnvironmentVariable("PLUMDECK_MIXXX_RECORDING_DIR", defaultRecordingDir);
         settings_->set(ConfigKey(RECORDING_PREF_KEY, "Directory"), recordingDir);
@@ -269,6 +276,8 @@ public:
             }
             // Metered as the venue receives it: before the booth (master) knob.
             self->meterBlock(programWritten?self->audioBridge_.programPre.data():master,pfl,local,frames);
+            self->masterMeter_.process(master, frames * 2);
+            self->headphoneMeter_.process(pfl, frames * 2);
             self->renderFrame_+=frames;
             // Devices play these copies, so the booth mute and the private
             // preview never alter the engine's own main or headphone buffers.
@@ -358,10 +367,6 @@ public:
             return failure;
         }
         masterStart_ = mainStart; pflStart_ = cueStart; pflAvailable_ = cueStart >= 0;
-        if (pflAvailable_) {
-            ControlObject::set(ConfigKey("[Master]", "headGain"), 1);
-            ControlObject::set(ConfigKey("[Master]", "headMix"), -1);
-        }
         return {};
     }
     QString configureMicrophone(const QJsonObject& params) override {
@@ -432,12 +437,31 @@ public:
         micProblem_.clear();
         return {};
     }
+    QJsonObject meters() const override {
+        QJsonObject channels;
+        for (int index = 0; index < 4; ++index) {
+            auto levels = decks_[index] ? decks_[index]->levels() : QJsonObject{{"peak", 0}, {"rms", 0}};
+            levels["pfl"] = ControlObject::get(ConfigKey(groups[index], "pfl")) > 0;
+            channels[names[index]] = levels;
+        }
+        const auto bus = [](const AudioMeter& meter) {
+            return QJsonObject{{"peak", meter.takePeak()}, {"rms", meter.rms()}, {"peakL", meter.takeSidePeak(0)}, {"peakR", meter.takeSidePeak(1)}, {"clip", meter.takeClip()}};
+        };
+        return {{"simulated", false}, {"master", bus(masterMeter_)}, {"headphone", bus(headphoneMeter_)}, {"channels", channels}};
+    }
     QJsonObject mixer() const override {
         auto value = PlaybackBackend::mixer();
         if (!mixer_) return value;
         value["available"] = available_;
         value["eqAvailable"] = available_; value["pflAvailable"] = available_ && pflAvailable_;
         value["crossfader"] = ControlObject::get(ConfigKey("[Master]", "crossfader"));
+        value["crossfaderCurve"] = crossfaderCurve_;
+        CSAMPLE_GAIN left = 1, right = 1;
+        EngineXfader::getXfadeGains(value["crossfader"].toDouble(),
+                ControlObject::get(ConfigKey("[Mixer Profile]", "xFaderCurve")),
+                ControlObject::get(ConfigKey("[Mixer Profile]", "xFaderCalibration")),
+                ControlObject::get(ConfigKey("[Mixer Profile]", "xFaderMode")),
+                ControlObject::get(ConfigKey("[Mixer Profile]", "xFaderReverse")) > 0, &left, &right);
         value["beatFx"] = beatFx_ ? beatFx_->state() : QJsonObject{};
         value["masterGain"] = ControlObject::get(ConfigKey("[Master]", "gain"));
         value["headphoneGain"] = ControlObject::get(ConfigKey("[Master]", "headGain"));
@@ -446,6 +470,7 @@ public:
         for (int index = 0; index < 4; ++index) {
             auto channel = channels[names[index]].toObject(); channel["available"] = available_;
             channel["orientation"] = ControlObject::get(ConfigKey(groups[index], "orientation"));
+            channel["crossfaderGain"] = channel["orientation"].toInt() == 0 ? left : channel["orientation"].toInt() == 2 ? right : 1;
             channel["gain"] = ControlObject::get(ConfigKey(groups[index], "volume")); channel["pfl"] = ControlObject::get(ConfigKey(groups[index], "pfl")) > 0;
             channel["eqLow"] = ControlObject::get(ConfigKey(groups[index], "filterLow"));
             channel["eqMid"] = ControlObject::get(ConfigKey(groups[index], "filterMid"));
@@ -454,7 +479,9 @@ public:
             channel["trim"] = ControlObject::get(ConfigKey(groups[index], "pregain"));
             channel["filter"] = effects_->getQuickEffectChain(groups[index])->getSuperParameter() * 2.0 - 1.0;
             const auto fxGroup = StandardEffectChain::formatEffectChainGroup(index);
-            channel["fx"] = QJsonObject{{"effect", fxEffects_[index]}, {"enabled", ControlObject::get(ConfigKey(fxGroup, "enabled")) > 0}, {"mix", ControlObject::get(ConfigKey(fxGroup, "mix"))},{"depth",fxDepths_[index]},{"parameters",effectParameters(effects_->getStandardEffectChain(index)->getEffectSlot(0))}};
+            channel["fx"] = QJsonObject{{"effect", fxEffects_[index]}, {"enabled", fxHeld_[index]}, {"tail", fxTails_[index]},
+                {"nativeEnabled", ControlObject::get(ConfigKey(fxGroup, "enabled")) > 0}, {"mix", ControlObject::get(ConfigKey(fxGroup, "mix"))},
+                {"depth", fxDepths_[index]}, {"beats", fxBeats_[index]}, {"parameters", effectParameters(effects_->getStandardEffectChain(index)->getEffectSlot(0))}};
             channels[names[index]] = channel;
         }
         value["channels"] = channels;
@@ -465,6 +492,10 @@ public:
         releaseScratch(index);
         disableFx(index);
         generations_[index] = generation;
+        if (keylockBeforeShift_[index]) keyReset(index);
+        ++slipGenerations_[index]; slipWanted_[index] = false;
+        ++phaseGenerations_[index]; armPhaseOnStart(index, false);
+        ControlObject::set(ConfigKey(groups[index], "file_key"), 0);
         for (const auto& control : {"slip_enabled","reverse","reverseroll","pitch_adjust"}) ControlObject::set(ConfigKey(groups[index],control),0);
         tracks_[index] = Track::newTemporary(path);
         decks_[index]->getEngineBuffer()->loadTrack(tracks_[index], false, nullptr);
@@ -473,6 +504,9 @@ public:
         pitchbend(index, 0);
         releaseScratch(index);
         disableFx(index);
+        if (keylockBeforeShift_[index]) keyReset(index);
+        ++slipGenerations_[index]; slipWanted_[index] = false;
+        ++phaseGenerations_[index]; armPhaseOnStart(index, false);
         ++generations_[index]; tracks_[index].reset();
         ControlObject::set(ConfigKey(groups[index], "play"), 0);
         decks_[index]->getEngineBuffer()->ejectTrack();
@@ -501,8 +535,21 @@ public:
     QString beatFx(const QJsonObject& params) override { return beatFx_ ? beatFx_->configure(params) : "Beat FX unavailable"; }
     QJsonObject samplerState() const override { return samplers_ ? samplers_->state() : QJsonObject{}; }
     QString samplerCommand(const QString& op, const QJsonObject& params) override { return samplers_ ? samplers_->command(op, params) : "Sampler unavailable"; }
-    void play(int index, bool enabled) override { ControlObject::set(ConfigKey(groups[index], "play"), enabled ? 1 : 0); }
+    void play(int index, bool enabled) override {
+        const bool starting = enabled && !playing(index);
+        // Phase-align a synced start before its first audible block (H-3):
+        // decide (and build the grid telemetry) before play, then the audio
+        // callback that first sees play queues the phase seek ahead of
+        // rendering. SLIP needs no handling here: it is engaged only during a
+        // gesture (see beginSlipGesture), so a pause between gestures never seeks.
+        if (starting) { ++phaseGenerations_[index]; armPhaseOnStart(index, phaseSyncWanted(index)); }
+        else if (!enabled) { ++phaseGenerations_[index]; armPhaseOnStart(index, false); }
+        ControlObject::set(ConfigKey(groups[index], "play"), enabled ? 1 : 0);
+        // A refused start (no track) must not leave the request armed.
+        if (starting && !playing(index)) armPhaseOnStart(index, false);
+    }
     void seek(int index, double ms) override {
+        ++phaseGenerations_[index]; armPhaseOnStart(index, false);
         if (tracks_[index] && tracks_[index]->getDuration() > 0) ControlObject::set(ConfigKey(groups[index], "playposition"), ms / (1000.0 * tracks_[index]->getDuration()));
     }
     // ネイティブ演奏入力 (inputSequence>0) と RPC のポインタ操作 (inputSequence==0) は
@@ -516,10 +563,11 @@ public:
         if (phase == "begin") scratchOwner_[index] = origin;
         else if (scratchOwner_[index] != origin) return;
         else if (release) scratchOwner_[index] = ScratchOrigin::None;
-        if (phase == "begin") pitchbend(index, 0);
+        if (phase == "begin") { pitchbend(index, 0); beginSlipGesture(index); }
         const double sampleRate = tracks_[index] ? tracks_[index]->getSampleRate().value() : 44100;
         // "abort" は曲の入れ替えなどでの強制解放。制動も着地もせず即座に離す。
         decks_[index]->requestScratch(!release, phase == "begin", ms * sampleRate * 2.0 / 1000.0, sampleRate, phase != "abort", capturedNativeUs, keepalive, inputSequence);
+        if (phase == "end") requestSlipReturn(index);
     }
     // ライフサイクル側の解放。所有者が誰であっても必ずジェスチャーを終わらせる。
     void releaseScratch(int index) {
@@ -570,11 +618,129 @@ public:
             if (bendGenerations_[index] == generation) pitchbend(index, 0);
         });
     }
-    void keylock(int index, bool enabled) override { ControlObject::set(ConfigKey(groups[index], "keylock"), enabled ? 1 : 0); }
-    void trackKey(int index, const QString& key) override { if (tracks_[index]) tracks_[index]->setKeyText(key); }
-    void performanceControl(int index, const QString& control, double value) override { ControlObject::set(ConfigKey(groups[index], control), value); }
-    void sync(int index, bool enabled) override { ControlObject::set(ConfigKey(groups[index], "sync_enabled"), enabled ? 1 : 0); }
-    void setSyncLeader(int index) override { ControlObject::set(ConfigKey(groups[index], "sync_leader"), 1); }
+    void keylock(int index, bool enabled) override {
+        // An explicit MT action supersedes the remembered pre-shift choice.
+        if (keylockBeforeShift_[index]) keylockBeforeShift_[index] = enabled;
+        ControlObject::set(ConfigKey(groups[index], "keylock"), enabled ? 1 : 0);
+    }
+    void trackKey(int index, const QString& key) override {
+        if (!tracks_[index]) return;
+        tracks_[index]->setKeyText(key);
+        // The GUI's PlayerInfo normally forwards this field. Headless decks do
+        // not have that adapter, so changing Track alone never reaches KEY SYNC.
+        ControlObject::set(ConfigKey(groups[index], "file_key"), static_cast<int>(tracks_[index]->getKey()));
+    }
+    void keyShift(int index, double semitones) override {
+        rememberKeylock(index);
+        ControlObject::set(ConfigKey(groups[index], "keylock"), 1);
+        ControlObject::set(ConfigKey(groups[index], "pitch_adjust"), semitones);
+    }
+    // KEY SYNC moves this deck to the target's key (relative major/minor
+    // counts as the same key), by the shortest whole-semitone step. Mixxx's
+    // sync_key would also accept a neighbouring key on the wheel.
+    void keySync(int index) override {
+        int target = syncLeader();
+        if (target == index || target < 0 || !tracks_[target]) {
+            target = -1;
+            for (int other = 0; other < 4; ++other) if (other != index && tracks_[other] && playing(other)) { target = other; break; }
+        }
+        const int own = int(ControlObject::get(ConfigKey(groups[index], "file_key")));
+        const int theirs = target < 0 ? 0 : int(std::lround(ControlObject::get(ConfigKey(groups[target], "key"))));
+        const auto steps = keySyncSteps(own, theirs);
+        if (!steps) return;
+        rememberKeylock(index);
+        ControlObject::set(ConfigKey(groups[index], "keylock"), 1);
+        ControlObject::set(ConfigKey(groups[index], "pitch_adjust"), *steps);
+    }
+    /** Mixxx ChromaticKey: 1..12 C..B major, 13..24 C..B minor. */
+    static std::optional<int> keySyncSteps(int own, int target) {
+        if (own < 1 || own > 24 || target < 1 || target > 24) return std::nullopt;
+        const bool ownMinor = own > 12, targetMinor = target > 12;
+        int tonic = (target - 1) % 12;
+        // Compare in this deck's mode: a minor key's relative major is +3.
+        if (ownMinor && !targetMinor) tonic = (tonic + 9) % 12;
+        if (!ownMinor && targetMinor) tonic = (tonic + 3) % 12;
+        int steps = (tonic - (own - 1) % 12 + 12) % 12;
+        if (steps > 6) steps -= 12;
+        return steps;
+    }
+    void keyReset(int index) override {
+        trigger(index, "reset_key");
+        if (keylockBeforeShift_[index]) ControlObject::set(ConfigKey(groups[index], "keylock"), *keylockBeforeShift_[index] ? 1 : 0);
+        keylockBeforeShift_[index].reset();
+    }
+    void rememberKeylock(int index) {
+        if (!keylockBeforeShift_[index]) keylockBeforeShift_[index] = ControlObject::get(ConfigKey(groups[index], "keylock")) > 0;
+    }
+    void performanceControl(int index, const QString& control, double value) override {
+        const bool wasReverse = control == "reverse" && ControlObject::get(ConfigKey(groups[index], control)) > 0;
+        if (control == "slip_enabled") {
+            // Turning SLIP on applies from the next gesture. Turning it off
+            // mid-gesture returns now, as Mixxx seeks when slip disengages.
+            ++slipGenerations_[index]; slipWanted_[index] = value > 0;
+            if (value <= 0) ControlObject::set(ConfigKey(groups[index], control), 0);
+            return;
+        }
+        if ((control == "reverse" || control == "reverseroll") && value > 0) beginSlipGesture(index);
+        ControlObject::set(ConfigKey(groups[index], control), value);
+        if (wasReverse && value == 0) requestSlipReturn(index);
+    }
+    void sync(int index, bool enabled) override {
+        ControlObject::set(ConfigKey(groups[index], "sync_enabled"), enabled ? 1 : 0);
+        if (enabled) requestPhaseSync(index); else { ++phaseGenerations_[index]; armPhaseOnStart(index, false); }
+    }
+    void setSyncLeader(int index) override {
+        ControlObject::set(ConfigKey(groups[index], "sync_leader"), 1);
+        // Leader selection is applied on the audio callback, after this command.
+        for (int follower = 0; follower < 4; ++follower) if (follower != index) requestPhaseSync(follower);
+    }
+    void requestPhaseSync(int index) {
+        const auto token = ++phaseGenerations_[index], generation = generations_[index];
+        QTimer::singleShot(20, this, [this,index,token,generation] {
+            if (phaseGenerations_[index] != token || generations_[index] != generation || !playing(index)) return;
+            triggerPhaseSync(index);
+        });
+    }
+    void armPhaseOnStart(int index, bool armed) { if (decks_[index]) decks_[index]->armPhaseOnStart(armed); }
+    bool phaseSyncWanted(int index) {
+        return syncLeader() != index && ControlObject::get(ConfigKey(groups[index], "sync_enabled")) > 0 && !beatgridState(index).isEmpty();
+    }
+    void triggerPhaseSync(int index) {
+        if (!playing(index) || !phaseSyncWanted(index)) return;
+        // Explicit one-shot phase requests work with native quantize off.
+        // Do not enable quantize, which also changes cue and seek behavior.
+        trigger(index, "beatsync_phase");
+    }
+    bool slipEngaged(int index) const { return ControlObject::get(ConfigKey(groups[index], "slip_enabled")) > 0; }
+    // Mixxx fixes the slip timeline's speed when slip_enabled turns on
+    // (m_dSlipRate = m_rate_old) and never updates it. Engaged for as long as
+    // the SLIP button is on, a later tempo, SYNC or bend change would move the
+    // timeline away from the playhead. So slip is engaged only for a gesture:
+    // just before a loop, reverse or scratch starts (same Qt turn, so the
+    // callback captures the current rate and position), and released when the
+    // gesture ends. A gesture on a stopped deck has no running timeline.
+    void beginSlipGesture(int index) {
+        // Also cancels a pending return; the running timeline is kept.
+        if (interruptSlipReturn(slipGenerations_[index], slipWanted_[index], slipEngaged(index)) && playing(index))
+            ControlObject::set(ConfigKey(groups[index], "slip_enabled"), 1);
+    }
+    void requestSlipReturn(int index) {
+        if (!slipEngaged(index)) return;
+        const auto token = ++slipGenerations_[index], generation = generations_[index];
+        continueSlipReturn(index, token, generation, 0);
+    }
+    void continueSlipReturn(int index, quint64 token, quint64 generation, int attempts) {
+        if (slipGenerations_[index] != token || generations_[index] != generation) return;
+        const auto get = [&](const char* control) { return ControlObject::get(ConfigKey(groups[index], control)); };
+        // The engine applies loop/reverse/scratch exits on its callback, and a
+        // scratch release ramps first; wait (up to ~1 s) for the gesture to end.
+        if ((get("loop_enabled") > 0 || get("reverse") > 0 || get("reverseroll") > 0 || scratching(index)) && attempts < 200) {
+            QTimer::singleShot(5, this, [this,index,token,generation,attempts] { continueSlipReturn(index, token, generation, attempts + 1); });
+            return;
+        }
+        // Disengaging seeks to the slip timeline. Stays off until the next gesture.
+        ControlObject::set(ConfigKey(groups[index], "slip_enabled"), 0);
+    }
     int syncLeader() const override {
         for (int index = 0; index < 4; ++index) {
             if (ControlObject::get(ConfigKey(groups[index], "sync_leader")) > 0) return index;
@@ -594,14 +760,19 @@ public:
         } else trigger(index, prefix + (action == "set" ? "setcue" : action == "jump" ? "goto" : "clear"));
     }
     void loop(int index, double start, double end) override {
-        loopEnable(index, false);
+        ControlObject::set(ConfigKey(groups[index], "loop_enabled"), 0);
         // Clear old bounds first: new start may lie beyond the previous end.
         ControlObject::set(ConfigKey(groups[index], "loop_start_position"), -1);
         ControlObject::set(ConfigKey(groups[index], "loop_end_position"), -1);
         ControlObject::set(ConfigKey(groups[index], "loop_start_position"), engineSamples(index, start));
         ControlObject::set(ConfigKey(groups[index], "loop_end_position"), engineSamples(index, end));
     }
-    void loopEnable(int index, bool enabled) override { ControlObject::set(ConfigKey(groups[index], "loop_enabled"), enabled ? 1 : 0); }
+    void loopEnable(int index, bool enabled) override {
+        const bool wasEnabled = ControlObject::get(ConfigKey(groups[index], "loop_enabled")) > 0;
+        if (enabled && !wasEnabled) beginSlipGesture(index);
+        ControlObject::set(ConfigKey(groups[index], "loop_enabled"), enabled ? 1 : 0);
+        if (!enabled && wasEnabled) requestSlipReturn(index);
+    }
     void beatjump(int index, double beats) override {
         // This is a value command (ignoreNops=false), not a push button.
         // Sending a release value would queue a second, zero-beat seek.
@@ -644,9 +815,11 @@ public:
         if (start >= 0 && end > start && samplesPerMs > 0) region = QJsonObject{{"startMs", start / samplesPerMs}, {"endMs", end / samplesPerMs}, {"enabled", ControlObject::get(ConfigKey(groups[index], "loop_enabled")) > 0}};
         return {{"hotCues", cues}, {"loopRegion", region}, {"quantize", placementQuantize_[index]},
             {"keylock", ControlObject::get(ConfigKey(groups[index], "keylock")) > 0},
+            {"syncEnabled", ControlObject::get(ConfigKey(groups[index], "sync_enabled")) > 0},
+            {"syncLeader", syncLeader() == index ? QJsonValue(names[index]) : QJsonValue(QJsonValue::Null)},
             {"musicalKey", ControlObject::get(ConfigKey(groups[index], "key"))},
             {"keyShift", ControlObject::get(ConfigKey(groups[index], "pitch_adjust"))},
-            {"slip", ControlObject::get(ConfigKey(groups[index], "slip_enabled")) > 0},
+            {"slip", slipWanted_[index]},
             {"reverse", ControlObject::get(ConfigKey(groups[index], "reverse")) > 0},
             {"slipReverse", ControlObject::get(ConfigKey(groups[index], "reverseroll")) > 0}};
     }
@@ -662,43 +835,119 @@ public:
 
     /** 掛かりを落とし、次回に必ず載せ直させる。曲の入れ替え時に使う。 */
     void disableFx(int index) {
+        ++fxGenerations_[index]; fxHeld_[index] = false; fxTails_[index] = false;
         ControlObject::set(ConfigKey(StandardEffectChain::formatEffectChainGroup(index), "enabled"), 0);
         fxLoaded_[index] = false;
     }
 
     bool fx(int index, const QString& effect, bool enabled, double mix, double depth) override {
+        return padFx(index, effect, enabled, mix, depth, std::nullopt, {}).isEmpty();
+    }
+    QString padFx(int index, const QString& effect, bool enabled, double mix, double depth, std::optional<double> beats, const QJsonObject& params) override {
         const auto chain = effects_->getStandardEffectChain(index);
-        // The pad chain gates on the chain switch below, so its one slot is
-        // always on. Publish that through the static setter and before any load:
-        // EffectSlot only forwards its enable state to the audio thread from its
-        // own valueChanged handler and from the tail of loadEffectInner(), and
-        // EffectSlot::setEnabled() writes through the slot's own ControlObject,
-        // which suppresses valueChanged for its own writes. Until now this held
-        // only because loading a track forces the reload below.
+        // Prefer the host's timed processors; keep Mixxx-only inserts available.
+        auto manifest = effects_->getBackendManager()->getManifest("org.plumdeck.effects." + effect, EffectBackendType::BuiltIn);
+        if (!manifest) manifest = builtinEffect(effect);
+        if (!manifest) return "Native effect processor is unavailable";
+        const auto parameterManifest = [&](const QString& id) -> EffectManifestParameterPointer {
+            for (const auto& entry : manifest->parameters()) if (entry->id() == id) return entry;
+            return {};
+        };
+        for (auto it = params.begin(); it != params.end(); ++it) {
+            const auto parameter = parameterManifest(it.key());
+            if (!parameter || !it.value().isDouble() || !std::isfinite(it.value().toDouble()) || it.value().toDouble() < parameter->getMinimum() || it.value().toDouble() > parameter->getMaximum())
+                return "Invalid PAD FX parameter: " + it.key();
+        }
+        QString beatParameter;
+        double beatValue = 0;
+        if (beats) {
+            for (const auto* id : {"beats", "delay_time", "lfo_period", "speed", "period", "rate"}) {
+                const auto parameter = parameterManifest(id);
+                if (!parameter) continue;
+                beatParameter = id; beatValue = beatParameter == "rate" ? 1.0 / *beats : *beats;
+                if (beatValue < parameter->getMinimum() || beatValue > parameter->getMaximum()) return "Beat length is outside this effect's supported range";
+                if (params.contains(beatParameter)) return "Specify beat length once, using beats";
+                break;
+            }
+            if (beatParameter.isEmpty()) return "This effect has no beat-length parameter";
+        }
+        // A delayed pointer-up from a previous pad cannot stop its replacement.
+        if (!enabled && (!fxLoaded_[index] || fxEffects_[index] != effect)) return {};
+        const auto generation = ++fxGenerations_[index];
+        const auto setParameter = [&](const QString& id, double value) {
+            bool found = false;
+            for (const auto& map : {chain->getEffectSlot(0)->getLoadedParameters(), chain->getEffectSlot(0)->getHiddenParameters()})
+                for (const auto& parameters : map) for (const auto& parameter : parameters) if (parameter->manifest()->id() == id) {
+                    parameter->setValue(value); parameter->updateEngineState(); found = true;
+                }
+            return found;
+        };
+        fxHeld_[index] = enabled;
+        if (!enabled) {
+            // Stop feeding a send effect, while its already-captured signal
+            // decays. A fresh press/load/session invalidates this delayed stop.
+            const bool tail = parameterManifest("send_amount") && setParameter("send_amount", 0);
+            fxTails_[index] = tail;
+            if (tail) {
+                // Let the repeats decay to about -60 dB before the chain turns
+                // off (Mixxx then ramps over one buffer, now inaudible). The
+                // length follows the applied delay and feedback, not a fixed
+                // repeat count.
+                const double bpm = effectiveBpm(index) > 0 ? effectiveBpm(index) : 120;
+                const double length = effect == "reverb" ? 8 : fxBeats_[index] * tailRepeats(index, effect);
+                const int duration = int(std::min(30000.0, 60000 * std::max(1.0, length) / bpm));
+                QTimer::singleShot(duration, this, [this,index,generation] {
+                    if (fxGenerations_[index] != generation) return;
+                    ControlObject::set(ConfigKey(StandardEffectChain::formatEffectChainGroup(index), "enabled"), 0);
+                    fxTails_[index] = false;
+                });
+            } else ControlObject::set(ConfigKey(chain->group(), "enabled"), 0);
+            return {};
+        }
+        fxTails_[index] = false;
         ControlObject::set(ConfigKey(StandardEffectChain::formatEffectSlotGroup(index, 0), "enabled"), 1);
         if (!fxLoaded_[index] || fxEffects_[index] != effect) {
-            const auto manifest = builtinEffect(effect);
-            if (!manifest) return false;
-            // Loading the manifest the slot already holds is a no-op, which
-            // leaves the metaknob unlinked and the effect silent. Whichever pad
-            // matched the slot's current effect stayed dead. Pass through a
-            // different manifest first so the load is always a real transition.
-            if (const auto other = builtinEffect(effect == QLatin1String("reverb") ? "echo" : "reverb")) {
-                chain->getEffectSlot(0)->loadEffectWithDefaults(other);
-            }
+            // Force a manifest transition even if the rack was preseeded with
+            // the same name: it rebinds the macro and clears the old track tail.
+            // Pads use 2 beats or fewer: a 4 s ring instead of BEAT FX's 16 s.
+            DdjRingScope ring(4);
+            if (const auto other = builtinEffect(effect == "reverb" ? "echo" : "reverb")) chain->getEffectSlot(0)->loadEffectWithDefaults(other);
             chain->getEffectSlot(0)->loadEffectWithDefaults(manifest);
-            fxEffects_[index] = effect;
-            fxLoaded_[index] = true;
+            fxEffects_[index] = effect; fxLoaded_[index] = true;
         }
-        // Apply on every call, not only when the effect name changes. The rack
-        // is pre-seeded with "echo", so a first press of that pad used to skip
-        // this block entirely and stayed silent. Empty racks also start with a
-        // zero metaknob, which mutes Echo's send and Flanger's mix.
         chain->getEffectSlot(0)->setMetaParameter(metaParameterFor(effect, depth), true);
-        ControlObject::set(ConfigKey(chain->group(), "mix"), mix);
-        ControlObject::set(ConfigKey(chain->group(), "enabled"), enabled ? 1 : 0);
-        fxDepths_[index]=depth;
-        return true;
+        if (!beatParameter.isEmpty()) setParameter(beatParameter, beatValue);
+        if (parameterManifest("depth")) setParameter("depth", depth);
+        // Unlinked sends on owned delay processors stay at zero after release.
+        if (parameterManifest("send_amount")) setParameter("send_amount", effect == "echo" || effect == "reverb" ? depth : 1);
+        if (effect == "tremolo") setParameter("waveform", .005); // TRANS: beat-synchronous gate.
+        if (effect == "pitchshift") setParameter("range", 1); // macro spans -1..+1 octave
+        for (auto it = params.begin(); it != params.end(); ++it) setParameter(it.key(), it.value().toDouble());
+        const bool insert = effect == "filter" || effect == "moogladder4filter" || effect == "bitcrusher" || effect == "distortion" || effect == "autopan" || effect == "tremolo" || effect == "roll" || effect == "sliproll" || effect == "pitchshift";
+        ControlObject::set(ConfigKey(chain->group(), "mix"), insert ? 1 : mix);
+        ControlObject::set(ConfigKey(chain->group(), "enabled"), 1);
+        fxDepths_[index] = depth;
+        // The beat length actually applied: the request's, else the loaded
+        // effect's own (a press without beats must not reuse a stale value).
+        fxBeats_[index] = beats ? *beats : 1;
+        for (const auto* id : {"beats", "delay_time"}) if (const auto value = slotParameter(chain->getEffectSlot(0), id)) { fxBeats_[index] = *value; break; }
+        return {};
+    }
+    static std::optional<double> slotParameter(const EffectSlotPointer& slot, const QString& id) {
+        for (const auto& map : {slot->getLoadedParameters(), slot->getHiddenParameters()})
+            for (const auto& parameters : map) for (const auto& parameter : parameters) if (parameter->manifest()->id() == id) return parameter->getValue();
+        return std::nullopt;
+    }
+    /** Repeats until a released delay's return falls ~51 dB below its first repeat. */
+    double tailRepeats(int index, const QString& effect) const {
+        // Per-repeat gain: the echo's feedback parameter, or the fixed gains
+        // of the owned processors in ddj_beat_processors.h.
+        const double depth = fxDepths_[index];
+        double feedback = slotParameter(effects_->getStandardEffectChain(index)->getEffectSlot(0), "feedback_amount").value_or(std::sqrt(.5));
+        if (effect == "lowcutecho") feedback = .2 + .55 * depth;
+        else if (effect == "spiral") feedback = .3 + .55 * depth;
+        else if (effect == "mtdelay") feedback = .35;
+        return feedback <= .001 ? 2 : std::clamp(std::ceil(51 / (-20 * std::log10(std::min(feedback, .98)))), 2.0, 48.0);
     }
 
     /**
@@ -707,9 +956,13 @@ public:
      * one onto the other so a pad at full depth is audible for every effect.
      */
     static double metaParameterFor(const QString& effect, double depth) {
-        // Filters are neutral at the centre and cut towards either end.
+        // Filters are neutral at the centre and cut towards either end: depth
+        // 0 sweeps LPF, 1 HPF. Stop short of the ends (corners ~32 Hz and
+        // ~9 kHz), so a full turn leaves a thin signal as hardware filters do.
+        // Since mixer.fx.beats this replaces the old 0.5 - depth/2 mapping;
+        // clients from before it are unsupported.
         if (effect == QLatin1String("filter") || effect == QLatin1String("moogladder4filter")) {
-            return 0.5 - depth * 0.5;
+            return 0.06 + 0.88 * depth;
         }
         // Auto Pan's metaknob is its LFO rate: at the top the pan is too fast to
         // hear as movement, so keep full depth inside the range that reads.
@@ -723,6 +976,7 @@ public:
         if (!effects_) return false;
         bool changed = false;
         for (int index = 0; index < 4; ++index) {
+            ++fxGenerations_[index]; fxHeld_[index] = false; fxTails_[index] = false;
             const auto key = ConfigKey(StandardEffectChain::formatEffectChainGroup(index), "enabled");
             if (ControlObject::get(key) > 0) {
                 ControlObject::set(key, 0);
@@ -870,6 +1124,15 @@ public:
     void pfl(int index, bool enabled) override { ControlObject::set(ConfigKey(groups[index], "pfl"), enabled ? 1 : 0); }
     void masterGain(double value) override { ControlObject::set(ConfigKey("[Master]", "gain"), value); }
     void crossfader(double value) override { ControlObject::set(ConfigKey("[Master]", "crossfader"), value); }
+    void headphoneGain(double value) override { ControlObject::set(ConfigKey("[Master]", "headGain"), value); }
+    void headphoneMix(double value) override { ControlObject::set(ConfigKey("[Master]", "headMix"), value); }
+    void crossfaderCurve(const QString& curve) override {
+        crossfaderCurve_ = curve;
+        const double transform = curve == "sharp" ? 1000 : 1;
+        ControlObject::set(ConfigKey("[Mixer Profile]", "xFaderMode"), curve == "smooth" ? MIXXX_XFADER_CONSTPWR : MIXXX_XFADER_ADDITIVE);
+        ControlObject::set(ConfigKey("[Mixer Profile]", "xFaderCurve"), transform);
+        ControlObject::set(ConfigKey("[Mixer Profile]", "xFaderCalibration"), EngineXfader::getPowerCalibration(transform));
+    }
     QString recordingDirectory(const QString& path) override {
         if (!recorder_ || path.isEmpty()) return {};
         // RecordingManager は録音のたびにこの設定を読み直し、無ければ作る。
@@ -1017,6 +1280,7 @@ private:
     const AudioInput junctionAuxInput_{AudioPathType::Auxiliary, 0, mixxx::audio::ChannelCount::stereo(), 0};
     std::array<float, junction::AudioBridge::maxFrames * 2> junctionAuxBuffer_{};
     // Audio-thread meter window and the peaks it publishes.
+    AudioMeter masterMeter_, headphoneMeter_;
     std::array<float, 3> meterWindow_{};
     unsigned meterFrames_ = 0;
     std::atomic<float> programPeak_{0}, pflPeak_{0}, localReturnPeak_{0}, localBlockPeak_{0};
@@ -1033,18 +1297,23 @@ private:
     std::array<double, 4> diagnosticBuffers_{};
     QJsonArray diagnosticHistory_;
     bool diagnosticDirty_ = false;
-    std::array<quint64, 4> bendGenerations_{};
+    std::array<quint64, 4> bendGenerations_{}, phaseGenerations_{}, slipGenerations_{};
+    std::array<bool, 4> slipWanted_{};
+    std::array<std::optional<bool>, 4> keylockBeforeShift_{};
     std::array<bool, 4> placementQuantize_{true, true, true, true};
     std::array<QString, 4> fxEffects_;
     // 起動直後はチェーンがまだ engine に繋がっておらず、ここでのロードは効かない。
     // 「名前を覚えている」ことと「実際にスロットに載っている」ことを分けて持つ。
-    std::array<bool, 4> fxLoaded_{};
+    std::array<bool, 4> fxLoaded_{}, fxHeld_{}, fxTails_{};
+    std::array<quint64, 4> fxGenerations_{};
+    std::array<double, 4> fxBeats_{1, 1, 1, 1};
     QElapsedTimer recordingTimer_, recordingCooldown_;
     QString recordingPath_, recordingStartedAt_, recordingError_;
     qint64 recordedElapsedMs_ = 0;
     bool recordingActive_ = false, recordingPending_ = false, recordingStopping_ = false;
     bool available_ = false, started_ = false, pflAvailable_ = false;
     QString problem_ = "Mixxx audio initialization has not completed", output_;
+    QString crossfaderCurve_ = "sharp";
 };
 }
 std::unique_ptr<PlaybackBackend> makeBackend() { return std::make_unique<MixxxBackend>(); }

@@ -59,6 +59,9 @@ class MetadataImportRow(BaseModel):
     genre: Optional[str] = None
     subgenre: Optional[str] = None
     year: Optional[int] = None
+    # Recorded as manual values: rekordbox and re-analysis keep them.
+    bpm: Optional[float] = None
+    key: Optional[str] = None
     is_genre_verified: Optional[bool] = None
 
 class MetadataImportAnalysisResult(BaseModel):

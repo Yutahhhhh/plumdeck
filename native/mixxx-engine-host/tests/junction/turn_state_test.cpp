@@ -66,7 +66,7 @@ JTEST("turn","tail decks accept loops only and the rest of the mixer stays free"
  for(const char* op:{"deck.play","deck.seek","deck.hotcue.jump","deck.scratch","deck.pitchbend","deck.tempo.set","deck.key.shift","deck.sync.set","deck.load","deck.unload","deck.beatjump","mixer.channel.gain","mixer.channel.eq","mixer.eq.set","mixer.filter.set","mixer.fx.set","mixer.colorfx.set","mixer.channel.orientation","mixer.trim.set"})
   CHECK(!TailLock::check(op,deck("A"),tail).isEmpty());
  for(const char* op:{"deck.play","deck.load","mixer.channel.gain","deck.sync.set"})CHECK(TailLock::check(op,deck("B"),tail).isEmpty());
- for(const char* op:{"mixer.crossfader","mixer.master.gain","mixer.beatfx.set"})CHECK(!TailLock::check(op,{},tail).isEmpty());
+ for(const char* op:{"mixer.crossfader","mixer.crossfader.curve","mixer.master.gain","mixer.beatfx.set"})CHECK(!TailLock::check(op,{},tail).isEmpty());
  CHECK(!TailLock::check("deck.sync.set",QJsonObject{{"deck","B"},{"leader","A"}},tail).isEmpty());
  CHECK(TailLock::check("sampler.play",{},tail).isEmpty());
 }

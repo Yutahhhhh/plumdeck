@@ -117,9 +117,10 @@ def recommend_next_track(
     year_min: Optional[int] = None,
     year_max: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """指定した曲の次に繋ぐのに適した楽曲を、BPM/キー/音響類似度からスコアリングして提案する。
+    """指定した曲の次に繋ぐのに適した楽曲を、BPMと音色の類似度（埋め込み）からスコアリングして提案する。
+    キーは採点に使わない（重み0）。埋め込みが計算待ちの曲は類似度を除き、残りの重みで採点する。
     ユーザーの自然言語の方向性はMCPクライアント側で target_* 値へ解釈する。
-    target未指定なら純粋にベクトル/BPM/キーのみで評価する。
+    target未指定なら BPM と音色の類似度だけで評価する。
     year_min/year_max は候補曲のリリース年の範囲（両端を含む）。指定時は年不明の曲を除く。
     """
     with db_session() as session:

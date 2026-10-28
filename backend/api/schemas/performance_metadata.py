@@ -125,6 +125,8 @@ class PerformanceMetadataRead(BaseModel):
     created_at: datetime | None
     updated_at: datetime | None
     grid_warning: str | None = None
+    # A missing grid is being analyzed in the background; GET again for it.
+    grid_pending: bool = False
 
 
 class GridAnalysisRequest(BaseModel):
