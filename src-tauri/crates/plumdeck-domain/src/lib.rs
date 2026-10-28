@@ -11,11 +11,14 @@
 //! - [`mixability`], [`targets`], [`setlist_builder`], [`set_duration`],
 //!   [`wordplay`]: the recommenders, Setlist Auto and path builder, set
 //!   timing and wordplay rules (S4).
+//! - [`performance`]: performance metadata models, playback grid fit and
+//!   rekordbox grid shift (S5).
 
 pub mod audio_math;
 pub mod genre_rules;
 pub mod lrc;
 pub mod mixability;
+pub mod performance;
 pub mod pychars;
 pub mod set_duration;
 pub mod setlist_builder;

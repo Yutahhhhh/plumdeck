@@ -6,6 +6,7 @@ pub mod dashboard;
 pub mod genres;
 pub mod lyrics;
 pub mod media;
+pub mod performance;
 pub mod settings;
 pub mod setlists;
 pub mod suggestions;
@@ -53,6 +54,11 @@ pub fn api() -> Router<AppState> {
         .route("/api/wordplay-pairs", get(wordplay::list))
         .route("/api/wordplay-pairs/{pair_id}/approve", post(wordplay::approve_route))
         .route("/api/wordplay-pairs/{pair_id}", patch(wordplay::patch_route).delete(wordplay::delete_route))
+        .route("/api/tracks/{track_id}/performance-metadata", get(performance::get_route).put(performance::put_route))
+        .route("/api/tracks/performance-metadata/cue-points", post(performance::cue_points_route))
+        .route("/api/tracks/cues-rekordbox/import", post(performance::import_all_route))
+        .route("/api/tracks/{track_id}/cues-rekordbox", post(performance::import_cues_route))
+        .route("/api/tracks/{track_id}/grid-rekordbox", post(performance::grid_rekordbox_route))
         .route("/api/tracks/{track_id}/suggest-genre", get(suggestions::suggest_genre))
         .route("/api/genres/grouped-suggestions", get(suggestions::grouped_suggestions))
         .route("/api/genres/grouped-suggestions/{track_id}", get(suggestions::suggestions_for_track))

@@ -7,6 +7,7 @@ pub mod dashboard;
 pub mod genres;
 pub mod imports;
 pub mod lyrics;
+pub mod performance;
 pub mod recommendations;
 pub mod settings;
 pub mod setlists;

@@ -176,6 +176,7 @@
 
 ### 段 2：バックエンドの主要スライス
 
+- **S5**（実装済み。演奏メタデータ、キュー一覧、rekordbox のキュー取り込みと PQTZ グリッド。オンデマンド解析は S11、D-19）。
 - **S4**（実装済み。セットリストはパリティ 0 差分。推薦・wordplay・ジャンル提案のシナリオは最後にまとめて追加。D-17 / D-18 を記録）／ **S5**（rekordbox crate を使う performance metadata とグリッド候補）／ **S8**（BackgroundTask、メタデータジョブ、タグ書込み、CSV）。依存はすべて S3。
 - **S6**（Assist と set planner。S4・S5 の後）／ **S7**（Play、録音、詳細波形。S4 の後）。
 - **S9**（MCP。S4・S6・S8 の後）→ **S10**（workflows。S4・S5・S7 の後）→ **S12**（Junction の MCP ツールを in-process に。S9 の後）。

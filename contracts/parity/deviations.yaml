@@ -138,3 +138,13 @@ deviations:
       session. Public model attributes (dict, model_dump, ...) still answer
       500 as setattr raised in Python; model fields are written as before.
     current: B ignores them like unknown keys; no scenario sends one.
+  - id: D-19
+    status: proposed
+    source: backend/app/services/grid_candidate_service.py automatic (_start_on_demand)
+    summary: >
+      Until S11 ports the analyzer, GET /api/tracks/{id}/performance-metadata
+      does not start a background whole-track grid analysis for a track
+      without a rekordbox or stored grid; it answers grid_pending false and
+      beat_grid null. POST /api/tracks/{id}/grid-analysis and the grid-jobs
+      routes come with S11.
+    current: temporary; removed when S11 lands.
