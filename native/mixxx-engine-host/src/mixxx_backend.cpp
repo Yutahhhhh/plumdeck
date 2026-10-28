@@ -2,6 +2,8 @@
 // plumdeck-owned adapter. Upstream APIs pinned to Mixxx 2.5.6 / 3ebac449.
 #include "backend.h"
 #include "scratch_deck.h"
+#include "slip_return.h"
+#include "engine/enginexfader.h"
 #include "sampler_bank.h"
 #include "beat_fx.h"
 #include "engine/effects/engineeffectsmanager.h"
@@ -269,6 +271,8 @@ public:
             }
             // Metered as the venue receives it: before the booth (master) knob.
             self->meterBlock(programWritten?self->audioBridge_.programPre.data():master,pfl,local,frames);
+            self->masterMeter_.process(master, frames * 2);
+            self->headphoneMeter_.process(pfl, frames * 2);
             self->renderFrame_+=frames;
             // Devices play these copies, so the booth mute and the private
             // preview never alter the engine's own main or headphone buffers.
@@ -358,10 +362,6 @@ public:
             return failure;
         }
         masterStart_ = mainStart; pflStart_ = cueStart; pflAvailable_ = cueStart >= 0;
-        if (pflAvailable_) {
-            ControlObject::set(ConfigKey("[Master]", "headGain"), 1);
-            ControlObject::set(ConfigKey("[Master]", "headMix"), -1);
-        }
         return {};
     }
     QString configureMicrophone(const QJsonObject& params) override {
@@ -432,12 +432,29 @@ public:
         micProblem_.clear();
         return {};
     }
+    QJsonObject meters() const override {
+        QJsonObject channels;
+        for (int index = 0; index < 4; ++index) {
+            auto levels = decks_[index] ? decks_[index]->levels() : QJsonObject{{"peak", 0}, {"rms", 0}};
+            levels["pfl"] = ControlObject::get(ConfigKey(groups[index], "pfl")) > 0;
+            channels[names[index]] = levels;
+        }
+        return {{"simulated", false}, {"master", QJsonObject{{"peak", masterMeter_.takePeak()}, {"rms", masterMeter_.rms()}}},
+                {"headphone", QJsonObject{{"peak", headphoneMeter_.takePeak()}, {"rms", headphoneMeter_.rms()}}}, {"channels", channels}};
+    }
     QJsonObject mixer() const override {
         auto value = PlaybackBackend::mixer();
         if (!mixer_) return value;
         value["available"] = available_;
         value["eqAvailable"] = available_; value["pflAvailable"] = available_ && pflAvailable_;
         value["crossfader"] = ControlObject::get(ConfigKey("[Master]", "crossfader"));
+        value["crossfaderCurve"] = crossfaderCurve_;
+        CSAMPLE_GAIN left = 1, right = 1;
+        EngineXfader::getXfadeGains(value["crossfader"].toDouble(),
+                ControlObject::get(ConfigKey("[Mixer Profile]", "xFaderCurve")),
+                ControlObject::get(ConfigKey("[Mixer Profile]", "xFaderCalibration")),
+                ControlObject::get(ConfigKey("[Mixer Profile]", "xFaderMode")),
+                ControlObject::get(ConfigKey("[Mixer Profile]", "xFaderReverse")) > 0, &left, &right);
         value["beatFx"] = beatFx_ ? beatFx_->state() : QJsonObject{};
         value["masterGain"] = ControlObject::get(ConfigKey("[Master]", "gain"));
         value["headphoneGain"] = ControlObject::get(ConfigKey("[Master]", "headGain"));
@@ -446,6 +463,7 @@ public:
         for (int index = 0; index < 4; ++index) {
             auto channel = channels[names[index]].toObject(); channel["available"] = available_;
             channel["orientation"] = ControlObject::get(ConfigKey(groups[index], "orientation"));
+            channel["crossfaderGain"] = channel["orientation"].toInt() == 0 ? left : channel["orientation"].toInt() == 2 ? right : 1;
             channel["gain"] = ControlObject::get(ConfigKey(groups[index], "volume")); channel["pfl"] = ControlObject::get(ConfigKey(groups[index], "pfl")) > 0;
             channel["eqLow"] = ControlObject::get(ConfigKey(groups[index], "filterLow"));
             channel["eqMid"] = ControlObject::get(ConfigKey(groups[index], "filterMid"));
@@ -465,6 +483,10 @@ public:
         releaseScratch(index);
         disableFx(index);
         generations_[index] = generation;
+        if (keylockBeforeShift_[index]) keyReset(index);
+        ++slipGenerations_[index]; slipWanted_[index] = false;
+        ++phaseGenerations_[index];
+        ControlObject::set(ConfigKey(groups[index], "file_key"), 0);
         for (const auto& control : {"slip_enabled","reverse","reverseroll","pitch_adjust"}) ControlObject::set(ConfigKey(groups[index],control),0);
         tracks_[index] = Track::newTemporary(path);
         decks_[index]->getEngineBuffer()->loadTrack(tracks_[index], false, nullptr);
@@ -473,6 +495,9 @@ public:
         pitchbend(index, 0);
         releaseScratch(index);
         disableFx(index);
+        if (keylockBeforeShift_[index]) keyReset(index);
+        ++slipGenerations_[index]; slipWanted_[index] = false;
+        ++phaseGenerations_[index];
         ++generations_[index]; tracks_[index].reset();
         ControlObject::set(ConfigKey(groups[index], "play"), 0);
         decks_[index]->getEngineBuffer()->ejectTrack();
@@ -501,8 +526,18 @@ public:
     QString beatFx(const QJsonObject& params) override { return beatFx_ ? beatFx_->configure(params) : "Beat FX unavailable"; }
     QJsonObject samplerState() const override { return samplers_ ? samplers_->state() : QJsonObject{}; }
     QString samplerCommand(const QString& op, const QJsonObject& params) override { return samplers_ ? samplers_->command(op, params) : "Sampler unavailable"; }
-    void play(int index, bool enabled) override { ControlObject::set(ConfigKey(groups[index], "play"), enabled ? 1 : 0); }
+    void play(int index, bool enabled) override {
+        const bool starting = enabled && !playing(index), stopping = !enabled && playing(index);
+        ControlObject::set(ConfigKey(groups[index], "play"), enabled ? 1 : 0);
+        if (starting) requestPhaseSync(index); else if (!enabled) ++phaseGenerations_[index];
+        // The slip timeline only runs while playing (see armSlip).
+        if (starting && slipWanted_[index] && !slipEngaged(index)) armSlip(index);
+        if (stopping && slipWanted_[index] && slipEngaged(index) && !inSlipGesture(index)) {
+            ++slipGenerations_[index]; ControlObject::set(ConfigKey(groups[index], "slip_enabled"), 0);
+        }
+    }
     void seek(int index, double ms) override {
+        ++phaseGenerations_[index];
         if (tracks_[index] && tracks_[index]->getDuration() > 0) ControlObject::set(ConfigKey(groups[index], "playposition"), ms / (1000.0 * tracks_[index]->getDuration()));
     }
     // ネイティブ演奏入力 (inputSequence>0) と RPC のポインタ操作 (inputSequence==0) は
@@ -516,10 +551,11 @@ public:
         if (phase == "begin") scratchOwner_[index] = origin;
         else if (scratchOwner_[index] != origin) return;
         else if (release) scratchOwner_[index] = ScratchOrigin::None;
-        if (phase == "begin") pitchbend(index, 0);
+        if (phase == "begin") { pitchbend(index, 0); cancelSlipReturn(index); }
         const double sampleRate = tracks_[index] ? tracks_[index]->getSampleRate().value() : 44100;
         // "abort" は曲の入れ替えなどでの強制解放。制動も着地もせず即座に離す。
         decks_[index]->requestScratch(!release, phase == "begin", ms * sampleRate * 2.0 / 1000.0, sampleRate, phase != "abort", capturedNativeUs, keepalive, inputSequence);
+        if (phase == "end") requestSlipReturn(index);
     }
     // ライフサイクル側の解放。所有者が誰であっても必ずジェスチャーを終わらせる。
     void releaseScratch(int index) {
@@ -570,11 +606,146 @@ public:
             if (bendGenerations_[index] == generation) pitchbend(index, 0);
         });
     }
-    void keylock(int index, bool enabled) override { ControlObject::set(ConfigKey(groups[index], "keylock"), enabled ? 1 : 0); }
-    void trackKey(int index, const QString& key) override { if (tracks_[index]) tracks_[index]->setKeyText(key); }
-    void performanceControl(int index, const QString& control, double value) override { ControlObject::set(ConfigKey(groups[index], control), value); }
-    void sync(int index, bool enabled) override { ControlObject::set(ConfigKey(groups[index], "sync_enabled"), enabled ? 1 : 0); }
-    void setSyncLeader(int index) override { ControlObject::set(ConfigKey(groups[index], "sync_leader"), 1); }
+    void keylock(int index, bool enabled) override {
+        // An explicit MT action supersedes the remembered pre-shift choice.
+        if (keylockBeforeShift_[index]) keylockBeforeShift_[index] = enabled;
+        ControlObject::set(ConfigKey(groups[index], "keylock"), enabled ? 1 : 0);
+    }
+    void trackKey(int index, const QString& key) override {
+        if (!tracks_[index]) return;
+        tracks_[index]->setKeyText(key);
+        // The GUI's PlayerInfo normally forwards this field. Headless decks do
+        // not have that adapter, so changing Track alone never reaches KEY SYNC.
+        ControlObject::set(ConfigKey(groups[index], "file_key"), static_cast<int>(tracks_[index]->getKey()));
+    }
+    void keyShift(int index, double semitones) override {
+        rememberKeylock(index);
+        ControlObject::set(ConfigKey(groups[index], "keylock"), 1);
+        ControlObject::set(ConfigKey(groups[index], "pitch_adjust"), semitones);
+    }
+    // KEY SYNC moves this deck to the target's key (relative major/minor
+    // counts as the same key), by the shortest whole-semitone step. Mixxx's
+    // sync_key would also accept a neighbouring key on the wheel.
+    void keySync(int index) override {
+        int target = syncLeader();
+        if (target == index || target < 0 || !tracks_[target]) {
+            target = -1;
+            for (int other = 0; other < 4; ++other) if (other != index && tracks_[other] && playing(other)) { target = other; break; }
+        }
+        const int own = int(ControlObject::get(ConfigKey(groups[index], "file_key")));
+        const int theirs = target < 0 ? 0 : int(std::lround(ControlObject::get(ConfigKey(groups[target], "key"))));
+        const auto steps = keySyncSteps(own, theirs);
+        if (!steps) return;
+        rememberKeylock(index);
+        ControlObject::set(ConfigKey(groups[index], "keylock"), 1);
+        ControlObject::set(ConfigKey(groups[index], "pitch_adjust"), *steps);
+    }
+    /** Mixxx ChromaticKey: 1..12 C..B major, 13..24 C..B minor. */
+    static std::optional<int> keySyncSteps(int own, int target) {
+        if (own < 1 || own > 24 || target < 1 || target > 24) return std::nullopt;
+        const bool ownMinor = own > 12, targetMinor = target > 12;
+        int tonic = (target - 1) % 12;
+        // Compare in this deck's mode: a minor key's relative major is +3.
+        if (ownMinor && !targetMinor) tonic = (tonic + 9) % 12;
+        if (!ownMinor && targetMinor) tonic = (tonic + 3) % 12;
+        int steps = (tonic - (own - 1) % 12 + 12) % 12;
+        if (steps > 6) steps -= 12;
+        return steps;
+    }
+    void keyReset(int index) override {
+        trigger(index, "reset_key");
+        if (keylockBeforeShift_[index]) ControlObject::set(ConfigKey(groups[index], "keylock"), *keylockBeforeShift_[index] ? 1 : 0);
+        keylockBeforeShift_[index].reset();
+    }
+    void rememberKeylock(int index) {
+        if (!keylockBeforeShift_[index]) keylockBeforeShift_[index] = ControlObject::get(ConfigKey(groups[index], "keylock")) > 0;
+    }
+    void performanceControl(int index, const QString& control, double value) override {
+        const bool wasReverse = control == "reverse" && ControlObject::get(ConfigKey(groups[index], control)) > 0;
+        if (control == "slip_enabled") {
+            ++slipGenerations_[index]; slipWanted_[index] = value > 0;
+            if (value > 0) { if (playing(index) && !slipEngaged(index)) armSlip(index); }
+            else ControlObject::set(ConfigKey(groups[index], control), 0);
+            return;
+        }
+        if ((control == "reverse" || control == "reverseroll") && value > 0) cancelSlipReturn(index);
+        ControlObject::set(ConfigKey(groups[index], control), value);
+        if (wasReverse && value == 0) requestSlipReturn(index);
+    }
+    void sync(int index, bool enabled) override {
+        ControlObject::set(ConfigKey(groups[index], "sync_enabled"), enabled ? 1 : 0);
+        if (enabled) requestPhaseSync(index); else ++phaseGenerations_[index];
+    }
+    void setSyncLeader(int index) override {
+        ControlObject::set(ConfigKey(groups[index], "sync_leader"), 1);
+        // Leader selection is applied on the audio callback, after this command.
+        for (int follower = 0; follower < 4; ++follower) if (follower != index) requestPhaseSync(follower);
+    }
+    void requestPhaseSync(int index) {
+        const auto token = ++phaseGenerations_[index], generation = generations_[index];
+        QTimer::singleShot(20, this, [this,index,token,generation] {
+            if (phaseGenerations_[index] != token || generations_[index] != generation || !playing(index) || syncLeader() == index ||
+                    ControlObject::get(ConfigKey(groups[index], "sync_enabled")) <= 0 || beatgridState(index).isEmpty()) return;
+            // Explicit one-shot phase requests work with native quantize off.
+            // Do not enable quantize, which also changes cue and seek behavior.
+            trigger(index, "beatsync_phase");
+        });
+    }
+    bool slipEngaged(int index) const { return ControlObject::get(ConfigKey(groups[index], "slip_enabled")) > 0; }
+    bool inSlipGesture(int index) const {
+        const auto get = [&](const char* control) { return ControlObject::get(ConfigKey(groups[index], control)) > 0; };
+        return get("loop_enabled") || get("reverse") || get("reverseroll") || scratching(index);
+    }
+    // Mixxx captures the slip timeline's speed once, when slip_enabled turns
+    // on. Engaged while stopped, or in the same callback that starts
+    // playback, the timeline would stand still and a later return would jump
+    // back to where SLIP was pressed. So SLIP is engaged only while playing,
+    // a few callbacks after playback started.
+    void armSlip(int index) {
+        const auto token = ++slipGenerations_[index], generation = generations_[index];
+        continueArmSlip(index, token, generation, decks_[index]->renderedBlocks(), 0);
+    }
+    void continueArmSlip(int index, quint64 token, quint64 generation, quint64 start, int attempts) {
+        if (slipGenerations_[index] != token || generations_[index] != generation || !slipWanted_[index] || !playing(index)) return;
+        if (decks_[index]->renderedBlocks() > start + 2) { ControlObject::set(ConfigKey(groups[index], "slip_enabled"), 1); return; }
+        if (attempts >= 200) return;
+        QTimer::singleShot(5, this, [this,index,token,generation,start,attempts] { continueArmSlip(index, token, generation, start, attempts + 1); });
+    }
+    void cancelSlipReturn(int index) {
+        const auto key = ConfigKey(groups[index], "slip_enabled");
+        // A gesture on a stopped deck has no running timeline to return to.
+        if (interruptSlipReturn(slipGenerations_[index], slipWanted_[index], ControlObject::get(key) > 0) && playing(index))
+            ControlObject::set(key, 1);
+    }
+    void requestSlipReturn(int index) {
+        if (!slipWanted_[index] || !slipEngaged(index)) return;
+        const auto token = ++slipGenerations_[index], generation = generations_[index];
+        continueSlipReturn(index, token, generation, false, 0, 0);
+    }
+    void continueSlipReturn(int index, quint64 token, quint64 generation, bool off, quint64 frame, int attempts) {
+        if (slipGenerations_[index] != token || generations_[index] != generation || !slipWanted_[index]) return;
+        // EngineBuffer polls slip_enabled in its callback. OFF then ON in one
+        // Qt turn is invisible to it. Wait for observed rendered blocks between
+        // the two writes, and for a scratch release ramp to finish first.
+        const auto get = [&](const char* control) { return ControlObject::get(ConfigKey(groups[index], control)); };
+        if (!off) {
+            // The engine applies loop/reverse/scratch exits on its callback;
+            // wait (up to ~1 s) until it reports the gesture has ended.
+            if (get("loop_enabled") > 0 || get("reverse") > 0 || get("reverseroll") > 0 || scratching(index)) {
+                if (attempts >= 200) return;
+            } else {
+                frame = decks_[index]->renderedBlocks();
+                ControlObject::set(ConfigKey(groups[index], "slip_enabled"), 0); off = true;
+            }
+        } else if (decks_[index]->renderedBlocks() > frame + 1 || attempts >= 200) {
+            // Re-engage only while playing; play() arms it again otherwise.
+            if (playing(index)) ControlObject::set(ConfigKey(groups[index], "slip_enabled"), 1);
+            return;
+        }
+        QTimer::singleShot(5, this, [this,index,token,generation,off,frame,attempts] {
+            continueSlipReturn(index, token, generation, off, frame, attempts + 1);
+        });
+    }
     int syncLeader() const override {
         for (int index = 0; index < 4; ++index) {
             if (ControlObject::get(ConfigKey(groups[index], "sync_leader")) > 0) return index;
@@ -594,14 +765,19 @@ public:
         } else trigger(index, prefix + (action == "set" ? "setcue" : action == "jump" ? "goto" : "clear"));
     }
     void loop(int index, double start, double end) override {
-        loopEnable(index, false);
+        ControlObject::set(ConfigKey(groups[index], "loop_enabled"), 0);
         // Clear old bounds first: new start may lie beyond the previous end.
         ControlObject::set(ConfigKey(groups[index], "loop_start_position"), -1);
         ControlObject::set(ConfigKey(groups[index], "loop_end_position"), -1);
         ControlObject::set(ConfigKey(groups[index], "loop_start_position"), engineSamples(index, start));
         ControlObject::set(ConfigKey(groups[index], "loop_end_position"), engineSamples(index, end));
     }
-    void loopEnable(int index, bool enabled) override { ControlObject::set(ConfigKey(groups[index], "loop_enabled"), enabled ? 1 : 0); }
+    void loopEnable(int index, bool enabled) override {
+        const bool wasEnabled = ControlObject::get(ConfigKey(groups[index], "loop_enabled")) > 0;
+        if (enabled) cancelSlipReturn(index);
+        ControlObject::set(ConfigKey(groups[index], "loop_enabled"), enabled ? 1 : 0);
+        if (!enabled && wasEnabled) requestSlipReturn(index);
+    }
     void beatjump(int index, double beats) override {
         // This is a value command (ignoreNops=false), not a push button.
         // Sending a release value would queue a second, zero-beat seek.
@@ -644,9 +820,11 @@ public:
         if (start >= 0 && end > start && samplesPerMs > 0) region = QJsonObject{{"startMs", start / samplesPerMs}, {"endMs", end / samplesPerMs}, {"enabled", ControlObject::get(ConfigKey(groups[index], "loop_enabled")) > 0}};
         return {{"hotCues", cues}, {"loopRegion", region}, {"quantize", placementQuantize_[index]},
             {"keylock", ControlObject::get(ConfigKey(groups[index], "keylock")) > 0},
+            {"syncEnabled", ControlObject::get(ConfigKey(groups[index], "sync_enabled")) > 0},
+            {"syncLeader", syncLeader() == index ? QJsonValue(names[index]) : QJsonValue(QJsonValue::Null)},
             {"musicalKey", ControlObject::get(ConfigKey(groups[index], "key"))},
             {"keyShift", ControlObject::get(ConfigKey(groups[index], "pitch_adjust"))},
-            {"slip", ControlObject::get(ConfigKey(groups[index], "slip_enabled")) > 0},
+            {"slip", slipWanted_[index]},
             {"reverse", ControlObject::get(ConfigKey(groups[index], "reverse")) > 0},
             {"slipReverse", ControlObject::get(ConfigKey(groups[index], "reverseroll")) > 0}};
     }
@@ -870,6 +1048,15 @@ public:
     void pfl(int index, bool enabled) override { ControlObject::set(ConfigKey(groups[index], "pfl"), enabled ? 1 : 0); }
     void masterGain(double value) override { ControlObject::set(ConfigKey("[Master]", "gain"), value); }
     void crossfader(double value) override { ControlObject::set(ConfigKey("[Master]", "crossfader"), value); }
+    void headphoneGain(double value) override { ControlObject::set(ConfigKey("[Master]", "headGain"), value); }
+    void headphoneMix(double value) override { ControlObject::set(ConfigKey("[Master]", "headMix"), value); }
+    void crossfaderCurve(const QString& curve) override {
+        crossfaderCurve_ = curve;
+        const double transform = curve == "sharp" ? 1000 : 1;
+        ControlObject::set(ConfigKey("[Mixer Profile]", "xFaderMode"), curve == "smooth" ? MIXXX_XFADER_CONSTPWR : MIXXX_XFADER_ADDITIVE);
+        ControlObject::set(ConfigKey("[Mixer Profile]", "xFaderCurve"), transform);
+        ControlObject::set(ConfigKey("[Mixer Profile]", "xFaderCalibration"), EngineXfader::getPowerCalibration(transform));
+    }
     QString recordingDirectory(const QString& path) override {
         if (!recorder_ || path.isEmpty()) return {};
         // RecordingManager は録音のたびにこの設定を読み直し、無ければ作る。
@@ -1017,6 +1204,7 @@ private:
     const AudioInput junctionAuxInput_{AudioPathType::Auxiliary, 0, mixxx::audio::ChannelCount::stereo(), 0};
     std::array<float, junction::AudioBridge::maxFrames * 2> junctionAuxBuffer_{};
     // Audio-thread meter window and the peaks it publishes.
+    AudioMeter masterMeter_, headphoneMeter_;
     std::array<float, 3> meterWindow_{};
     unsigned meterFrames_ = 0;
     std::atomic<float> programPeak_{0}, pflPeak_{0}, localReturnPeak_{0}, localBlockPeak_{0};
@@ -1033,18 +1221,23 @@ private:
     std::array<double, 4> diagnosticBuffers_{};
     QJsonArray diagnosticHistory_;
     bool diagnosticDirty_ = false;
-    std::array<quint64, 4> bendGenerations_{};
+    std::array<quint64, 4> bendGenerations_{}, phaseGenerations_{}, slipGenerations_{};
+    std::array<bool, 4> slipWanted_{};
+    std::array<std::optional<bool>, 4> keylockBeforeShift_{};
     std::array<bool, 4> placementQuantize_{true, true, true, true};
     std::array<QString, 4> fxEffects_;
     // 起動直後はチェーンがまだ engine に繋がっておらず、ここでのロードは効かない。
     // 「名前を覚えている」ことと「実際にスロットに載っている」ことを分けて持つ。
-    std::array<bool, 4> fxLoaded_{};
+    std::array<bool, 4> fxLoaded_{}, fxHeld_{}, fxTails_{};
+    std::array<quint64, 4> fxGenerations_{};
+    std::array<double, 4> fxBeats_{1, 1, 1, 1};
     QElapsedTimer recordingTimer_, recordingCooldown_;
     QString recordingPath_, recordingStartedAt_, recordingError_;
     qint64 recordedElapsedMs_ = 0;
     bool recordingActive_ = false, recordingPending_ = false, recordingStopping_ = false;
     bool available_ = false, started_ = false, pflAvailable_ = false;
     QString problem_ = "Mixxx audio initialization has not completed", output_;
+    QString crossfaderCurve_ = "standard";
 };
 }
 std::unique_ptr<PlaybackBackend> makeBackend() { return std::make_unique<MixxxBackend>(); }

@@ -1,5 +1,6 @@
 #pragma once
 #include "deck_telemetry.h"
+#include "audio_meter.h"
 #include "scratch_prediction.h"
 
 #include <algorithm>
@@ -19,6 +20,8 @@
 class ScratchDeck final : public EngineDeck {
     struct Request { unsigned sequence,generation;bool enabled,finish,keepalive;double samples,sampleRate,at; quint64 loadGeneration,inputSequence; };
     deckclock::Ring<Request,1024> requests_;
+    AudioMeter meter_;
+    std::atomic<quint64> renderedBlocks_{0};
     std::atomic<unsigned> overflowGeneration_{0};
     unsigned blockedGeneration_=0;
     quint64 appliedNativeInput_=0;
@@ -47,6 +50,8 @@ public:
     }
 
     bool scratching() const { return observedScratching_.load(); }
+    quint64 renderedBlocks() const { return renderedBlocks_.load(std::memory_order_acquire); }
+    QJsonObject levels() const { return {{"peak", meter_.takePeak()}, {"rms", meter_.rms()}}; }
 
     QJsonObject audioDiagnostics() const {
         return {{"buffers", static_cast<double>(diagnosticBuffers_.load())},
@@ -269,6 +274,8 @@ public:
         beforeFrames_ = getEngineBuffer()->getExactPlayPos().value();
         requestAgeMs_ = traceEnabled_ ? monotonicMs() - requestAtMs_ : 0;
         EngineDeck::process(output, bufferSize);
+        meter_.process(output, bufferSize);
+        renderedBlocks_.fetch_add(1, std::memory_order_release);
         deckclock::currentBoundary = nullptr;
         const bool scratching = getEngineBuffer()->getScratching();
         observedScratching_.store(scratching);

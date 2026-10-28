@@ -146,8 +146,9 @@ test('audio callback timing: scratch release PCM and placement-only quantize inc
         minSpeed: Math.min(...stable.map(r => r.speed)), maxSpeed: Math.max(...stable.map(r => r.speed)), maxJumpMs: Math.max(...jumps(rows.slice(index - 1)).map(Math.abs)) };
       evidence.releaseTrials.push(trial);
     }
-    // SYNC itself must only change tempo, never phase. Observe BOTH decks so
-    // automatic leader selection cannot accidentally hide the follower's seek.
+    // SYNC ON aligns the follower's phase once (H-3, interim on the Mixxx
+    // host) and never bends tempo. Observe BOTH decks so automatic leader
+    // selection cannot hide which deck moved.
     for (const deck of ['A', 'B']) {
       await command('deck.pause', { deck });
       await command('deck.sync.set', { deck, enabled: false });
@@ -163,7 +164,11 @@ test('audio callback timing: scratch release PCM and placement-only quantize inc
     evidence.syncStart = [];
     for (const deck of ['A', 'B']) {
       const result = await trace(deck);
-      evidence.syncStart.push({ deck, maxJumpMs: Math.max(...jumps(result.rows).map(Math.abs)), minSpeed: Math.min(...result.rows.map(r => r.speed)), maxSpeed: Math.max(...result.rows.map(r => r.speed)) });
+      const moves = jumps(result.rows).map(Math.abs);
+      // The row carrying the one-shot phase seek reports it as speed; judge
+      // tempo on the rows around it.
+      const steady = result.rows.filter((_, i) => !i || moves[i - 1] < 1);
+      evidence.syncStart.push({ deck, maxJumpMs: Math.max(...moves), jumpCount: moves.filter(jump => jump >= 1).length, minSpeed: Math.min(...steady.map(r => r.speed)), maxSpeed: Math.max(...steady.map(r => r.speed)) });
     }
     evidence.quantize = [];
     await command('deck.play', { deck: 'B' });
@@ -215,8 +220,10 @@ test('audio callback timing: scratch release PCM and placement-only quantize inc
       check(item.maxJumpMs < 1, 'placement must not seek');
       check(item.minSpeed > .999 && item.maxSpeed < 1.001, 'placement must not phase-bend even with SYNC');
     }
+    const moved = evidence.syncStart.filter(item => item.maxJumpMs >= 1);
+    check(moved.length <= 1 && moved.every(item => item.jumpCount === 1), 'SYNC at equal BPM moves only the follower, once');
     for (const item of evidence.syncStart) {
-      check(item.maxJumpMs < 1 && item.minSpeed > .999 && item.maxSpeed < 1.001, 'SYNC at equal BPM must not change either deck phase');
+      check(item.minSpeed > .999 && item.maxSpeed < 1.001, 'SYNC at equal BPM must not phase-bend either deck');
     }
     check(evidence.pausedPlacementMaxErrorMs < .1, 'paused cue/loop placement and quantize toggling preserve position');
   } finally { child.stdin.end(); child.kill('SIGTERM'); }

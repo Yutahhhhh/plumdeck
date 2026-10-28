@@ -39,7 +39,9 @@ private:
     std::unique_ptr<junction::Runtime> junction_;
     std::unique_ptr<PerformanceInput> performanceInput_;
     QElapsedTimer clock_;
-    QTimer timer_;
+    QTimer timer_, metersTimer_;
+    bool metersEnabled_ = false;
+    int metersIntervalMs_ = 20;
     QString engineId_, sessionId_;
     quint64 rev_ = 0, seq_ = 0, lastId_ = 0, generation_ = 0;
     struct DeckSlot {
