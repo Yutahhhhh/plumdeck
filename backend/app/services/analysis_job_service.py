@@ -460,7 +460,8 @@ class AnalysisJobService:
                         rekordbox = value_sources.lookup(
                             track.filepath, keys=value_sources.key_source_enabled(session))
                     chosen, source = value_sources.choose(
-                        name, value, value_sources.OWN, getattr(track, name), stored.get(name), rekordbox)
+                        name, value, value_sources.OWN, getattr(track, name), stored.get(name), rekordbox,
+                        extra.get(f"analysis_{name}"))
                     if source is None:
                         continue
                     sources[name] = source

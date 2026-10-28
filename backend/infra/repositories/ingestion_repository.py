@@ -240,7 +240,8 @@ class IngestionRepository:
             incoming_source = incoming_sources.get(field, value_sources.OWN)
             value, source = value_sources.choose(
                 field, result.get(field), incoming_source,
-                getattr(existing_track, field, None), stored.get(field), rekordbox)
+                getattr(existing_track, field, None), stored.get(field), rekordbox,
+                (existing_fx or {}).get(f"analysis_{field}"))
             if source is None:
                 continue
             sources[field] = source

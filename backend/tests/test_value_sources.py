@@ -89,7 +89,7 @@ def test_stored_key_spelling_sorts_in_camelot_order(session):
 
 @pytest.mark.parametrize("case, keys, expected", [
     ("bpm", True, value_sources.RekordboxValues(True, 128.0, "F minor")),
-    ("bpm", False, value_sources.RekordboxValues(True, 128.0, None)),
+    ("bpm", False, value_sources.RekordboxValues(True, 128.0, None, keys=False)),
     ("bpm_zero", True, value_sources.RekordboxValues(True, None, "F minor")),
     ("unregistered", True, value_sources.RekordboxValues(True, None, None)),
     ("error", True, value_sources.RekordboxValues(False, None, None)),
@@ -157,6 +157,47 @@ def test_save_takes_key_from_rekordbox_only_when_enabled(session, mocker, case, 
     assert (track.key, track.scale, extra["analysis_components"]["sources"]["key"]) == (key, scale, source)
     # The replaced own key is kept, like analysis_bpm.
     assert extra.get("analysis_key") == ("A minor" if source == "rekordbox" else None)
+
+
+def test_choose_restores_own_key_only_when_the_key_source_is_off():
+    choose, values = value_sources.choose, value_sources.RekordboxValues
+    off, offline = values(True, 128.0, None, keys=False), values(False)
+    assert choose("key", "A minor", "own", "F minor", "rekordbox", off, "E minor") == ("A minor", "own")
+    assert choose("key", "", "own", "F minor", "rekordbox", off, "E minor") == ("E minor", "own")
+    # Enabled but master.db is offline: the synced key stays.
+    assert choose("key", "A minor", "own", "F minor", "rekordbox", offline, "E minor") == ("F minor", "rekordbox")
+    # BPM has no off switch; manual still wins over everything.
+    assert choose("bpm", 64.0, "own", 128.0, "rekordbox", values(False, keys=False), 63.0) == (128.0, "rekordbox")
+    assert choose("key", "A minor", "own", "G minor", "manual", off, "E minor") == ("G minor", "manual")
+
+
+@pytest.mark.parametrize("case", ["bpm", "error"])
+def test_turning_the_key_source_off_restores_the_own_key(session, mocker, case):
+    use_rekordbox_keys(session)
+    use_rekordbox(mocker, "bpm")
+    track_id = IngestionRepository()._prepare_track_models(session, analysis_result())
+    session.commit()
+    assert saved(session, track_id)[0].key == "F minor"
+
+    use_rekordbox_keys(session, enabled=False)
+    use_rekordbox(mocker, case)
+    IngestionRepository()._prepare_track_models(session, analysis_result(key="D minor", scale="minor"))
+    session.commit()
+    track, extra = saved(session, track_id)
+    assert (track.key, extra["analysis_components"]["sources"]["key"]) == ("D minor", "own")
+    assert "analysis_key" not in extra
+
+
+def test_key_source_off_restores_the_kept_key_when_the_save_has_none(session, mocker):
+    use_rekordbox_keys(session)
+    use_rekordbox(mocker, "bpm")
+    track_id = IngestionRepository()._prepare_track_models(session, analysis_result())
+    session.commit()
+    use_rekordbox_keys(session, enabled=False)
+    IngestionRepository()._prepare_track_models(session, analysis_result(key=""))
+    session.commit()
+    track, extra = saved(session, track_id)
+    assert (track.key, track.scale, extra["analysis_components"]["sources"]["key"]) == ("A minor", "minor", "own")
 
 
 def test_import_without_key_detection_keeps_the_rows_own_key(session, mocker):

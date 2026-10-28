@@ -40,9 +40,14 @@ class RekordboxValues:
     readable: bool = False  # False when master.db is missing or unreadable
     bpm: float | None = None  # None when unregistered or rekordbox has no tempo
     key: str | None = None  # stored spelling ('F minor'); None when absent or not used
+    keys: bool = True  # False when the rekordbox key source is turned off
 
     def value(self, field: str):
         return self.bpm if field == "bpm" else self.key
+
+    def enabled(self, field: str) -> bool:
+        """Whether rekordbox is a source for ``field`` at all (BPM always is)."""
+        return field == "bpm" or self.keys
 
 
 def lookup(filepath: str, *, keys: bool) -> RekordboxValues:
@@ -51,11 +56,11 @@ def lookup(filepath: str, *, keys: bool) -> RekordboxValues:
         entry = rekordbox_library.collection_index().get(filepath)
     except Exception as error:  # master.db missing, locked or undecryptable
         logger.info("rekordbox values unavailable for %s: %s", filepath, error)
-        return RekordboxValues()
+        return RekordboxValues(keys=keys)
     if entry is None:
-        return RekordboxValues(readable=True)
+        return RekordboxValues(readable=True, keys=keys)
     bpm = entry.bpm if entry.bpm and math.isfinite(entry.bpm) and entry.bpm > 0 else None
-    return RekordboxValues(True, bpm, key_name(entry.key) if keys else None)
+    return RekordboxValues(True, bpm, key_name(entry.key) if keys else None, keys)
 
 
 def key_source_enabled(session) -> bool:
@@ -101,16 +106,25 @@ def stored_sources(extra: Any) -> dict[str, str]:
 
 def choose(field: str, incoming: Any, incoming_source: str | None,
            stored: Any, stored_source: str | None,
-           rekordbox: RekordboxValues) -> tuple[Any, str | None]:
+           rekordbox: RekordboxValues, saved_own: Any = None) -> tuple[Any, str | None]:
     """(value, source) for one field.
 
     ``incoming`` is what this save brings: the analyzer's value, or a value the
     caller already took from rekordbox (``incoming_source`` REKORDBOX).
-    ``stored`` is the row's current value. Returns (None, None) when there is
-    no usable value, in which case the caller writes nothing.
+    ``stored`` is the row's current value; ``saved_own`` the own value kept
+    beside it (features_extra analysis_bpm / analysis_key). Returns
+    (None, None) when there is no usable value, in which case the caller
+    writes nothing.
     """
     if stored_source == MANUAL and valid(field, stored):
         return stored, MANUAL
+    if not rekordbox.enabled(field) and stored_source == REKORDBOX:
+        # The source is turned off, not just unavailable: an earlier rekordbox
+        # value gives way to this save's own result or the kept own value.
+        if valid(field, incoming) and incoming_source != REKORDBOX:
+            return incoming, incoming_source or OWN
+        if valid(field, saved_own):
+            return saved_own, OWN
     external = rekordbox.value(field)
     if external is not None:
         return external, REKORDBOX
