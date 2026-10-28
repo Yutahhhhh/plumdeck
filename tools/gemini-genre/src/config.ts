@@ -15,6 +15,10 @@ export interface Config {
   mode: Mode;
   /** Tracks per Gemini request. "数百件" — a few hundred. */
   batchSize: number;
+  /** JSON input or readable one-track-per-line input. */
+  promptFormat: "json" | "lines";
+  /** Continue the same Gem conversation between batches. */
+  reuseChat: boolean;
   /** Hard cap on how many tracks to process this run (0 = no cap). */
   limit: number;
   /** Path to a JSON array of track ids; restrict the run to those (still must be unknown). */
@@ -62,6 +66,10 @@ export function loadConfig(argv: string[]): Config {
 
   const outDir =
     opt(args, "out") ?? env.GEMINI_GENRE_OUT ?? path.join(ROOT, "out");
+  const promptFormat = opt(args, "prompt-format") ?? "json";
+  if (promptFormat !== "json" && promptFormat !== "lines") {
+    throw new Error(`invalid --prompt-format "${promptFormat}" (json | lines)`);
+  }
 
   return {
     plumdeckApi: (
@@ -75,6 +83,8 @@ export function loadConfig(argv: string[]): Config {
       "https://gemini.google.com/gem/0d9581d5a139",
     mode,
     batchSize: Number(opt(args, "batch") ?? env.GEMINI_GENRE_BATCH ?? 200),
+    promptFormat,
+    reuseChat: flag(args, "reuse-chat"),
     limit: Number(opt(args, "limit") ?? env.GEMINI_GENRE_LIMIT ?? 0),
     idsFile: opt(args, "ids-file") ?? env.GEMINI_GENRE_IDS_FILE ?? "",
     outDir,
@@ -100,6 +110,8 @@ export function describe(cfg: Config): string {
     `  gem       ${cfg.gemUrl}`,
     `  mode      ${cfg.mode}`,
     `  batch     ${cfg.batchSize}`,
+    `  input     ${cfg.promptFormat}`,
+    `  chat      ${cfg.reuseChat ? "continued" : "new per batch"}`,
     `  limit     ${cfg.limit || "(all)"}`,
     `  out       ${cfg.outDir}`,
     `  profile   ${cfg.userDataDir}`,

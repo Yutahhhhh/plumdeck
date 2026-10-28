@@ -7,19 +7,19 @@ const COMPOSER = [
   'div.ql-editor[contenteditable="true"]',
   'rich-textarea div[contenteditable="true"]',
   '[contenteditable="true"][role="textbox"]',
-].join(", ");
+].map((selector) => `${selector}:visible`).join(", ");
 
 const SEND = [
   'button[aria-label*="送信" i]',
   'button[aria-label*="Send" i]',
   "button.send-button",
-].join(", ");
+].map((selector) => `${selector}:visible`).join(", ");
 
 const STOP = [
   'button[aria-label*="停止" i]',
   'button[aria-label*="Stop" i]',
   'button[aria-label*="回答を停止" i]',
-].join(", ");
+].map((selector) => `${selector}:visible`).join(", ");
 
 const RESPONSE = [
   ".model-response-text",
@@ -28,13 +28,11 @@ const RESPONSE = [
   ".markdown-main-panel",
 ].join(", ");
 
-const NEW_CHAT = [
-  'button[aria-label*="新しいチャット" i]',
-  'button[aria-label*="New chat" i]',
-  'a[aria-label*="新しいチャット" i]',
-].join(", ");
-
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export class GeminiUnavailableError extends Error {
+  override name = "GeminiUnavailableError";
+}
 
 export class GeminiGem {
   private ctx!: BrowserContext;
@@ -63,12 +61,14 @@ export class GeminiGem {
     }
     this.page = this.ctx.pages()[0] ?? (await this.ctx.newPage());
     this.page.setDefaultTimeout(60_000);
+    console.log("Gemini browser launched");
     await this.goToGem();
+    console.log("Gemini opened:", this.page.url());
     await this.ensureLoggedIn();
   }
 
   private async goToGem(): Promise<void> {
-    await this.page.goto(this.cfg.gemUrl, { waitUntil: "domcontentloaded" });
+    await this.page.goto(this.cfg.gemUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
   }
 
   private composer(): Locator {
@@ -76,39 +76,45 @@ export class GeminiGem {
   }
 
   private async ensureLoggedIn(): Promise<void> {
-    const deadline = Date.now() + 15 * 60_000;
-    let warned = false;
+    const timeoutMs = this.cfg.loginOnly ? 15 * 60_000 : 60_000;
+    const deadline = Date.now() + timeoutMs;
+    console.log("Waiting for Gemini prompt input:", this.page.url());
     while (Date.now() < deadline) {
-      if (await this.composer().isVisible().catch(() => false)) return;
-
+      if (this.page.isClosed()) {
+        throw new GeminiUnavailableError("Gemini browser window was closed; classification stopped.");
+      }
       const onLogin = /accounts\.google\.com/.test(this.page.url());
-      if (!onLogin && !warned) {
-        // On the Gem page but no composer yet — give it a beat, then one reload.
-        await sleep(4_000);
-        if (await this.composer().isVisible().catch(() => false)) return;
-        await this.goToGem().catch(() => {});
+      if (onLogin && !this.cfg.loginOnly) {
+        throw new GeminiUnavailableError("Google sign-in is required. Run npm run login before retrying classification.");
       }
-      if (!warned) {
-        console.log(
-          "\n>> Gemini にログインしてください（開いた Chrome ウィンドウで Google ログイン）。\n" +
-            ">> ログイン後この Gem のページに戻れば自動で続行します…\n",
-        );
-        warned = true;
+      if (this.page.url().includes("/gem/")) {
+        try {
+          // Let the initial navigation hydrate. Reloading after four seconds
+          // interrupted it and could leave a busy renderer with no input.
+          await this.composer().waitFor({
+            state: "visible", timeout: Math.max(1, Math.min(5_000, deadline - Date.now())),
+          });
+          if (this.page.url().includes("/gem/")) return;
+        } catch {
+          if (this.page.isClosed()) {
+            throw new GeminiUnavailableError("Gemini browser window was closed; classification stopped.");
+          }
+        }
       }
-      await sleep(5_000);
+      await sleep(Math.max(0, Math.min(500, deadline - Date.now())));
     }
-    throw new Error("ログイン/プロンプト入力欄を確認できませんでした（15分でタイムアウト）");
+    throw new GeminiUnavailableError(`Gemini prompt input did not become ready within ${timeoutMs / 1000}s; classification stopped.`);
   }
 
   /** Fresh conversation so each batch is independent and the output stays small. */
   async newChat(): Promise<void> {
-    const btn = this.page.locator(NEW_CHAT).first();
-    if (await btn.isVisible().catch(() => false)) {
-      await btn.click().catch(() => {});
-      await sleep(800);
-    } else {
-      await this.goToGem();
+    if (this.page.isClosed()) {
+      throw new GeminiUnavailableError("Gemini browser window was closed; classification stopped.");
     }
+    // The sidebar's global New chat leaves the custom Gem. Reopen the Gem
+    // itself so its classification instructions remain in effect each batch.
+    await this.goToGem();
+    await this.ensureLoggedIn();
     await this.composer().waitFor({ state: "visible", timeout: 30_000 });
     await sleep(500);
   }
@@ -116,6 +122,7 @@ export class GeminiGem {
   /** Send one prompt, wait for the answer to settle, return its text. */
   async ask(prompt: string, timeoutMs: number): Promise<string> {
     const editor = this.composer();
+    await editor.fill("");
     await editor.click();
     await this.page.keyboard.insertText(prompt);
     await sleep(400);
@@ -130,12 +137,18 @@ export class GeminiGem {
     for (let i = 0; i < 24 && !(await send.isEnabled().catch(() => true)); i++) {
       await sleep(250);
     }
+    const responses = this.page.locator(RESPONSE);
+    const previousCount = await responses.count();
+    const previousText = await responses.last().innerText({ timeout: 1000 }).catch(() => "");
     await send.click();
 
-    return this.waitForAnswer(timeoutMs);
+    return this.waitForAnswer(timeoutMs, previousCount, previousText);
   }
 
-  private async waitForAnswer(timeoutMs: number): Promise<string> {
+  private async waitForAnswer(timeoutMs: number, previousCount: number, previousText: string): Promise<string> {
+    if (this.page.isClosed()) {
+      throw new GeminiUnavailableError("Gemini browser window was closed; classification stopped.");
+    }
     const responses = this.page.locator(RESPONSE);
     const stop = this.page.locator(STOP).first();
     const start = Date.now();
@@ -145,28 +158,45 @@ export class GeminiGem {
       if (await stop.isVisible().catch(() => false)) break;
       await sleep(500);
     }
+    console.log("Gemini response elements:", JSON.stringify({
+      responses: await responses.count(),
+      modelResponseText: await this.page.locator(".model-response-text").count(),
+      messageContent: await this.page.locator("message-content").count(),
+      modelResponse: await this.page.locator("model-response").count(),
+      markdownPanel: await this.page.locator(".markdown-main-panel").count(),
+    }));
 
     const stableFor = 4_000;
     let text = "";
+    let fresh = false;
     let lastChange = Date.now();
 
     while (Date.now() - start < timeoutMs) {
+      if (this.page.isClosed()) {
+        throw new GeminiUnavailableError("Gemini browser window was closed; classification stopped.");
+      }
       await sleep(1_000);
       const now = await responses
         .last()
-        .innerText()
+        .innerText({ timeout: 1000 })
         .catch(() => "");
+      fresh = fresh || (now.trim().length > 0 &&
+        (now !== previousText || await responses.count() > previousCount));
       if (now !== text) {
         text = now;
         lastChange = Date.now();
         continue;
       }
       const generating = await stop.isVisible().catch(() => false);
-      if (!generating && text.trim().length > 0 && Date.now() - lastChange >= stableFor) {
+      if (fresh && !generating && text.trim().length > 0 && Date.now() - lastChange >= stableFor) {
         return text;
       }
     }
-    if (text.trim()) return text; // best effort on timeout
+    if (fresh && text.trim()) return text; // best effort on timeout
+    if (await stop.isVisible().catch(() => false)) {
+      await stop.click({ timeout: 5_000 }).catch(() => {});
+      await stop.waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
+    }
     throw new Error(`response timed out after ${timeoutMs}ms`);
   }
 

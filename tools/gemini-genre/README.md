@@ -22,6 +22,9 @@ plumdeck の「ジャンル / サブジャンル未解析」トラックを、Ge
    併せて `out/<mode>/results.json`（全バッチ統合・id 重複は後勝ち）を更新
 6. 失敗したバッチは `out/<mode>/batch-NNN.error.txt` に生応答を残して次へ。
    同じコマンドを再実行すると成功済みバッチはスキップして失敗分だけ retry
+   ただし、ブラウザを閉じた場合、入力欄が60秒で準備できない場合、Geminiが
+   サービスエラーを返した場合は残りのバッチを打ち切り、終了コード2を返す。
+   手動ログイン用の `--login-only` は入力欄を最大15分待つ。
 
 Gem側の指示とサブジャンル語彙は、このREADME末尾にまとめています。
 
@@ -58,6 +61,8 @@ npm run classify -- --mode genre --batch 200 --apply
 | `--gem <url>` | `GEMINI_GEM_URL` | 上記 Gem | 対象 Gem |
 | `--mode <m>` | `GEMINI_GENRE_MODE` | `genre` | `genre` / `subgenre` / `both` |
 | `--batch <n>` | `GEMINI_GENRE_BATCH` | `200` | 1 リクエストの曲数。応答が途中で切れるなら下げる |
+| `--prompt-format <f>` | | `json` | 入力形式。`lines` は1曲1行で曲名と特徴量を送る |
+| `--reuse-chat` | | off | バッチ間で同じGemの会話を続け、毎回の読み込み直しを避ける |
 | `--limit <n>` | `GEMINI_GENRE_LIMIT` | `0` | 処理する最大曲数（0 = 全部）。試運転に便利 |
 | `--out <dir>` | `GEMINI_GENRE_OUT` | `./out` | 出力先 |
 | `--profile <dir>` | `GEMINI_GENRE_PROFILE` | `./.auth` | Chrome プロファイル（ログイン保持） |
