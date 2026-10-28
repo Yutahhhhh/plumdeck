@@ -544,6 +544,16 @@ pub(crate) fn probe<R: Read + Seek>(src: &mut Src<'_, R>) -> Result<ProbeInfo> {
         // An edit starting at 0 still declares the presentation length.
         info.valid_frames = (seg > 0).then(|| scale(seg, rate, w.mvhd_timescale));
     }
+    // A segment duration in a coarse movie timescale (often 1 ms) can round
+    // past the media length by up to one tick; that is not an inconsistency.
+    if let (Some(total), Some(valid), true) = (info.frames_hint, info.valid_frames, w.mvhd_timescale > 0) {
+        let tick = u64::from(rate).div_ceil(u64::from(w.mvhd_timescale));
+        let room = total.saturating_sub(info.priming);
+        if valid > room && valid - room <= tick {
+            info.valid_frames = Some(room);
+            info.padding = Some(0);
+        }
+    }
     info.timing_case = if info.priming > 0 { TimingCase::Mp4Priming } else { TimingCase::Mp4NoPriming };
     info.mp4 = Some(d);
     Ok(info)

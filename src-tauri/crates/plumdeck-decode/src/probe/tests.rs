@@ -296,6 +296,13 @@ fn mp4_priming_precedence() {
     let b = probe_bytes(&m4a(Some((3000, 0)), Some(SMPB), &[0x12, 0x10], 44_100)).unwrap();
     assert_eq!((b.priming, b.priming_source, b.valid_frames), (2112, PrimingSource::ITunSmpb, Some(0x20000)));
 
+    // A 1 ms movie timescale rounds 8 frames past the media length: clamped.
+    let r = probe_bytes(&m4a(Some((3042, 0)), None, &[0x12, 0x10], 44_100)).unwrap();
+    assert_eq!((r.priming, r.valid_frames), (0, Some(134_144)));
+    // Far past it: inconsistent, dropped.
+    let r = probe_bytes(&m4a(Some((3100, 0)), None, &[0x12, 0x10], 44_100)).unwrap();
+    assert_eq!(r.valid_frames, None);
+
     let c = probe_bytes(&m4a(None, None, &[0x12, 0x10], 44_100)).unwrap();
     assert_eq!((c.priming, c.timing_case), (0, TimingCase::Mp4NoPriming));
 }

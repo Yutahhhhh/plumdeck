@@ -83,7 +83,9 @@ impl SincResampler {
         let g = gcd(u64::from(in_rate), u64::from(out_rate));
         let (num, den) = (u64::from(in_rate) / g, u64::from(out_rate) / g);
         // Cutoff as a fraction of the input sample rate (Nyquist = 0.5).
-        let cutoff = 0.5 * ROLLOFF * (f64::from(out_rate) / f64::from(in_rate)).min(1.0);
+        // The ratio floor bounds the kernel table (about 280k entries at
+        // most); stronger decimation than 64:1 aliases instead.
+        let cutoff = 0.5 * ROLLOFF * (f64::from(out_rate) / f64::from(in_rate)).clamp(1.0 / 64.0, 1.0);
         let half_width = ZERO_CROSSINGS / (2.0 * cutoff);
         let len = (half_width * TABLE_RES as f64).ceil() as usize + 2;
         let i0_beta = bessel_i0(KAISER_BETA);
@@ -270,6 +272,17 @@ mod tests {
         r.finish(&mut out);
         let peak = out.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).map(|(i, _)| i);
         assert_eq!(peak, Some(10_000));
+    }
+
+    #[test]
+    fn extreme_ratio_has_bounded_table() {
+        let r = SincResampler::new(1, 768_000, 1_000);
+        assert!(r.table.len() < 300_000, "{}", r.table.len());
+        let mut r = r;
+        let mut out = Vec::new();
+        r.process(&vec![0.5; 76_800], &mut out);
+        r.finish(&mut out);
+        assert_eq!(out.len(), 100);
     }
 
     #[test]

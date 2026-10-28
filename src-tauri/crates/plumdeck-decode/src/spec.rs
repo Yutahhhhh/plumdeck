@@ -236,7 +236,9 @@
 //!   `iTunSMPB`): a text of space-separated hex words; word 2 is the
 //!   priming, word 3 the padding and word 4 the original sample count.
 //! - Values in a timescale other than the sample rate are converted with
-//!   `value * sample_rate / timescale`, rounded to nearest.
+//!   `value * sample_rate / timescale`, rounded to nearest. A converted
+//!   `valid_frames` that exceeds the media length minus priming by at most
+//!   one movie-timescale tick is clamped to it (rounding, not an error).
 //!
 //! Precedence: an edit list with `elst_priming > 0` is structural (written by
 //! the muxer that also wrote the samples), so it wins; otherwise iTunSMPB is
@@ -294,3 +296,6 @@
 //!   capped (64 KiB for `stsd`/`esds`/`ilst` items, 1 MiB for the MP3 sync
 //!   window).
 //! - Walks are bounded (nesting depth 8, 4096 boxes or chunks).
+//! - Decoding rejects more than 32 channels and output rates outside
+//!   1 kHz..=768 kHz, so header values cannot size PCM pages or resampler
+//!   tables without bound.

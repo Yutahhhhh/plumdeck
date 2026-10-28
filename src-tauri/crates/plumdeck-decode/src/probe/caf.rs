@@ -73,7 +73,7 @@ pub(crate) fn probe<R: Read + Seek>(src: &mut Src<'_, R>) -> Result<ProbeInfo> {
             }
         }
     } else if let (Some(bytes), true) = (data_bytes, bytes_per_packet > 0 && frames_per_packet > 0) {
-        info.frames_hint = Some(bytes / u64::from(bytes_per_packet) * u64::from(frames_per_packet));
+        info.frames_hint = Some((bytes / u64::from(bytes_per_packet)).saturating_mul(u64::from(frames_per_packet)));
         info.duration_exact = true;
     }
     Ok(info)

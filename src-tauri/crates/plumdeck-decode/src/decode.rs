@@ -50,6 +50,14 @@ impl FromStr for Basis {
 
 /// Consecutive undecodable packets tolerated before giving up.
 const MAX_CONSECUTIVE_ERRORS: u32 = 64;
+/// Channel counts above this are rejected: a malformed header must not size
+/// page allocations.
+pub const MAX_CHANNELS: usize = 32;
+
+/// Accepted output rates.
+const MIN_RATE: u32 = 1_000;
+const MAX_RATE: u32 = 768_000;
+
 /// Largest silent gap inserted for one undecodable packet.
 const MAX_GAP_FRAMES: u64 = 1 << 16;
 
@@ -161,6 +169,9 @@ impl Decoder {
             .or(info.channels.map(usize::from))
             .filter(|&c| c > 0)
             .ok_or_else(|| DecodeError::malformed("unknown channel count"))?;
+        if channels > MAX_CHANNELS {
+            return Err(DecodeError::Unsupported(Unsupported::Other(format!("{channels} channels"))));
+        }
         if info.container == Container::Unknown {
             info.sample_rate = Some(sample_rate);
             info.channels = u16::try_from(channels).ok();
@@ -381,6 +392,9 @@ pub fn decode_to_pages_with(path: &Path, opts: &DecodeOptions, make_resampler: &
     let src_rate = dec.sample_rate();
     let out_ch = if opts.mono { 1 } else { dec.channels() };
     let out_rate = opts.target_rate.filter(|&r| r > 0).unwrap_or(src_rate);
+    if !(MIN_RATE..=MAX_RATE).contains(&out_rate) {
+        return Err(DecodeError::Malformed(format!("target rate {out_rate} Hz out of range")));
+    }
     let max_seconds = if opts.max_seconds.is_finite() && opts.max_seconds > 0.0 { opts.max_seconds } else { 1800.0 };
     let max_frames = (max_seconds * f64::from(out_rate)).ceil() as u64;
     let (_, mut writer) = PcmPages::new(out_ch, out_rate, opts.page_frames, max_frames);

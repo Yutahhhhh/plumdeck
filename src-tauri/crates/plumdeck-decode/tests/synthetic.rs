@@ -121,6 +121,11 @@ fn small_pages_and_truncation() {
     assert_eq!(d.pages.to_interleaved(), to_f32_interleaved(&source()));
     assert!(!d.truncated());
 
+    for rate in [0u32, 999, 1_000_000] {
+        let o = DecodeOptions { target_rate: Some(rate), ..DecodeOptions::default() };
+        assert_eq!(decode_to_pages(&path, &o).is_err(), rate != 0, "target rate {rate}");
+    }
+
     let d = decode_to_pages(&path, &DecodeOptions { max_seconds: 1.0, ..DecodeOptions::default() }).unwrap();
     assert_eq!(d.frames(), u64::from(RATE));
     assert!(d.truncated());
