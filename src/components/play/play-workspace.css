@@ -422,3 +422,7 @@
 .dj-turn-device select { min-width: 0; max-width: 220px; }
 .dj-deck--tail { box-shadow: inset 0 0 0 1px #7b818a; }
 .dj-chip--tail { border-color: #7b818a; color: #d8dce1; }
+/* Current key differs from the original key. */
+.dj-key-shift b.is-shifted { color: #f2c94c; }
+.dj-key-shift button:not(:disabled) { color: #d0d4da; cursor: pointer; }
+.dj-key-shift button:not(:disabled):hover { color: #fff; }

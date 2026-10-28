@@ -33,6 +33,8 @@ import { DeckWaveform, type WaveformLayout } from "./DeckWaveform";
 import { Fader, SoftwareDeck, formatTime } from "./SoftwareDeck";
 import { MixerPanel } from "./MixerPanel";
 import { chooseSyncLeader } from "./sync-leader";
+import { setPlayPreference, usePlayPreferences } from "./play-preferences";
+import { readKeyNotation } from "@/services/dj-engine/musical-key";
 import { PanelToolbar, PANEL_DEFAULTS, type PanelId, type PanelVisibility } from "./PanelToolbar";
 import { FxPanel, FX_UNIT_DEFAULTS, type FxUnitState } from "./FxPanel";
 import "./play-workspace.css";
@@ -72,6 +74,7 @@ function restoredHistory(): [DeckId, HistoryRuntime][] {
 
 export function PlayWorkspace() {
   const { status, state, error, busy, client, start, stop, connect } = useDjEngine();
+  const preferences = usePlayPreferences();
   useEffect(() => { const timer = setInterval(() => void sampler.poll(), 250); return () => { clearInterval(timer); }; }, []);
   const [deckCount, setDeckCount] = useState<2 | 4>(() => localStorage.getItem("plumdeck.deckCount") === "4" ? 4 : 2);
   const [expandedPair,setExpandedPair]=useState<'AB'|'CD'|null>(null);
@@ -784,6 +787,11 @@ export function PlayWorkspace() {
     onUnload={() => void run(async () => { ++deckLoadRequests.current[id]; cuePoints.current[id] = 0; manualLoopIn.current[id] = null; await client.unload(id); await finalizeHistory(id, "ejected"); })}
     onHotCue={(index, clear) => void editHotCue(id, index, clear)}
     onMemory={(action) => void run(() => memoryAction(id, action))}
+    onKeyShift={(semitones) => void run(() => client.keyShift(id, semitones))}
+    onKeySync={() => void run(() => client.keySync(id))}
+    onKeyReset={() => void run(() => client.keyReset(id))}
+    onSlip={(enabled) => void run(() => client.setSlip(id, enabled))}
+    onReverse={(enabled) => void run(() => client.setReverse(id, enabled))}
     onMemoryCall={(index) => void run(async () => {
       const cue = await callMemoryCue(id, index);
       // A called memory cue becomes the CUE point, like CALL on a player.
@@ -822,6 +830,8 @@ export function PlayWorkspace() {
       <details className="dj-wave-settings"><summary>表示設定</summary><div>
         <label>波形コントラスト <input type="range" min="1" max="2" step="0.1" value={waveContrast} onChange={event=>{setWaveContrast(Number(event.target.value));localStorage.setItem('plumdeck.waveContrast',event.target.value);}} /></label>
         <label><input type="checkbox" checked={waveMonochrome} onChange={event=>{setWaveMonochrome(event.target.checked);localStorage.setItem('plumdeck.waveMonochrome',String(event.target.checked));}} />波形を単色で表示</label>
+        <label>キー表記 <select aria-label="キー表記" value={preferences.keyNotation} onChange={event => setPlayPreference("keyNotation", readKeyNotation(event.target.value))}>
+          <option value="camelot">Camelot（8A）</option><option value="classic">Classic（Am）</option></select></label>
         <label title="音より波形が先行する場合は増やします。">波形の表示遅延（ms） <input type="number" min="-50" max="500" step="1" value={waveDelay} onChange={event=>{const value=Math.max(-50,Math.min(500,Number(event.target.value)||0));setWaveDelay(value);localStorage.setItem('plumdeck.waveDelay',String(value));}} /></label>
       </div></details>
       <div className="dj-segmented" aria-label="波形レイアウト">{(["horizontal", "vertical"] as const).map((layout) => <button key={layout} title={layout === "horizontal" ? "横波形（デッキ上部に重ねて表示）" : "縦波形（デッキ中央に並べて表示）"} aria-label={layout === "horizontal" ? "横波形" : "縦波形（デッキ中央）"} aria-pressed={waveformLayout === layout} className={waveformLayout === layout ? "is-on" : ""} onClick={() => { setWaveformLayout(layout); localStorage.setItem("plumdeck.waveformLayout", layout); }}>{layout === "horizontal" ? <Rows3 /> : <Columns3 />}</button>)}</div>

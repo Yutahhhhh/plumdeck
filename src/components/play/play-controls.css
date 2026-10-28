@@ -126,8 +126,6 @@
 .dj-pad-pages { display:flex; gap:3px; }
 .dj-pad-pages button { font-size:9px; padding:4px 6px; border:1px solid #424951; border-radius:3px; color:#89939f; background:#14181d; }
 .dj-pad-pages button[aria-pressed="true"] { color:#fff; background:#29486b; border-color:#6bb8fb; }
-.dj-pad-extras { flex-shrink:0; font-size:9px; color:#95a4b5; }
-.dj-pad-extras summary { cursor:pointer; }
 .dj-pad-grid[aria-label="Beat loops"] { --pad-color:#ff923a; }
 .dj-pad-grid[aria-label="Keyboard"] { --pad-color:#00df80; }
 .dj-pad-grid[aria-label="Key shift"] { --pad-color:#40cfff; }

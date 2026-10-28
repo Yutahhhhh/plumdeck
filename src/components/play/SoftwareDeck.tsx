@@ -1,5 +1,4 @@
 import { assetIdentity, localTrackId } from '@/services/junction/asset-resolver';
-import { DeckPerformanceControls } from "./DeckPerformanceControls";
 import { SamplerPads } from "./SamplerPads";
 import { djEngineClient } from "@/services/dj-engine/client";
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
@@ -10,6 +9,9 @@ import { AlignJustify, Disc3, LayoutGrid, Pause, Play, Upload } from "lucide-rea
 import type { ChannelState, DeckId, DeckState } from "@/types/dj-engine";
 import type { PerformanceLoop } from "@/types/performance-metadata";
 import { cn } from "@/lib/utils";
+import { DJ_ENGINE_CAPABILITIES } from "@/types/dj-engine";
+import { currentKey, formatKeyDelta, formatLibraryKey, parseKey } from "@/services/dj-engine/musical-key";
+import { usePlayPreferences } from "./play-preferences";
 import { DeckWaveform } from "./DeckWaveform";
 import { artworkUrl, useTrackVisuals } from "./useTrackVisuals";
 import { barNumbers, lowerBeat } from "./beat-grid-math";
@@ -45,6 +47,8 @@ type Props = {
   onQuantize?: (enabled: boolean) => void; onFx?: (effect: FxEffect, enabled: boolean, mix: number, depth: number) => void; onSaveLoop?: () => void;
   onLoopIn?: () => void; onLoopOut?: () => void;
   onMemory?: (action: "save" | "delete" | "previous" | "next") => void; onMemoryCall?: (index: number) => void;
+  onKeyShift?: (semitones: number) => void; onKeySync?: () => void; onKeyReset?: () => void;
+  onSlip?: (enabled: boolean) => void; onReverse?: (enabled: boolean) => void;
   savedLoops?: readonly PerformanceLoop[]; onRecallLoop?: (id: string) => void;
   trackKey?: string | null;
   cueColors?: (string|null)[];
@@ -52,7 +56,7 @@ type Props = {
   onGridEdit: () => void; onGridClose?: () => void; gridEditor?: ReactNode;
 };
 
-export function SoftwareDeck({ id, deck, channel, active, connected, capability, capabilities, tailLock, onActivate, onToggle, onCue, onSeekAbsolute, onTempo, onKeylock, onSync, onMaster, onUnload, syncLeader, onHotCue, onLoop, onBeatJump, onBeatLoop, onLoopEnable, onQuantize, onFx, onSaveLoop, onLoopIn, onLoopOut, onMemory, onMemoryCall, savedLoops, onRecallLoop, trackKey, cueColors, onGridEdit, onGridClose, gridEditor }: Props) {
+export function SoftwareDeck({ id, deck, channel, active, connected, capability, capabilities, tailLock, onActivate, onToggle, onCue, onSeekAbsolute, onTempo, onKeylock, onSync, onMaster, onUnload, syncLeader, onHotCue, onLoop, onBeatJump, onBeatLoop, onLoopEnable, onQuantize, onFx, onSaveLoop, onLoopIn, onLoopOut, onMemory, onMemoryCall, onKeyShift, onKeySync, onKeyReset, onSlip, onReverse, savedLoops, onRecallLoop, trackKey, cueColors, onGridEdit, onGridClose, gridEditor }: Props) {
   const deckDrop = usePlayDeckDrop(`play-deck-controls-${id}`, id);
   const left = id === "A" || id === "C";
   const [loopBeats, setLoopBeats] = useState(4);
@@ -124,6 +128,15 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
   const quantizeReason = unavailable("deck.quantize", "QUANTIZE", Boolean(onQuantize), false);
   const gridReason = unavailable("deck.beatgrid", "GRID EDIT", true);
   const memoryReason = unavailable("deck.transport", "MEMORY CUE", Boolean(onMemory && onMemoryCall));
+  const { keyNotation } = usePlayPreferences();
+  const keyShift = Math.round(deck?.keyShift ?? 0);
+  const key = currentKey(trackKey, keyShift, rate, Boolean(deck?.keylock), keyNotation);
+  const originalKey = formatLibraryKey(trackKey, keyNotation);
+  const keyReason = unavailable("deck.key", "KEY", Boolean(onKeyShift));
+  const keySyncReason = keyReason ?? (!capabilities.includes(DJ_ENGINE_CAPABILITIES.deckKeySync) ? "KEY SYNC：この音声エンジンは曲のキーを検出できないため使えません"
+    : !parseKey(trackKey) ? "KEY SYNC：この曲のキーが不明です" : !onKeySync ? "KEY SYNC コントローラー未接続" : undefined);
+  const slipReason = unavailable("deck.slip", "SLIP", Boolean(onSlip));
+  const reverseReason = unavailable("deck.reverse", "REVERSE", Boolean(onReverse));
   const selectLoopBeats = (beats: number) => {
     const next = Math.max(.125, Math.min(32, beats));
     setLoopBeats(next);
@@ -179,15 +192,16 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
         <span className="dj-chip dj-chip--state" data-state={stateKind}>{leading ? "MASTER" : deck?.syncEnabled ? `→ ${syncLeader && syncLeader !== id ? syncLeader : "—"}` : status}</span>
         {/* rekordbox のデッキヘッダ：左に KEY SYNC とキー表示、右に BEAT SYNC / MASTER。 */}
         <div className="dj-sync-block" role="group" aria-label={`Deck ${id} SYNC`}>
-          <button className="dj-chip dj-chip--keysync" disabled
-            title="キーシンク：トラックのキーを変更し、デッキ間のキーを合わせます（この音声エンジン未対応）">KEY SYNC</button>
+          <button className="dj-chip dj-chip--keysync" disabled={Boolean(keySyncReason)}
+            title={keySyncReason ?? "KEY SYNC：MASTER のキーに近い方向へキーを合わせます"} onClick={() => onKeySync?.()}>KEY SYNC</button>
           <button className={cn("dj-chip dj-chip--beatsync", deck?.syncEnabled && "is-on")} disabled={!supported("deck.sync")} aria-pressed={Boolean(deck?.syncEnabled)}
             title={capabilities.includes("deck.sync") ? "テンポシンク：BPMを合わせます。拍位置の自動移動は行いません" : "この音声エンジンはシンク非対応"}
             onClick={() => onSync(!deck?.syncEnabled)}><span>BEAT</span><span>SYNC</span></button>
-          <div className="dj-key-shift" title="キー：この音声エンジンはキー変更未対応のため表示のみ">
-            <button type="button" disabled aria-label="キーを下げる">‹</button>
-            <b>{trackKey || "—"}</b><i className="dj-num">±0</i>
-            <button type="button" disabled aria-label="キーを上げる">›</button>
+          <div className="dj-key-shift" title={keyReason ?? `現在のキー${key.approximate ? "（MT OFF のためテンポで音程が動いています。≈ は最寄りの半音）" : ""}${originalKey ? ` · 原キー ${originalKey}` : " · 原キー不明"}。ダブルクリックで KEY RESET`}
+            onDoubleClick={() => { if (!keyReason && keyShift !== 0) onKeyReset?.(); }}>
+            <button type="button" disabled={Boolean(keyReason) || keyShift <= -12} aria-label="キーを半音下げる" title={keyReason ?? "キーを半音下げる"} onClick={() => onKeyShift?.(keyShift - 1)}>‹</button>
+            <b className={cn(key.delta !== 0 && "is-shifted")}>{key.approximate ? "≈" : ""}{key.text ?? "—"}</b><i className="dj-num">{formatKeyDelta(key.delta)}</i>
+            <button type="button" disabled={Boolean(keyReason) || keyShift >= 12} aria-label="キーを半音上げる" title={keyReason ?? "キーを半音上げる"} onClick={() => onKeyShift?.(keyShift + 1)}>›</button>
           </div>
           <button className={cn("dj-chip dj-chip--master", leading && "is-on")} disabled={!supported("deck.sync") || !onMaster} aria-pressed={leading}
             title={leading ? "MASTER を解除します（この音声エンジンではこのデッキの BEAT SYNC も解除されます）" : "シンクマスター：このデッキを BEAT SYNC の基準にします（この音声エンジンではこのデッキの SYNC も ON になります）"} onClick={() => onMaster?.()}>MASTER</button>
@@ -211,9 +225,9 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
         <div className="dj-perf-main">
           <div className="dj-phase" aria-hidden style={{ gridTemplateColumns: `repeat(${phaseCells}, 1fr)` }}>{Array.from({ length: phaseCells }, (_, index) => <i key={index} className={cn(index % beatsPerBar === 0 && "is-bar", index === phase && "is-on")} />)}</div>
           {gridEditor ? <div className="dj-grid-editor-slot">{gridEditor}</div> : <>
-            {padMode === "sampler" ? <SamplerPads offset={left?8:0} enabled={Boolean(connected && capabilities.includes("sampler"))} cueAvailable={capabilities.includes("mixer.pfl")} /> : <PerformancePads page={padPage} cueColors={cueColors} onKey={(semitones, keyboard) => {
-              setPadError(""); const trackId = deck?.track?.trackId, generation = djEngineClient.getDeckGeneration(id);
-              void (async () => { await djEngineClient.send("deck.key.shift", {deck:id,trackId,semitones});
+            {padMode === "sampler" ? <SamplerPads offset={left?8:0} enabled={Boolean(connected && capabilities.includes("sampler"))} cueAvailable={capabilities.includes("mixer.pfl")} /> : <PerformancePads page={displayedPage} cueColors={cueColors} onKey={(semitones, keyboard) => {
+              setPadError(""); const generation = djEngineClient.getDeckGeneration(id);
+              void (async () => { await djEngineClient.keyShift(id, semitones);
                 if (keyboard && generation === djEngineClient.getDeckGeneration(id)) { const cue = deck?.hotCues[keyboardCue]; if (cue == null) throw new Error("KEYBOARDにはホットキューを設定してください"); await djEngineClient.seek(id,cue); if(generation === djEngineClient.getDeckGeneration(id)) await djEngineClient.play(id); }
               })().catch(e=>setPadError(String(e)));
             }} mode={padMode} hotCues={deck?.hotCues} formatTime={formatTime} describeCue={describeCue} selectedLoopBeats={loopBeats} fxMix={fxMix} activeFx={channel?.fx?.enabled ? channel.fx.effect : undefined}
@@ -228,7 +242,6 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
             </div>}
             {padMode === "keyboard" && <label>HOT CUE <select aria-label={`Deck ${id} KEYBOARDのキュー`} value={keyboardCue} onChange={e=>setKeyboardCue(Number(e.target.value))}>{Array.from({length:16},(_,i)=><option key={i} value={i} disabled={deck?.hotCues[i]==null}>{String.fromCharCode(65+i)}</option>)}</select></label>}
             {padError && <small role="alert">{padError}</small>}
-            <details className="dj-pad-extras"><summary>KEY / SLIP / MEMORY</summary><DeckPerformanceControls id={id} deck={deck} enabled={Boolean(connected && deck?.track)} /></details>
             <div className="dj-pad-mode-row">
               <div className="dj-pad-pages" role="group" aria-label={`Deck ${id} ${padMode==="sampler"?"バンク":"ページ"}`}>
                 {Array.from({length:lastPage+1},(_,page)=><button key={page} type="button" aria-pressed={displayedPage===page} onClick={()=>movePage(page-displayedPage)}>{padMode==="sampler"?"BANK":"PAGE"} {page+1}</button>)}
@@ -268,7 +281,10 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
         <button className={cn("dj-play-button", deck?.status === "playing" && "is-playing")} disabled={disabled} onClick={onToggle} aria-label={`Deck ${id} ${deck?.status === "playing" ? "pause" : "play"}`}>{deck?.status === "playing" ? <Pause /> : <Play />}</button>
         </div>
       <div className="dj-deck-rail" role="group" aria-label={`Deck ${id} SLIP・QUANTIZE・MASTER TEMPO`}>
-        <button className="dj-chip" disabled title="スリップ：この音声エンジン未対応">SLIP</button>
+        <button className={cn("dj-chip dj-chip--toggle", deck?.slip && "is-on")} disabled={Boolean(slipReason)} aria-pressed={Boolean(deck?.slip)}
+          title={slipReason ?? "SLIP：演奏操作の間も裏で再生位置を進めます"} onClick={() => onSlip?.(!deck?.slip)}>SLIP</button>
+        <button className={cn("dj-chip dj-chip--toggle", deck?.reverse && "is-on")} disabled={Boolean(reverseReason)} aria-pressed={Boolean(deck?.reverse)}
+          title={reverseReason ?? "REVERSE：逆再生"} onClick={() => onReverse?.(!deck?.reverse)}>REV</button>
         <button className={cn("dj-chip", quantize && "is-on")} disabled={Boolean(quantizeReason)}
           title={quantizeReason ?? "クオンタイズ：キュー・ループを拍位置に合わせて置きます（再生位置は動きません）"} aria-pressed={quantize}
           onClick={() => onQuantize?.(!quantize)}>Q</button>
