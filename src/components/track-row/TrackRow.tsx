@@ -5,6 +5,7 @@ import { TrackPlayButton, TrackTitle, TrackMetaCell, TrackAttributeCell } from "
 import { GenreCell } from "@/components/music-library/GenreCell";
 import { usePlayerStore } from "@/stores/playerStore";
 import { Mic } from "lucide-react";
+import { formatKey, useKeyDisplay } from "@/lib/key-display";
 
 export type TrackRowViewType = "table" | "list";
 
@@ -52,6 +53,7 @@ export function TrackRow({
   showMeta = true,
 }: TrackRowProps) {
   const { currentTrack, play } = usePlayerStore();
+  const keyDisplay = useKeyDisplay();
   const isPlaying = currentTrack?.id === track.id;
   
   const commonClasses = cn(
@@ -112,7 +114,7 @@ export function TrackRow({
           <TrackMetaCell value={track.bpm ? Math.round(track.bpm) : "-"} align="right" />
         </td>
         <td className="p-3 w-20">
-          <TrackMetaCell value={track.key} align="center" />
+          <TrackMetaCell value={formatKey(track.key, keyDisplay.notation)} align="center" />
         </td>
         <td className="p-3 w-24">
           <TrackAttributeCell value={track.energy} color="bg-orange-500" />
@@ -202,7 +204,7 @@ export function TrackRow({
                 ) : <span className="text-[10px] text-muted-foreground leading-none">-</span>}
                 
                 {track.key ? (
-                    <span className="text-[9px] text-muted-foreground leading-none">{track.key}</span>
+                    <span className="text-[9px] text-muted-foreground leading-none">{formatKey(track.key, keyDisplay.notation)}</span>
                 ) : <span className="text-[9px] text-muted-foreground leading-none">-</span>}
                 
                 <span className="text-[9px] font-mono text-muted-foreground/50 leading-none">

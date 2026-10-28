@@ -414,13 +414,22 @@ async fn run(state: &AppState, name: &str, a: &Value) -> ToolResult {
             if page || has_targets {
                 pairs.push(("offset", Some(&offset_value)));
                 pairs.extend(targets.iter().map(|k| (*k, a.get(*k))));
-                let result = ok(state, Method::GET, &format!("/api/recommendations/next/page{}", query(&pairs)), None).await?;
+                let mut result = ok(state, Method::GET, &format!("/api/recommendations/next/page{}", query(&pairs)), None).await?;
+                if arg(a, "camelot").and_then(Value::as_bool).unwrap_or(false) {
+                    let base = track_key(state, id).await;
+                    result["items"] = Value::Array(key_filter(result["items"].as_array().cloned().unwrap_or_default(), base.as_deref()));
+                }
                 if page {
                     return Ok(result);
                 }
                 return Ok(track_list(result["items"].clone()));
             }
-            Ok(track_list(ok(state, Method::GET, &format!("/api/recommendations/next{}", query(&pairs)), None).await?))
+            let mut items = ok(state, Method::GET, &format!("/api/recommendations/next{}", query(&pairs)), None).await?;
+            if arg(a, "camelot").and_then(Value::as_bool).unwrap_or(false) {
+                let base = track_key(state, id).await;
+                items = Value::Array(key_filter(items.as_array().cloned().unwrap_or_default(), base.as_deref()));
+            }
+            Ok(track_list(items))
         }
         "generate_auto_setlist" => {
             let body = json!({
@@ -799,6 +808,29 @@ async fn run(state: &AppState, name: &str, a: &Value) -> ToolResult {
     }
 }
 
+
+/// RB-06 (`camelot: true`): same, ±1 and relative keys only, same first,
+/// unknown keys last; the scores are unchanged.
+fn key_filter(items: Vec<Value>, base: Option<&str>) -> Vec<Value> {
+    let Some(base) = base.and_then(plumdeck_key::parse_key) else { return items };
+    let rank = |item: &Value| match item["key"].as_str().and_then(plumdeck_key::parse_key) {
+        None => Some(2),
+        Some(key) => match plumdeck_key::relation(base, key) {
+            plumdeck_key::Relation::Same => Some(0),
+            plumdeck_key::Relation::Adjacent | plumdeck_key::Relation::Relative => Some(1),
+            _ => None,
+        },
+    };
+    let mut ranked: Vec<(usize, usize, Value)> = items.into_iter().enumerate().filter_map(|(index, item)| rank(&item).map(|r| (r, index, item))).collect();
+    ranked.sort_by_key(|(r, index, _)| (*r, *index));
+    ranked.into_iter().map(|(_, _, item)| item).collect()
+}
+
+async fn track_key(state: &AppState, id: i64) -> Option<String> {
+    let db = state.db.clone();
+    state.blocking(move || plumdeck_db::repos::tracks::get_track(&*db.lease()?, plumdeck_db::repos::tracks::BigInt(id.into()))).await.ok().flatten().and_then(|t| t.key)
+}
+
 /// `json.dumps(value, ensure_ascii=False)` (", " and ": " separators).
 fn python_dumps(value: &Value) -> String {
     match plumdeck_core::compat::pyjson_loads::loads(&value.to_string()) {
@@ -879,6 +911,11 @@ async fn assist_rank(state: &AppState, name: &str, a: &Value) -> ToolResult {
         .blocking_result(move || db.lease().map_err(|_| None).and_then(|conn| assist::mcp_recommend(&conn, &body, now).map_err(|_| None)))
         .await
         .map_err(|_| None)??;
+    if arg(a, "camelot").and_then(Value::as_bool).unwrap_or(false) {
+        let base = track_key(state, source).await;
+        let filtered = key_filter(result["candidates"].as_array().cloned().unwrap_or_default(), base.as_deref());
+        result["candidates"] = Value::Array(filtered);
+    }
     if let Some(candidates) = result["candidates"].as_array_mut() {
         *candidates = candidates.iter().map(brief).collect();
     }

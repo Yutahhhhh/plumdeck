@@ -19,6 +19,7 @@ import { useAudition } from "./useAudition";
 import { useLoadedHistory } from "./useLoadedHistory";
 import { MAX_EXCLUDED_TRACKS } from "./loaded-history";
 import { parseTempoTolerance, TEMPO_TOLERANCES, TEMPO_TOLERANCE_STORAGE_KEY, type TempoTolerance } from "./tempo-tolerance";
+import { filterByKey, formatKey, parseKey, setKeyFilterEnabled, useKeyDisplay } from "@/lib/key-display";
 
 const presets: { value: AssistIntent; label: string; detail: string }[] = [
   { value: "keep", label: "キープ", detail: "流れを保つ" },
@@ -193,7 +194,9 @@ export function AssistWorkspace() {
   const sourceArtist = selected?.track?.artist ?? observed?.artist;
   const visible = result?.key === requestKey ? result : null;
   const recommended = visible?.kind === "recommend" ? visible.value : null;
-  const candidates = visible?.value.candidates ?? [];
+  const keyDisplay = useKeyDisplay();
+  const sourceKey = parseKey(observed?.display_key ?? selected?.track?.key);
+  const candidates = keyDisplay.filter ? filterByKey(visible?.value.candidates ?? [], sourceKey) : visible?.value.candidates ?? [];
   const presetLabel = presets.find(item => item.value === intent)?.label ?? "";
   const activeRouteIndex = route?.routes.length ? Math.min(routeIndex, route.routes.length - 1) : 0;
   const activeRoute = route?.routes[activeRouteIndex] ?? null;
@@ -313,7 +316,7 @@ export function AssistWorkspace() {
           <div className="mb-1 flex items-center justify-between"><span className="text-[10px] text-slate-400">基準デッキ</span><BaseDeckPicker slots={slots} base={base} hasDecks={observations.length > 0} disabled={dragging} /></div>
           <p className="truncate text-sm font-semibold">{sourceTitle || (decks.loading ? "デッキを確認中…" : "曲が読み込まれていません")}</p>
           <div className="mt-1 flex items-center justify-between gap-2"><p className="truncate text-[11px] text-slate-400">{sourceArtist || "—"}</p>
-          {sourceTitle && <p className="shrink-0 text-[10px] tabular-nums text-slate-400">{observed?.tempo_bpm ?? observed?.track_bpm ?? selected?.track?.bpm ?? "—"} BPM <span className="mx-2 text-slate-700">/</span>{observed?.display_key ?? selected?.track?.key ?? "—"}</p>}</div>
+          {sourceTitle && <p className="shrink-0 text-[10px] tabular-nums text-slate-400">{observed?.tempo_bpm ?? observed?.track_bpm ?? selected?.track?.bpm ?? "—"} BPM <span className="mx-2 text-slate-700">/</span>{formatKey(observed?.display_key ?? selected?.track?.key, keyDisplay.notation)}</p>}</div>
           {selected?.message && <p className="mt-2 text-[11px] text-amber-200">{selected.message}</p>}
           {!sourceId && sourceTitle && !selected && <p className="mt-2 text-[11px] text-slate-500">ライブラリの曲と照合中…</p>}
         </section>
@@ -383,6 +386,10 @@ export function AssistWorkspace() {
             <label className={cn("flex items-center gap-1.5 text-[10px]", intent === "wordplay" ? "text-slate-600" : "text-slate-300")} title="倍テン・ハーフテンの曲と、タイトルに「100-128 Transition」などとあるテンポ変化曲から探します">
               <input type="checkbox" checked={transition && intent !== "wordplay"} disabled={intent === "wordplay"} onChange={event => setTransition(event.target.checked)} className="accent-amber-300" />
               トランジション（テンポを移る）
+            </label>
+            <label className="flex items-center gap-1.5 text-[10px] text-slate-300" title="同じキー・±1・平行調だけを残し、同じキーを先頭、キー不明を最後にします">
+              <input type="checkbox" checked={keyDisplay.filter} onChange={event => setKeyFilterEnabled(event.target.checked)} className="accent-amber-300" />
+              キー相性
             </label>
             <div className="flex flex-wrap items-center gap-1.5">
               <select

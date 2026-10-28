@@ -215,3 +215,17 @@ deviations:
       Component versions of Python's analyzers count as current, so nothing
       is re-analysed by only_outdated after the switch.
     current: proposed; the embedding part is temporary.
+  - id: D-26
+    status: proposed
+    source: docs/plan/rekordbox-parity.md §8 (RB-03..RB-06)
+    summary: >
+      Keys are shown in the user's notation (Alphanumeric by default,
+      Classic or Open Key) everywhere a key is listed; the Play browser and
+      its recommendation panel colour keys against the MASTER deck (Traffic
+      Light: green for same / ±1 / relative, yellow for diagonal / +2 when
+      enabled); a remembered "key compatibility" switch in Assist and the
+      Play recommendation panel, and `camelot: true` on the MCP
+      recommend_next_track(_page) and assist_recommend tools, keep same /
+      ±1 / relative keys, same first and unknown last. The tool schemas in
+      contracts/mcp do not list `camelot` yet (Python had no such argument).
+    current: proposed; scores are unchanged, only order and membership.

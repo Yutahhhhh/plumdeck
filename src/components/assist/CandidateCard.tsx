@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import type { AssistCandidate } from "@/services/assist";
 import { canDragOut } from "./native-drag";
 import type { AuditionControl } from "./audition";
+import { formatKey, useKeyDisplay } from "@/lib/key-display";
 
 interface CandidateCardProps {
   track: AssistCandidate;
@@ -19,6 +20,7 @@ interface CandidateCardProps {
 /** One suggestion the DJ can drag straight onto a rekordbox deck. */
 export function CandidateCard({ track, badge, dragging, freeze, onDrag, audition }: CandidateCardProps) {
   const pointer = useRef<{ id: number; x: number; y: number } | null>(null);
+  const keyDisplay = useKeyDisplay();
   const cautions = track.reasons.filter(reason => reason.tone === "caution");
   const playing = audition?.playingId === track.id;
 
@@ -50,7 +52,7 @@ export function CandidateCard({ track, badge, dragging, freeze, onDrag, audition
     >
       <span className="shrink-0 pt-0.5 text-[10px] tabular-nums text-slate-600">{badge}</span>
       <div className="min-w-0 flex-1">
-        <div className="flex items-baseline justify-between gap-2"><p className="truncate text-xs font-medium" title={track.title}>{track.title}</p><span className="flex shrink-0 items-baseline gap-1.5">{playing && <span className="animate-pulse text-[9px] font-medium text-emerald-300">試聴中</span>}<span className="text-[10px] tabular-nums text-amber-200/80">{track.bpm || "—"} · {track.key || "—"}</span></span></div>
+        <div className="flex items-baseline justify-between gap-2"><p className="truncate text-xs font-medium" title={track.title}>{track.title}</p><span className="flex shrink-0 items-baseline gap-1.5">{playing && <span className="animate-pulse text-[9px] font-medium text-emerald-300">試聴中</span>}<span className="text-[10px] tabular-nums text-amber-200/80">{track.bpm || "—"} · {formatKey(track.key, keyDisplay.notation)}</span></span></div>
         <p className="truncate text-[10px] text-slate-400">{track.artist}{track.year ? ` · ${track.year}` : ""}{track.genre ? ` · ${track.genre}` : ""}</p>
         {audition?.failedId === track.id && <p role="alert" className="mt-1 text-[10px] text-rose-300">試聴できませんでした</p>}
         {track.agent_reason && <p className="mt-1 text-[10px] leading-snug text-sky-200">{track.agent_reason}</p>}

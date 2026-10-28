@@ -38,6 +38,7 @@ import { DeckWaveform, type WaveformLayout } from "./DeckWaveform";
 import { Fader, SoftwareDeck, formatTime } from "./SoftwareDeck";
 import { MixerPanel } from "./MixerPanel";
 import { chooseSyncLeader } from "./sync-leader";
+import { deckKey, masterDeck } from "@/lib/key-display";
 import { manualLoopOut, snapToBeat } from "./loop-math";
 import { awaitPendingGrid } from "./pending-grid";
 import { CROSSFADER_CURVE_OPTIONS, FADER_CURVES, FADER_CURVE_LABELS, nextDropouts, readCrossfaderCurve, readFaderCurve, type ColorFxEffect, type DropoutState } from "./mixer-math";
@@ -1111,7 +1112,7 @@ export function PlayWorkspace() {
       </div>}
       <span className={cn("dj-master-note", snapshot?.recording?.active && "is-recording")}>{snapshot?.recording?.active ? `● REC ${formatTime(snapshot.recording.elapsedMs)}` : `DECK ${activeDeck} SELECTED`}</span>
     </div>
-    <PlayLibrary activeDeck={activeDeck} seedTrackId={Number.isFinite(seed) && seed > 0 ? seed : null} onLoad={loadTrack} cueOverrides={listCueOverrides} cueRevision={cueRevision} cueImportControl={<RekordboxCueImportButton onImport={importRekordboxCues} />} />
+    <PlayLibrary masterKey={(() => { const decks = snapshot?.decks; const master = decks ? masterDeck(DECK_IDS, decks) : undefined; return master && decks ? deckKey(decks[master]) : null; })()} activeDeck={activeDeck} seedTrackId={Number.isFinite(seed) && seed > 0 ? seed : null} onLoad={loadTrack} cueOverrides={listCueOverrides} cueRevision={cueRevision} cueImportControl={<RekordboxCueImportButton onImport={importRekordboxCues} />} />
     {audioSettingsOpen && <AudioSettings onClose={() => setAudioSettingsOpen(false)} onApply={applyAudioOutput} />}
     <RecordingSaveDialog recording={savingRecording} onClose={() => setSavingRecording(null)}
       onBeforePreview={prepareRecordingPreview}

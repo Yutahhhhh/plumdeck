@@ -34,6 +34,8 @@ import { ImportSection } from "./ImportSection";
 import { LibraryImportDialog } from "./LibraryImportDialog";
 import { MetadataImportDialog } from "./MetadataImportDialog";
 import { useTheme } from "@/components/theme-provider";
+import { setKeyNotation, setTrafficLightLevel2, useKeyDisplay } from "@/lib/key-display";
+import type { KeyNotationId } from "@/lib/keys.generated";
 import { GridReanalysis } from "./GridReanalysis";
 import { downloadFile } from "@/lib/download";
 import {
@@ -45,6 +47,7 @@ const supportsLightAnalysis = typeof navigator !== "undefined" && /Windows/i.tes
 
 export function SettingsView() {
   const { theme, setTheme } = useTheme();
+  const keyDisplay = useKeyDisplay();
   const [settings, setSettings] = useState<{ [key: string]: string }>({});
   const [status, setStatus] = useState<string>("");
   const [isError, setIsError] = useState(false);
@@ -287,6 +290,24 @@ export function SettingsView() {
                   <SelectItem value="system">System</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="key-notation">キーの表記</Label>
+              <Select value={keyDisplay.notation} onValueChange={(value) => setKeyNotation(value as KeyNotationId)}>
+                <SelectTrigger id="key-notation">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="alphanumeric">Alphanumeric（8A）</SelectItem>
+                  <SelectItem value="classic">Classic（Am）</SelectItem>
+                  <SelectItem value="open_key">Open Key（1m）</SelectItem>
+                </SelectContent>
+              </Select>
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <input type="checkbox" checked={keyDisplay.level2} onChange={(event) => setTrafficLightLevel2(event.target.checked)} />
+                Traffic Light で対角・+2 も黄色で示す
+              </label>
             </div>
 
             <div className="space-y-2">
