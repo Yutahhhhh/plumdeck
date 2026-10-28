@@ -179,7 +179,11 @@ export function buildTrimParams(deck: DeckId, gain: number): Record<string, unkn
 export const FX_MIX_RANGE = { min: 0, max: 1 } as const;
 export const FX_DEPTH_RANGE = { min: 0, max: 1 } as const;
 
-/** `beats` is sent only to hosts declaring `mixer.fx.beats`. */
+/**
+ * PAD FX on the deck chain. `beats` (1/16..16) and native `params` are sent
+ * only to hosts declaring `mixer.fx.beats`; such hosts run insert types fully
+ * wet and keep echo/reverb tails after `enabled: false` (see the capability).
+ */
 export function buildFxParams(deck: DeckId, effect: PadEffect, enabled: boolean, mix: number, depth?: number, beats?: number, parameters?: Record<string, number>): Record<string, unknown> {
   assertDeckId(deck);
   if (!PAD_EFFECTS.includes(effect) || typeof enabled !== "boolean") throw new DjEngineValidationError("effect", "エフェクトの種類または状態が不正です");

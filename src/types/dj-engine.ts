@@ -103,39 +103,65 @@ export const DJ_ENGINE_OPS = {
 /**
  * Capability names the UI gates on. A host declares only what it implements;
  * controls for undeclared capabilities stay hidden or disabled with a reason.
- * Names marked "contract" are not declared by the Mixxx host yet: they are the
- * agreed surface for the host fixes (H-x) and the Rust engine.
+ * Each entry documents the behaviour an engine promises by declaring it; the
+ * Mixxx host and the Rust engine implement the same contract. Names marked
+ * "Rust" are not declared by the Mixxx host.
  */
 export const DJ_ENGINE_CAPABILITIES = {
   deckKey: "deck.key",
-  /** contract (H-4): the engine knows the loaded track's key, so KEY SYNC works. */
+  /**
+   * H-4: the engine knows each loaded track's key (`track.musicalKey`), and
+   * `deck.key.sync` moves the deck to the sync leader's (else another playing
+   * deck's) effective key by the shortest whole-semitone step, counting the
+   * relative major/minor as the same key (Am with Cm: -3). Turns MT on; KEY
+   * RESET restores the MT state from before the first shift (H-5).
+   */
   deckKeySync: "deck.key.sync",
   deckSlip: "deck.slip",
   deckReverse: "deck.reverse",
   deckPitchbend: "deck.pitchbend",
   deckSync: "deck.sync",
-  /** contract (H-2): `syncLeader` is re-read every tick, not only after sync ops. */
+  /**
+   * H-2: every deck's `syncLeader` / `syncEnabled` mirror the engine each tick,
+   * including leaders the engine elects by itself. H-3 (interim on Mixxx): SYNC
+   * ON, or play while synced, aligns the follower's beat phase once (<=2 ms).
+   */
   deckSyncLeaderTelemetry: "deck.sync.leader.v2",
-  /** contract (H-11): loops 1/64..512 beats and beat jumps up to 128. */
+  /** H-11: loops 1/64..512 beats and beat jumps 1/64..128 beats. */
   deckLoopExtended: "deck.loop.range.v2",
   mixerColorFx: "mixer.colorfx",
   mixerBeatFx: "mixer.beatfx",
   mixerBeatFxRelease: "mixer.beatfx.release",
-  /** contract (H-8): `mixer.fx.set` accepts `beats` and `params`, and pads load the beat processors (ROLL, TRANS, SPIRAL …). */
+  /**
+   * H-8: `mixer.fx.set` accepts `beats` (1/16..16) and native `params`, pads
+   * load the beat processors (ROLL, TRANS, SPIRAL …), insert types run fully
+   * wet with DEPTH on the macro only, and echo/reverb pads keep a tail after
+   * release (`fx.tail` while it decays).
+   */
   mixerFxBeats: "mixer.fx.beats",
-  /** contract (Rust): RELEASE pads (ECHO OUT, BACK SPIN, VINYL BRAKE). */
+  /** Rust: RELEASE pads (ECHO OUT, BACK SPIN, VINYL BRAKE). */
   mixerFxRelease: "mixer.fx.release",
-  /** contract (H-10): BEAT FX beats 1/16..16 on the delay/roll processors. */
+  /**
+   * H-10: BEAT FX beats 1/16..16 on the delay/roll processors; echo/delay
+   * types keep the dry signal at every LEVEL; PITCH is always fully wet and
+   * LEVEL spans -1..+1 octave; echo/reverb OFF keeps a tail (`beatFx.tail`).
+   */
   mixerBeatFxRange: "mixer.beatfx.range.v2",
-  /** contract (H-12): `mixer.crossfader.curve` is accepted. */
+  /** H-12: `mixer.crossfader.curve` sets smooth / standard / sharp; channels report `crossfaderGain`. */
   mixerCrossfaderCurve: "mixer.crossfader.curve",
   mixerCrossfader: "mixer.crossfader",
   mixerPfl: "mixer.pfl",
+  /** H-7: `mixer.headphone.gain` (0..1) and `mixer.headphone.mix` (-1 cue .. 1 master); declared with a cue output. */
   mixerHeadphone: "mixer.headphone",
+  /**
+   * H-1: `meters.subscribe` streams `meters` events (20..2000 ms). Levels are
+   * linear amplitudes: `peak` is held since the previous event, `rms` is the
+   * latest audio block; channel meters are taken before the channel fader.
+   */
   meters: "meters",
   sampler: "sampler",
   recording: "recording",
-  /** contract (Rust): pad modes that have no engine op today. */
+  /** Rust: pad modes that have no engine op today. */
   deckSlicer: "deck.slicer",
   deckSequencer: "deck.sequencer",
   deckCensor: "deck.censor",
@@ -263,12 +289,17 @@ export interface DeckState {
 }
 
 /**
- * Mixxx 内蔵エフェクトのうちパッドから叩けるもの。エンジン側 (`host.cpp` の
- * `padEffects`) と同じ集合で、各名前は org.mixxx.effects.<name> として読まれる。
+ * パッドから叩けるエフェクト。エンジン側 (`host.cpp` の `padEffects`) と同じ集合。
+ * ホストは org.plumdeck.effects.<name>（拍同期の自前プロセッサ）を優先し、
+ * 無ければ org.mixxx.effects.<name> を読む。`org.plumdeck.effects.` 付きの名前も受け付ける。
  */
 export const PAD_EFFECTS = ["echo", "reverb", "flanger", "phaser", "filter", "bitcrusher", "distortion", "autopan", "tremolo", "moogladder4filter", "lowcutecho", "mtdelay", "spiral", "enigmajet", "sliproll", "roll", "pitchshift"] as const;
 export type PadEffect = (typeof PAD_EFFECTS)[number];
-export interface ChannelFx { effect: PadEffect; enabled: boolean; mix: number; depth?: number; beats?: number; tail?: boolean; nativeEnabled?: boolean }
+/**
+ * `enabled` is the pad's held state; `tail` is true while an echo/reverb
+ * keeps decaying after release; `nativeEnabled` is the chain itself.
+ */
+export interface ChannelFx { effect: PadEffect; enabled: boolean; mix: number; depth?: number; beats?: number; tail?: boolean; nativeEnabled?: boolean; parameters?: Record<string, number> }
 export interface ChannelColorFx { effect: string; amount: number }
 
 export interface ChannelState {
@@ -285,6 +316,8 @@ export interface ChannelState {
   colorFx?: ChannelColorFx;
   /** Crossfader assign: 0 = A, 1 = THRU, 2 = B. */
   orientation?: number;
+  /** Linear gain the crossfader currently applies to this channel (curve and assign included). */
+  crossfaderGain?: number;
 }
 
 export interface BeatFxState {
@@ -297,11 +330,14 @@ export interface BeatFxState {
   beats: number;
   /** RELEASE FX is held. */
   releaseActive?: boolean;
+  /** An echo/reverb tail is still decaying after OFF. */
+  tail?: boolean;
 }
 
 export interface MixerState {
   beatFx?: BeatFxState;
   crossfader: number;
+  crossfaderCurve?: CrossfaderCurve;
   masterGain: number;
   headphoneGain: number;
   headphoneMix: number;
@@ -352,6 +388,9 @@ export interface AudioConfig {
 export interface MetersPayload {
   simulated: boolean;
   master: { peak: number; rms: number };
+  /** Headphone (cue) bus, when the engine has one. */
+  headphone?: { peak: number; rms: number };
+  /** Pre-fader channel levels. */
   channels: Record<string, { peak: number; rms: number; pfl: boolean }>;
 }
 
