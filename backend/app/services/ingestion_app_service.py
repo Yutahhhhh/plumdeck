@@ -49,6 +49,8 @@ class IngestionAppService(BackgroundTaskService):
 
         async def run_with_token():
             nonlocal token
+            request = analysis_coordinator.foreground_request()
+            request.__enter__()
             try:
                 # Acquire only once this coroutine is running. Cancelling the
                 # task before its first step otherwise bypasses this finally
@@ -72,6 +74,7 @@ class IngestionAppService(BackgroundTaskService):
                     self.update_state(start_time=time.time(), queued=False)
                 await self._run_ingestion(targets, force_update, analysis_profile)
             finally:
+                request.__exit__(None, None, None)
                 if token is not None:
                     analysis_coordinator.release(token)
 
@@ -92,6 +95,7 @@ class IngestionAppService(BackgroundTaskService):
                 await asyncio.sleep(3)
                 await self.emit_state()
 
+        embedding_paths = []
         pulse = asyncio.create_task(heartbeat())
         try:
             # Notify start immediately to show loading state
@@ -124,10 +128,18 @@ class IngestionAppService(BackgroundTaskService):
                 "full" if sys.platform != "win32" or analysis_profile == "full"
                 else analysis_profile
             )
+            skipped_db_paths = []
             files_to_process, _ = await asyncio.to_thread(
-                filter_and_prioritize_files, expanded_files, force_update, filter_profile
+                filter_and_prioritize_files, expanded_files, force_update, filter_profile, skipped_db_paths
             )
             
+            # An explicit re-import can repair an optional embedding whose
+            # earlier enqueue failed or whose background job failed. Playback
+            # readiness deliberately does not require that embedding.
+            # Use the saved DB spelling selected by the same NFC comparison
+            # as the filter, including mixed NFC/NFD path components.
+            embedding_paths.extend(skipped_db_paths)
+
             total_files = len(files_to_process)
             if total_files == 0:
                 self.update_state(type="complete", total=0)
@@ -215,6 +227,7 @@ class IngestionAppService(BackgroundTaskService):
                             await self.emit_state()
                             result = await analyze("light")
                         
+                        embedding_paths.append(filepath)
                         if result:
                             self.state["processed"] += 1
                         else:
@@ -269,6 +282,19 @@ class IngestionAppService(BackgroundTaskService):
             pulse.cancel()
             await asyncio.gather(pulse, return_exceptions=True)
             self.executor = None
+            if embedding_paths:
+                from app.services.analysis_job_service import analysis_job_service
+                # Limit waveform/grid rows materialized by the queue's query
+                # when a large directory of already-ready tracks is re-imported.
+                paths = list(dict.fromkeys(embedding_paths))
+                for offset in range(0, len(paths), 200):
+                    try:
+                        await asyncio.to_thread(
+                            analysis_job_service.enqueue_embedding,
+                            filepaths=paths[offset:offset + 200],
+                        )
+                    except Exception as exc:
+                        print(f"WARNING: could not queue optional embeddings: {exc}", flush=True)
 
 # Global Instance
 ingestion_app_service = IngestionAppService()

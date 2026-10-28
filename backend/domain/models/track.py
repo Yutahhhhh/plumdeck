@@ -28,8 +28,8 @@ class Track(SQLModel, table=True):
     key: str = Field(default="")
     scale: str = Field(default="")
     duration: float
-    # ``light`` is playable analysis without a MusiCNN embedding; ``full`` is
-    # the existing detailed pipeline. NULL denotes a legacy detailed result.
+    # ``light`` is the bounded analysis profile; ``full`` is detailed analysis.
+    # Both can be ready before optional embeddings; NULL denotes legacy full.
     analysis_level: Optional[str] = Field(default=None)
     
     # Basic Audio Features

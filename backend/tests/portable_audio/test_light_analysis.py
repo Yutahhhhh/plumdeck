@@ -66,11 +66,10 @@ def test_real_light_dsp_and_codecs_without_heavy_runtime(tmp_path, monkeypatch, 
     if extension != "wav":
         path = source.with_suffix("." + extension)
         subprocess.run([converter, "-v", "error", "-i", str(source), str(path)], check=True, timeout=20)
-    # Codec/DSP gate runs without model dependencies. Actual ONNX inference is
-    # covered separately by the cold-worker diagnostic, including packaged Windows.
-    monkeypatch.setattr(PortableAudioAnalyzer, "_extract_light_embedding", lambda *args: {
-        "embedding": [.2] * 200, "features_extra": {},
-    })
+    # Foreground playback must be ready without touching optional model work.
+    def unexpected_embedding(*_args):
+        raise AssertionError("Foreground light analysis must not compute an embedding")
+    monkeypatch.setattr(PortableAudioAnalyzer, "_extract_light_embedding", unexpected_embedding)
     original_import = builtins.__import__
 
     def guarded(name, *args, **kwargs):
@@ -94,7 +93,9 @@ def test_real_light_dsp_and_codecs_without_heavy_runtime(tmp_path, monkeypatch, 
     assert result["features_extra"]["analysis_window_seconds"] == 30
     assert result["features_extra"]["analysis_window_start_seconds"] == pytest.approx(5, abs=.1)
     assert result["analysis_level"] == "light"
-    assert len(result["embedding"]) == 200
+    assert "embedding" not in result
+    from utils.ingestion import has_completed_analysis_result
+    assert has_completed_analysis_result(result)
     extra = result["features_extra"]
     assert extra["beat_positions"][0] < .3
     assert extra["beat_positions"][-1] > 39

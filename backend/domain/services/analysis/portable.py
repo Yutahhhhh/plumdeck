@@ -182,7 +182,6 @@ class PortableAudioAnalyzer(AudioAnalyzer):
                 "rhythm": "numpy-attacks-v2",
                 "key": "numpy-chroma-light-v2",
                 "timbre": "bounded-summary-v2",
-                "embedding": constants.EMBEDDING_PIPELINE_VERSION,
             },
             "bpm_confidence": round(float(confidence), 2),
             "beat_positions": ticks.tolist(),
@@ -218,13 +217,19 @@ class PortableAudioAnalyzer(AudioAnalyzer):
         year_prefix = str(raw_year).strip()[:4] if raw_year else ""
         if year_prefix.isdigit():
             result["year"] = int(year_prefix)
-        # Release the full low-resolution PCM before loading the model. Keep
-        # the same MusiCNN space so recommendations work with detailed tracks.
-        del audio, whole_audio
-        embedding = self._extract_light_embedding(filepath, duration)
-        extra.update(embedding.pop("features_extra"))
-        result.update(embedding)
+
         return result
+
+    def analyze_selected(self, filepath, features):
+        # The background embedding job keeps the light profile's bounded ONNX
+        # windows: no librosa import and no 44.1 kHz whole-track decode.
+        if list(features) == ["embedding"]:
+            duration = len(self._load_grid_audio(filepath)) / light_dsp.SAMPLE_RATE
+            result = self._extract_light_embedding(filepath, duration)
+            result["features_extra"]["analysis_components"] = {
+                "embedding": constants.COMPONENT_VERSIONS["embedding"]}
+            return result
+        return super().analyze_selected(filepath, features)
 
     def _rhythm(self, audio):
         y = self.librosa.resample(audio, orig_sr=constants.SAMPLE_RATE, target_sr=22050)

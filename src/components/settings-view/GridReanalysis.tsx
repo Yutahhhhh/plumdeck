@@ -22,7 +22,7 @@ export function GridReanalysis() {
     void refresh();
     return () => { alive = false; clearTimeout(timer); };
   }, []);
-  const active = job.status === "running" || job.status === "pausing";
+  const active = !job.config?.background && ["queued", "running", "pausing"].includes(job.status);
   const ours = job.config?.features.length === 1 && job.config.features[0] === "rhythm";
   const run = async (operation: () => Promise<void>) => {
     setBusy(true); setError("");
@@ -44,7 +44,7 @@ export function GridReanalysis() {
       {ours && job.id && !active && !!count?.failed && <Button size="sm" variant="outline" disabled={busy} onClick={() => void run(async () => setJob(await gridJobs.control(job.id!, "retry")))}>失敗した曲を再試行</Button>}
     </div>
     {ours && count && <div className="space-y-1 text-xs" role="status" aria-live="polite">
-      <p>{job.status === "pausing" ? "処理中の曲を終えて一時停止します" : active ? "解析中" : job.status === "paused" ? "一時停止中" : "処理終了"} · {done} / {job.total}曲（成功 {count.completed}・更新不要 {count.skipped}・失敗 {count.failed}）</p>
+      <p>{job.status === "pausing" ? "処理中の曲を終えて一時停止します" : job.status === "queued" ? "前の曲の処理完了を待っています" : active ? "解析中" : job.status === "paused" ? "一時停止中" : "処理終了"} · {done} / {job.total}曲（成功 {count.completed}・更新不要 {count.skipped}・失敗 {count.failed}）</p>
       <progress className="w-full" aria-label="グリッド再解析の進捗" value={done} max={Math.max(1, job.total ?? 0)} />
       <p>経過 {time(job.elapsed ?? 0)}{active && job.estimated_remaining_seconds != null ? ` · 残り約${time(job.estimated_remaining_seconds)}` : ""}</p>
       {job.current_tracks?.map(track => <p key={track.track_id} className="break-all">{track.filepath.split(/[\\/]/).pop()}：音源から拍の位置を検出中</p>)}

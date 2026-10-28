@@ -67,7 +67,7 @@ export function GenreCell({ track, onUpdate }: GenreCellProps) {
 
   const getReasonMessage = (reason: string) => {
     switch (reason) {
-        case "no_embedding": return "Analysis pending (No embedding)";
+        case "no_embedding": return "Timbre comparison pending (embedding not computed yet)";
         case "no_verified_tracks": return "No verified tracks to compare";
         case "no_valid_candidates": return "No similar tracks found";
         default: return "No suggestions found";

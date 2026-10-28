@@ -16,7 +16,7 @@ from utils.ingestion import (
     has_completed_analysis_result,
 )
 import infra.database.connection as db_connection
-from domain.models.track import Track, TrackEmbedding
+from domain.models.track import Track, TrackEmbedding, TrackAnalysis
 from domain.models.lyrics import Lyrics
 from domain.services import value_sources
 from infra.repositories.ingestion_repository import IngestionRepository
@@ -146,7 +146,7 @@ class IngestionDomainService:
 
                     if not force_update:
                         is_metadata_incomplete = not has_valid_metadata(track)
-                        if not has_completed_analysis_for_profile(track, embedding, analysis_profile):
+                        if not has_completed_analysis_for_profile(track, embedding, analysis_profile, session.get(TrackAnalysis, track.id)):
                             if is_metadata_incomplete:
                                 try:
                                     tag_check = TinyTag.get(filepath)
@@ -155,8 +155,9 @@ class IngestionDomainService:
                                         existing_data_cache.update(meta_check)
                                 except Exception:
                                     pass
+                            # An incomplete track is analyzed in full; the
+                            # waveform is part of the analyzed rule.
                             skip_basic = False
-                            skip_waveform = True
                         elif is_metadata_incomplete or check_metadata_changed(filepath, track):
                             metadata_update_only = True
                         else:
@@ -267,7 +268,7 @@ class IngestionDomainService:
                         result[key] = db_val
 
             if not has_completed_analysis_result(result, existing_embedding):
-                requirement = "BPM, duration, embedding or playback data"
+                requirement = "BPM, duration, timbre or playback data"
                 raise RuntimeError(
                     f"Audio analysis returned incomplete {requirement} for {filename}"
                 )

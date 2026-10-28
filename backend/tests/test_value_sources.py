@@ -257,7 +257,8 @@ def _ingest(mocker, tmp_path, case, keys=False):
         return {"filepath": str(audio), "title": "Song", "artist": "Artist", "duration": 180.0,
                 "bpm": 0.0 if "rhythm" in skipped else 64.0, "key": "" if "key" in skipped else "A minor",
                 "scale": "" if "key" in skipped else "minor", "analysis_level": "full",
-                "embedding": [0.1] * 200, "features_extra": {"analysis_components": {"timbre": "timbre-v1"}}}
+                "energy": .7, "danceability": .6, "brightness": .4, "noisiness": .2,
+                "features_extra": {"analysis_components": {"timbre": "timbre-v1"}, "waveform_peaks": [.2, .7]}}
 
     mocker.patch("domain.services.ingestion_domain_service.analyze_track_file", side_effect=analyze)
     result = run_ingestion(str(audio))

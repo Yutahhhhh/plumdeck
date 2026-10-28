@@ -7,7 +7,7 @@ from sqlmodel import Session, select
 from domain.constants import SUPPORTED_EXTENSIONS
 from utils.filesystem import resolve_path
 from utils.metadata import extract_full_metadata, update_file_metadata
-from utils.ingestion import has_completed_analysis
+from utils.ingestion import completed_analysis_condition
 from domain.models.track import Track, TrackAnalysis, TrackEmbedding
 
 def _is_supported_file(filename: str) -> bool:
@@ -76,28 +76,29 @@ class FilesystemAppService:
             file_paths = [item['path'] for item in items if not item['is_dir']]
             
             analyzed_files: Dict[str, str] = {}
+            embedded_files: Set[str] = set()
             if file_paths:
                 # A Track row can be created before expensive audio analysis starts
                 # (for example by Play mode's fast import).  Its mere presence does
-                # not mean analysis succeeded.  Keep this definition aligned with
-                # utils.ingestion.filter_and_prioritize_files so partially imported
-                # and failed tracks remain visible and can be retried.
+                # not mean analysis succeeded.  The shared analyzed rule keeps
+                # partially imported and failed tracks visible for a retry.
                 statement = (
-                    select(Track, TrackEmbedding)
+                    select(Track.filepath, Track.analysis_level, TrackEmbedding.track_id)
                     .outerjoin(TrackEmbedding, Track.id == TrackEmbedding.track_id)
-                    .where(Track.filepath.in_(file_paths), Track.bpm > 0)
+                    .where(Track.filepath.in_(file_paths), completed_analysis_condition())
                 )
-                analyzed_files = {
-                    track.filepath: (track.analysis_level or "full")
-                    for track, embedding in self.session.exec(statement).all()
-                    if has_completed_analysis(track, embedding)
-                }
+                for filepath, level, embedded in self.session.exec(statement).all():
+                    analyzed_files[filepath] = level or "full"
+                    if embedded is not None:
+                        embedded_files.add(filepath)
 
             final_result = []
             for item in items:
                 if not item['is_dir']:
                     item['is_analyzed'] = item['path'] in analyzed_files
                     item['analysis_level'] = analyzed_files.get(item['path'])
+                    # Similarity vectors are optional and filled in the background.
+                    item['embedding_ready'] = item['path'] in embedded_files
                 final_result.append(item)
                 
             return final_result

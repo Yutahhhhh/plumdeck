@@ -50,6 +50,12 @@ class AudioAnalyzer:
         self.zcr_algo = es.ZeroCrossingRate()
         self.embedding_algo = None
         
+        self._embedding_initialized = False
+
+    def _load_embedding_model(self):
+        if getattr(self, "_embedding_initialized", False):
+            return
+        self._embedding_initialized = True
         if getattr(sys, 'frozen', False):
             base_dir = sys._MEIPASS
         else:
@@ -110,17 +116,7 @@ class AudioAnalyzer:
                 if "features_extra" not in result: result["features_extra"] = {}
                 result["features_extra"]["waveform_peaks"] = peaks
 
-            if self.embedding_algo:
-                try:
-                    report("embedding", "類似曲検索用のAI解析を行っています")
-                    embedding = self._extract_embedding(audio)
-                    result.update({k: v for k, v in embedding.items() if k != "features_extra"})
-                    result.setdefault("features_extra", {}).update(embedding["features_extra"])
-                except Exception as e:
-                    logger.warning(f"Embedding failed: {e}")
-
-            # Persist the intended result tier. Validation still requires a
-            # real embedding before a detailed result can be considered done.
+            # Similarity is filled by a durable background job after import.
             result["analysis_level"] = "full"
             result.setdefault("features_extra", {}).update(
                 analysis_level="full", analysis_profile="full"
@@ -132,6 +128,7 @@ class AudioAnalyzer:
             return None
 
     def _extract_embedding(self, audio: np.ndarray) -> Dict[str, Any]:
+        self._load_embedding_model()
         if self.embedding_algo is None:
             raise RuntimeError("MusiCNN model is unavailable")
         section = self._extract_loudest_section(audio, 60)

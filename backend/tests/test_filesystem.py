@@ -3,7 +3,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
-from models import Track, TrackEmbedding
+from models import Track, TrackAnalysis, TrackEmbedding
 
 def test_stream_track(client: TestClient, session: Session, tmp_path):
     # ダミーの音声ファイルを作成
@@ -106,7 +106,7 @@ def test_list_directory_only_marks_completed_analysis_as_analyzed(
     completed_file = tmp_path / "completed.mp3"
     incomplete_file = tmp_path / "incomplete.mp3"
     failed_file = tmp_path / "failed.mp3"
-    for path in (completed_file, incomplete_file, failed_file):
+    for path in (completed_file, incomplete_file, failed_file, tmp_path / "pending.mp3"):
         path.touch()
 
     completed = Track(
@@ -116,7 +116,7 @@ def test_list_directory_only_marks_completed_analysis_as_analyzed(
         album="Album",
         genre="Genre",
         bpm=120,
-        duration=60,
+        duration=60, energy=.7, danceability=.6, brightness=.4, noisiness=.2,
     )
     # Fast imports can leave a valid Track row before audio analysis completes.
     incomplete = Track(
@@ -128,7 +128,7 @@ def test_list_directory_only_marks_completed_analysis_as_analyzed(
         bpm=None,
         duration=60,
     )
-    # A partial result without an embedding must also remain retryable.
+    # A default-only timbre result remains retryable; embeddings are optional.
     failed = Track(
         filepath=str(failed_file),
         title="Failed",
@@ -138,7 +138,11 @@ def test_list_directory_only_marks_completed_analysis_as_analyzed(
         bpm=120,
         duration=60,
     )
-    session.add_all([completed, incomplete, failed])
+    pending_embedding = Track(
+        filepath=str(tmp_path / "pending.mp3"), title="Pending", artist="Artist", album="Album",
+        genre="Genre", bpm=120, duration=60, energy=.7, danceability=.6, brightness=.4, noisiness=.2,
+    )
+    session.add_all([completed, incomplete, failed, pending_embedding])
     session.flush()
     session.add(
         TrackEmbedding(
@@ -147,6 +151,10 @@ def test_list_directory_only_marks_completed_analysis_as_analyzed(
             model_name="test",
         )
     )
+    for track in (completed, pending_embedding, failed):
+        analysis = TrackAnalysis(track_id=track.id)
+        analysis.waveform_peaks = [0.2, 0.7]
+        session.add(analysis)
     session.commit()
 
     response = client.post(
@@ -156,6 +164,10 @@ def test_list_directory_only_marks_completed_analysis_as_analyzed(
     assert response.status_code == 200
     items = {item["name"]: item for item in response.json() if not item["is_dir"]}
     assert items["completed.mp3"]["is_analyzed"] is True
+    assert items["completed.mp3"]["embedding_ready"] is True
+    # Playback-ready without an embedding yet: analyzed, similarity pending.
+    assert items["pending.mp3"]["is_analyzed"] is True
+    assert items["pending.mp3"]["embedding_ready"] is False
     assert items["incomplete.mp3"]["is_analyzed"] is False
     assert items["failed.mp3"]["is_analyzed"] is False
 

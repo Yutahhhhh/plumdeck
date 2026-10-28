@@ -837,7 +837,7 @@ def create_backup(session: Session, destination: str, include_media: bool,
     missing: list[str] = []
     try:
         session.commit()
-        with WORKFLOW_LOCK, db_connection.database_activity, db_connection.db_lock, db_connection.exclusive_database():
+        with WORKFLOW_LOCK, db_connection.background_analysis_paused(), db_connection.database_activity, db_connection.db_lock, db_connection.exclusive_database():
             session.exec(text("CHECKPOINT"))
             db_snapshot = stage / "plumdeck.duckdb"
             # DuckDB owns an exclusive file handle on Windows. Export through
@@ -1044,11 +1044,12 @@ def restore_backup(path: str, confirmed: bool) -> dict[str, Any]:
         if jobs.exists():
             import sqlite3
             with closing(sqlite3.connect(jobs)) as queue, queue:
-                queue.execute("UPDATE jobs SET status='paused' WHERE status IN ('running','pausing')")
+                queue.execute("UPDATE jobs SET status=CASE WHEN json_extract(config, '$.background') "
+                              "THEN 'queued' ELSE 'paused' END WHERE status IN ('running','pausing')")
                 queue.execute("UPDATE items SET status='pending' WHERE status='running'")
         queue_path = Path(str(db_path) + ".analysis-jobs.sqlite3")
         queue_rollback = Path(str(rollback) + ".analysis-jobs.sqlite3")
-        with WORKFLOW_LOCK, db_connection.database_activity, db_connection.db_lock, db_connection.exclusive_database():
+        with WORKFLOW_LOCK, db_connection.background_analysis_paused(), db_connection.database_activity, db_connection.db_lock, db_connection.exclusive_database():
             db_connection.checkpoint_db()
             db_connection.close_db()
             queue_existed = queue_path.exists()

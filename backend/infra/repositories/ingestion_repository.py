@@ -8,7 +8,7 @@ from domain.models.lyrics import Lyrics
 from utils.array_codec import pack_f32, pack_u8_waveform
 from domain.services import value_sources
 from utils.features_extra import persisted_features_extra
-from utils.ingestion import has_valid_embedding
+from utils.ingestion import has_full_analysis
 import infra.database.connection as db_connection
 
 class IngestionRepository:
@@ -27,12 +27,8 @@ class IngestionRepository:
             existing_analysis = session.get(TrackAnalysis, existing_track.id) if existing_track else None
             existing_fx = existing_analysis.features_extra if existing_analysis else {}
             preserve_full_analysis = bool(
-                existing_track
-                and result.get("analysis_level") == "light"
-                and existing_track.analysis_level != "light"
-                and isinstance(existing_track.bpm, (int, float))
-                and existing_track.bpm > 0
-                and has_valid_embedding(session.get(TrackEmbedding, existing_track.id))
+                result.get("analysis_level") == "light"
+                and has_full_analysis(existing_track, analysis=existing_analysis)
             )
             # Only analysis results resolve BPM/key; tag and lyrics updates keep them.
             if isinstance(extras, dict) and "analysis_components" in extras and not preserve_full_analysis:
@@ -139,6 +135,15 @@ class IngestionRepository:
                                  params={"id": track_id})
                     from infra.repositories.analysis_grid_refresh import refresh_saved_analysis_grid
                     refresh_saved_analysis_grid(session, track_id, extras.get("playback_grid"))
+
+            # A fresh foreground analysis belongs to a new analysis generation.
+            # Do not compare a replaced/reanalysed file with its previous vector.
+            # Metadata-only saves and protected full results keep their embedding.
+            if (existing_track and not preserve_full_analysis and "embedding" not in result
+                    and isinstance(extras, dict) and "analysis_components" in extras):
+                previous_embedding = session.get(TrackEmbedding, track_id)
+                if previous_embedding is not None:
+                    session.delete(previous_embedding)
 
             if "embedding" in result and result["embedding"] and not (existing_track and preserve_full_analysis):
                 emb = session.get(TrackEmbedding, track_id)

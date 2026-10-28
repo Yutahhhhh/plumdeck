@@ -78,9 +78,9 @@ def get_dashboard_stats(session: Session = Depends(get_session)):
     """
     
     # 1. Basic Counts
-    # 解析済み = bpm > 0
+    from utils.ingestion import completed_analysis_condition
     total_tracks = session.exec(select(func.count()).select_from(Track)).one()
-    analyzed_tracks = session.exec(select(func.count()).select_from(Track).where(Track.bpm > 0)).one()
+    analyzed_tracks = session.exec(select(func.count()).select_from(Track).where(completed_analysis_condition())).one()
     unanalyzed_tracks = total_tracks - analyzed_tracks
     
     # 2. Genre Distribution (All)

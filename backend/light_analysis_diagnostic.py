@@ -23,9 +23,9 @@ def analyze_file(path):
     assert result["key"] == "C major", result["key"]
     assert result["analysis_level"] == "light"
     import numpy as np
-    embedding = np.asarray(result["embedding"])
-    assert embedding.shape == (200,) and np.isfinite(embedding).all() and np.linalg.norm(embedding) > 0
-    assert result["features_extra"]["embedding_patch_count"] == 3
+    assert "embedding" not in result
+    from utils.ingestion import has_completed_analysis_result
+    assert has_completed_analysis_result(result)
     ticks = np.asarray(result["features_extra"]["beat_positions"])
     assert ticks[0] < .3 and ticks[-1] > 299
     assert np.max(np.abs(np.diff(ticks) - 60 / 126)) < .015
@@ -39,7 +39,7 @@ def analyze_file(path):
     if sys.platform != "win32":
         import resource
         memory["peak_rss_mb"] = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 * 1024 if sys.platform == "darwin" else 1024), 1)
-    return {"bpm": result["bpm"], "key": result["key"], "beats": len(ticks), "embedding_dimensions": len(embedding), **memory,
+    return {"bpm": result["bpm"], "key": result["key"], "beats": len(ticks), "embedding_pending": True, **memory,
             "worker_seconds": round(time.monotonic() - started, 3)}
 
 

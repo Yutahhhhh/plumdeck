@@ -128,3 +128,15 @@ def test_format_result_without_lyrics(mock_analyzer, mocker):
     result = mock_analyzer._format_result("/path/to/song.mp3", mock_tag, features)
 
     assert result["lyrics"] is None
+
+
+def test_foreground_analysis_does_not_load_optional_embedding_model(mock_analyzer, mocker):
+    tag = MagicMock(title="Song", artist="Artist", album="Album", genre="House", year="2020", duration=180.0, extra={})
+    mocker.patch.object(mock_analyzer, "_extract_metadata", return_value=tag)
+    mocker.patch.object(mock_analyzer, "_load_audio", return_value=np.ones(44100, dtype=np.float32))
+    mocker.patch.object(mock_analyzer, "_extract_timbre_features", return_value={
+        "energy": .7, "danceability": .6, "brightness": .4, "noisiness": .2})
+    load = mocker.patch.object(mock_analyzer, "_load_embedding_model", side_effect=AssertionError("foreground model load"))
+    result = mock_analyzer.analyze("/song.wav", skip_components=("rhythm", "key"))
+    assert result is not None and "embedding" not in result
+    load.assert_not_called()
