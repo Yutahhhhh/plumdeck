@@ -128,6 +128,18 @@ pub fn check_file_version(path: &Path) -> Result<Option<i64>, DbError> {
 /// the compatibility ALTERs, apply migrations above the stored version and
 /// record v5.
 pub fn init_schema(conn: &Connection) -> Result<(), DbError> {
+    tracing::info!(target: LOG_TARGET, "Initializing DuckDB schema...");
+    let result = init_schema_inner(conn);
+    if let Err(error) = &result {
+        tracing::error!(target: LOG_TARGET, "Failed to initialize database schema: {error}");
+    }
+    result
+}
+
+/// schema.py's logger name, so log lines read like the Python backend's.
+const LOG_TARGET: &str = "infra.database.schema";
+
+fn init_schema_inner(conn: &Connection) -> Result<(), DbError> {
     ensure_supported_version(read_schema_version(conn)?)?;
     conn.execute_batch("BEGIN TRANSACTION")?;
     let result = (|| {
@@ -142,6 +154,7 @@ pub fn init_schema(conn: &Connection) -> Result<(), DbError> {
             for (version, statements) in MIGRATIONS {
                 if *version > current {
                     for statement in *statements {
+                        tracing::info!(target: LOG_TARGET, "Applying migration v{version}: {statement}");
                         conn.execute_batch(statement)?;
                     }
                 }
