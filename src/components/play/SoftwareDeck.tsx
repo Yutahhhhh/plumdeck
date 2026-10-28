@@ -278,7 +278,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
           </>}
           <div className="dj-perf-caption">
             <span>{bar === null ? "BAR —" : `BAR ${bar} · ${beatInBar ?? "—"}/${beatsPerBar}`}</span>
-            <span>{gridEditor ? "GRID編集中 · 再生操作は利用可" : UNBACKED_PAD_MODES[padMode] ? "この音声エンジン未対応" : padMode === "hotcue" ? (hotCueReason ?? "SHIFT: CLEAR") : padMode === "padfx" ? (fxReason ?? "HOLD: ACTIVE") : padMode === "memorycue" ? (memoryReason ?? `MEMORY ${memoryPoints.length}`) : (padMode === "beatloop" ? loopReason : jumpReason) ?? "READY"}</span>
+            <span>{gridEditor ? "GRID編集中 · 再生操作は利用可" : UNBACKED_PAD_MODES[padMode] ? "この音声エンジン未対応" : padMode === "hotcue" ? (hotCueReason ?? "SHIFT: CLEAR") : padMode === "padfx" || padMode === "padfx2" ? (fxReason ?? "押している間だけ有効") : padMode === "memorycue" ? (memoryReason ?? `MEMORY ${memoryPoints.length}`) : (padMode === "beatloop" ? loopReason : jumpReason) ?? "READY"}</span>
           </div>
         </div>
       </div>

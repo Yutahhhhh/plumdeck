@@ -397,7 +397,7 @@ export function PlayWorkspace() {
         if (saved.cue_points.some(cue => cue.position_ms >= duration)) { failures.push(id); continue; }
         const positions = cuePositions(saved, duration);
         try {
-          for (let slot = 0; slot < 8; slot++) {
+          for (let slot = 0; slot < 16; slot++) {
             if (!stillLoaded(id)) break;
             const position = positions[slot];
             await (position == null ? client.clearHotCue(id, slot) : client.setHotCue(id, slot, position, false));
@@ -890,8 +890,7 @@ export function PlayWorkspace() {
             <span>ジョグ画面が NO AUDIO DRIVER の場合は、メーカーのドライバー認識状態と、下の音声設定を確認してください。</span>
             <details><summary>汎用MIDIモードの設定手順</summary><p>USBを抜き、本体を電源OFF。左デッキのSHIFT＋PLAY/PAUSEを押しながら電源ON。左のSLIP REVERSEを点灯させ、電源OFFで保存。再度電源を入れてUSBを接続します。rekordboxへ戻す際は同じ手順でSLIP REVERSEを消灯してください。</p></details>
             {midi.status.error && <span role="alert">{midi.status.error}</span>}
-            <span>PLAY / CUE・ジョグ・テンポ・EQ・フェーダー・HOT CUE・LOOP・PAD FXに対応</span>
-            <span>サンプラー・キーシフト・SLIP / REVERSEは未対応</span>
+            <span>PLAY / CUE・ジョグ・テンポ・EQ・フェーダー・HOT CUE・LOOP・PAD FX・BEAT FX・COLOR FX・サンプラー・キーシフト・SLIP / REVERSE に対応</span>
             <button className="dj-button" onClick={() => setAudioSettingsOpen(true)}>DDJ-1000の音声出力を設定</button>
           </div>
         </details>
@@ -946,6 +945,7 @@ export function PlayWorkspace() {
               capability !== "mixer.pfl" && tailLock(deck) ? tailLock(deck)
               : !connected ? "未接続"
                 : !snapshot?.engine.decks.includes(deck) ? `Deck ${deck} 未実装`
+                  : capability === "mixer.pfl" && !capabilities.includes(capability) ? "ヘッドホン CUE には 4ch 以上の出力と、オーディオ設定のヘッドホン CUE チャンネルが必要です"
                   : !(capabilities.includes(capability) || capabilities.includes("mixer.basic")) ? `${feature} 未実装`
                     : !controller ? `${feature} コントローラー未接続` : undefined} />}
           {softwareDeck(right)}

@@ -2,6 +2,7 @@ import { deckRealtimeStore } from "@/services/dj-engine/deck-realtime-store";
 import { createWaveformRenderLoop } from "./waveform-render-loop";
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { cn } from "@/lib/utils";
+import { formatBpm } from "./tempo-math";
 
 /** rekordbox のテンポレンジ。実機は ±6 / ±10 / ±16 / WIDE を順に切り換える。 */
 export const TEMPO_RANGES = [6, 10, 16, 75] as const;
@@ -125,7 +126,7 @@ export function TempoPlatter(props: Props) {
         }}>
         {displayBpm === null
           ? <strong>—</strong>
-          : <><strong>{Math.floor(displayBpm)}</strong><small>.{String(Math.round((displayBpm % 1) * 100)).padStart(2, "0")}</small></>}
+          : <><strong>{formatBpm(displayBpm)?.whole}</strong><small>.{formatBpm(displayBpm)?.fraction}</small></>}
       </div>
 
       <div className="dj-platter-tempo">
