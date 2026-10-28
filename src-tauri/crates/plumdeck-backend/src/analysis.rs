@@ -1073,11 +1073,63 @@ impl Jobs {
         }
     }
 
-    /// `enqueue_embedding`: an automatic embedding job for ready tracks.
-    /// Embeddings are not computed by the Rust analyzer yet (W1-28), so
-    /// nothing is queued and the backlog waits for it.
-    pub fn enqueue_embedding(&self, _track_ids: &[i64]) -> Value {
-        json!({"status": "idle"})
+    /// `enqueue_embedding`: an automatic (background) embedding job for the
+    /// given analyzed tracks whose vector is missing or outdated; tracks
+    /// already pending in such a job are not added twice.
+    pub fn enqueue_embedding(self: &Arc<Self>, track_ids: Option<&[i64]>, filepaths: Option<&[String]>) -> Result<Value, String> {
+        if track_ids.is_none_or(<[i64]>::is_empty) && filepaths.is_none_or(<[String]>::is_empty) {
+            return Ok(json!({"status": "idle"}));
+        }
+        let conn = self.db.lease().map_err(|e| e.to_string())?;
+        let mut sql = format!(
+            "SELECT tracks.id, tracks.filepath, track_embeddings.model_name, track_embeddings.embedding_json FROM tracks \
+             LEFT JOIN track_analyses ON tracks.id = track_analyses.track_id LEFT JOIN track_embeddings ON tracks.id = track_embeddings.track_id WHERE {COMPLETED_SQL}"
+        );
+        let mut params: Vec<Db> = Vec::new();
+        if let Some(ids) = track_ids {
+            sql.push_str(&format!(" AND tracks.id IN ({})", if ids.is_empty() { "NULL".into() } else { ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",") }));
+        }
+        if let Some(paths) = filepaths {
+            sql.push_str(&format!(" AND tracks.filepath IN ({})", if paths.is_empty() { "NULL".into() } else { vec!["?"; paths.len()].join(",") }));
+            params.extend(paths.iter().map(|p| Db::Text(p.clone())));
+        }
+        type Row = (i64, String, Option<String>, Option<String>);
+        let rows: Vec<Row> = conn
+            .prepare(&sql)
+            .and_then(|mut s| s.query_map(params_from_iter(params), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect())
+            .map_err(|e| e.to_string())?;
+        drop(conn);
+        let outstanding: BTreeSet<(i64, Option<String>)> = self.queue.outstanding_embeddings().map_err(|e| e.to_string())?.into_iter().collect();
+        let items: Vec<QueueItem> = rows
+            .into_iter()
+            .filter(|(_, _, model, vector)| !embedding_valid(model.as_deref(), vector.as_deref()))
+            .filter(|(id, path, _, _)| !outstanding.contains(&(*id, Some(path.clone()))))
+            .map(|(id, path, _, _)| QueueItem { track_id: id, filepath: Some(path) })
+            .collect();
+        if items.is_empty() {
+            return Ok(json!({"status": "idle"}));
+        }
+        let config = json!({"features": ["embedding"], "only_outdated": true, "workers": 1, "background": true});
+        let job_id = self.queue.create_with_status(&config, &items, "queued").map_err(|e| e.to_string())?;
+        self.launch_next();
+        self.queue.get(Some(&job_id)).map_err(|e| e.to_string())
+    }
+
+    /// `enqueue_missing_embeddings`: the startup backfill of analyzed tracks
+    /// without a vector of the current model. Never fails.
+    pub fn enqueue_missing_embeddings(self: &Arc<Self>) -> Value {
+        let ids: Result<Vec<i64>, String> = self.db.lease().map_err(|e| e.to_string()).and_then(|conn| {
+            conn.prepare(&plumdeck_db::repos::analyzed::pending_embedding_ids_sql())
+                .and_then(|mut s| s.query_map([], |r| r.get(0))?.collect())
+                .map_err(|e| e.to_string())
+        });
+        match ids.and_then(|ids| if ids.is_empty() { Ok(json!({"status": "idle"})) } else { self.enqueue_embedding(Some(&ids), None) }) {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!("WARNING: Embedding backfill was not queued: {error}");
+                json!({"status": "idle"})
+            }
+        }
     }
 }
 

@@ -162,6 +162,13 @@ fn show(row: &Row) -> String {
 
 /// Compare every table, column list, row and sequence of `a` and `b`.
 pub fn diff(a: &Path, b: &Path, max_rows: usize) -> Result<DbDiff> {
+    diff_ignoring(a, b, max_rows, &[])
+}
+
+/// [`diff`] without the row values of `ignored` (`(table, column)`; a
+/// primary-key column is still compared unless it is ignored itself, which
+/// compares the table's other columns as a multiset).
+pub fn diff_ignoring(a: &Path, b: &Path, max_rows: usize, ignored: &[(String, String)]) -> Result<DbDiff> {
     let conn = Connection::open_in_memory()?;
     for (alias, path) in [("a", a), ("b", b)] {
         let path = path.to_str().context("database path is not UTF-8")?;
@@ -193,6 +200,14 @@ pub fn diff(a: &Path, b: &Path, max_rows: usize) -> Result<DbDiff> {
         }
         let mut pk = primary_key(&conn, "a", table)?;
         if pk.is_empty() || pk.iter().any(|k| !common.contains(k)) {
+            pk = common.clone();
+        }
+        let is_ignored = |c: &String| ignored.iter().any(|(t, col)| t == table && col == c);
+        // A generated primary key (uuid4 ids) cannot pair rows: compare the
+        // remaining columns as a multiset instead.
+        let generated_key = pk.iter().any(is_ignored);
+        let common: Vec<String> = common.into_iter().filter(|c| (!generated_key && pk.contains(c)) || !is_ignored(c)).collect();
+        if generated_key {
             pk = common.clone();
         }
         let key_index: Vec<usize> = pk.iter().map(|k| common.iter().position(|c| c == k).unwrap()).collect();

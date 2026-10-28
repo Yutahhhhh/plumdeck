@@ -1,0 +1,303 @@
+# S10: library workflows (backend/api/routers/workflows.py over
+# app/services/workflow_service.py) on the sets fixture plus recordings and
+# a stored repair plan: summary, media diagnosis / repair plans, version
+# groups and setlist version swaps, audio presets, controller profiles,
+# USB handoffs (XML on disk, no device), recording timelines and tracklist
+# text, external recordings, and backup / restore validation. Generated ids
+# (uuid4) and SQL now() stamps of A (not frozen by the oracle) compare by
+# kind only (D-50); the rest compares exactly.
+name: s10-workflows
+db: fixture
+fixture: sets
+freeze_now: "2026-05-01 12:34:56.789012"
+fixture_sql: |
+  INSERT INTO recordings (recording_key, filepath, started_at, ended_at, duration_ms, status, title, artist, source, revision)
+  VALUES ('rec-a', '{media}/plain.wav', '2026-04-10 20:00:00', '2026-04-10 21:00:00', 3600000, 'completed', 'Set A', 'DJ A', 'internal', 1),
+         ('rec-b', '{media}/missing-rec.wav', '2026-04-11 20:00:00', NULL, 0, 'recording', NULL, NULL, 'internal', 1);
+  INSERT INTO recording_segments (recording_id, event_key, track_id, deck, start_ms, end_ms, title_snapshot, artist_snapshot, version_snapshot, source, confidence, position)
+  VALUES (1, 'engine:1:old', 1, 'A', 0, 60000, 'Alpha Song', 'DJ Alpha', NULL, 'engine_observed', 'estimated', 0),
+         (1, 'manual:1:x', 3, NULL, 3725000, NULL, 'Flac Title', 'Flac Artist', 'Extended', 'manual', 'confirmed', 1);
+  INSERT INTO media_repair_operations (id, state, plan_json, result_json, created_at, updated_at)
+  VALUES ('repair-fixed', 'planned', '{"id": "repair-fixed", "state": "planned", "items": [{"track_id": 10, "old_path": "{media}/missing.mp3", "old_revision": 1, "access_state": "missing", "candidate_path": null, "candidate_state": "none", "reason": "x"}], "summary": {"available": 0, "missing": 1}}', '{}', '2026-04-20 00:00:00', '2026-04-20 00:00:00');
+  INSERT INTO audio_presets (id, name, config_json, created_at, updated_at)
+  VALUES ('audio-fixed', 'Club', '{"sample_rate": 44100, "buffer_size": 256, "master": {"channels": [0, 1]}}', '2026-04-20 00:00:00', '2026-04-20 00:00:00');
+db_deviations:
+  - id: D-50
+    columns:
+      - track_media.last_verified_at
+      - media_repair_operations.id
+      - media_repair_operations.plan_json
+      - media_repair_operations.created_at
+      - media_repair_operations.updated_at
+      - operation_journal.id
+      - operation_journal.detail_json
+      - operation_journal.created_at
+      - operation_journal.updated_at
+      - track_version_groups.created_at
+      - track_version_groups.updated_at
+      - audio_presets.id
+      - audio_presets.created_at
+      - audio_presets.updated_at
+      - controller_profiles.id
+      - controller_profiles.definition_json
+      - controller_profiles.created_at
+      - controller_profiles.updated_at
+      - usb_exports.id
+      - usb_exports.handoff_path
+      - usb_exports.created_at
+      - usb_exports.updated_at
+      - usb_exports.verification_json
+      - recording_segments.event_key
+      - recordings.recording_key
+      - recordings.started_at
+      - recordings.ended_at
+compare_overrides:
+  tolerances:
+    - {path: "$..created_at", mode: generated}
+    - {path: "$..updated_at", mode: generated}
+    - {path: "$..last_verified_at", mode: generated}
+    - {path: "$.id", mode: generated}
+    - {path: "$.recording_key", mode: generated}
+    - {path: "$.handoff_path", mode: generated}
+    - {path: "$.xml_path", mode: generated}
+    - {path: "$[*].event_key", mode: generated}
+steps:
+  - name: summary
+    expect_status: 200
+    http: {method: GET, path: /api/workflows/summary}
+
+  # media repair
+  - name: diagnose a subset
+    expect_status: 200
+    http: {method: POST, path: /api/workflows/media/diagnose, body: {track_ids: [1, 10]}}
+  - name: diagnose with roots
+    expect_status: 200
+    http: {method: POST, path: /api/workflows/media/diagnose, body: {track_ids: [10], old_root: "{media}", new_root: "/nonexistent-root"}}
+  - name: diagnose needs an object
+    expect_status: 422
+    http: {method: POST, path: /api/workflows/media/diagnose, body: [1]}
+  - name: diagnose with bad ids
+    expect_status: 422
+    http: {method: POST, path: /api/workflows/media/diagnose, body: {track_ids: [x]}}
+  - name: apply a missing plan
+    http: {method: POST, path: /api/workflows/media/repairs/repair-none/apply, body: {selections: {}}}
+  - name: apply needs selections
+    expect_status: 422
+    http: {method: POST, path: /api/workflows/media/repairs/repair-fixed/apply, body: {}}
+  - name: apply an empty selection
+    http: {method: POST, path: /api/workflows/media/repairs/repair-fixed/apply, body: {selections: {}}}
+  - name: undo a missing plan
+    http: {method: POST, path: /api/workflows/media/repairs/repair-none/undo}
+  - name: undo an applied plan
+    http: {method: POST, path: /api/workflows/media/repairs/repair-fixed/undo}
+
+  # versions
+  - name: a version group needs two tracks
+    http: {method: POST, path: /api/workflows/version-groups, body: {track_ids: [1, 1]}}
+  - name: a version group of a missing track
+    http: {method: POST, path: /api/workflows/version-groups, body: {track_ids: [1, 999]}}
+  - name: create a version group
+    expect_status: 200
+    http: {method: POST, path: /api/workflows/version-groups, body: {track_ids: [3, 1], name: Alpha versions, labels: {"1": {version_label: Extended, content_label: Clean, note: n}}}}
+  - name: an occupied track
+    http: {method: POST, path: /api/workflows/version-groups, body: {track_ids: [1, 2]}}
+  - name: version name too long
+    expect_status: 422
+    http: {method: POST, path: /api/workflows/version-groups, body: {track_ids: [4, 5], name: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}}
+  - name: versions of a member
+    expect_status: 200
+    http: {method: GET, path: /api/workflows/tracks/1/versions}
+  - name: versions of a loose track
+    expect_status: 200
+    http: {method: GET, path: /api/workflows/tracks/2/versions}
+  - name: versions of a bad id
+    expect_status: 422
+    http: {method: GET, path: /api/workflows/tracks/x/versions}
+  - name: update with a stale revision
+    http: {method: PATCH, path: /api/workflows/version-groups/1, body: {revision: 5}}
+  - name: update a missing group
+    http: {method: PATCH, path: /api/workflows/version-groups/9, body: {revision: 1}}
+  - name: preferred outside the group
+    http: {method: PATCH, path: /api/workflows/version-groups/1, body: {revision: 1, preferred_track_id: 2}}
+  - name: update the group
+    expect_status: 200
+    http: {method: PATCH, path: /api/workflows/version-groups/1, body: {revision: 1, name: Renamed, preferred_track_id: 1, members: [{track_id: 3, version_label: Radio}]}}
+  - name: update needs a revision
+    expect_status: 422
+    http: {method: PATCH, path: /api/workflows/version-groups/1, body: {name: x}}
+  - name: swap a setlist entry
+    expect_status: 200
+    http: {method: PATCH, path: /api/workflows/setlist-entries/1/version, body: {new_track_id: 3, revision: 1}}
+  - name: swap with a stale revision
+    http: {method: PATCH, path: /api/workflows/setlist-entries/1/version, body: {new_track_id: 1, revision: 1}}
+  - name: swap outside the group
+    http: {method: PATCH, path: /api/workflows/setlist-entries/2/version, body: {new_track_id: 2, revision: 2}}
+  - name: swap a missing entry
+    http: {method: PATCH, path: /api/workflows/setlist-entries/999/version, body: {new_track_id: 2, revision: 1}}
+  - name: entries after the swap
+    expect_status: 200
+    http: {method: GET, path: /api/setlists/1/tracks}
+
+  # presets
+  - name: audio presets
+    expect_status: 200
+    http: {method: GET, path: /api/workflows/audio-presets}
+  - name: save a new audio preset
+    expect_status: 200
+    http: {method: PUT, path: /api/workflows/audio-presets, body: {name: Home, config: {master: {channels: [2, 3]}, cue: {channels: [0, 1]}}}}
+  - name: update the stored preset
+    expect_status: 200
+    http: {method: PUT, path: /api/workflows/audio-presets, body: {id: audio-fixed, revision: 1, name: "", config: {sample_rate: 44100, master: {channels: [4, 5]}}}}
+  - name: update with a stale revision
+    http: {method: PUT, path: /api/workflows/audio-presets, body: {id: audio-fixed, revision: 1, name: x, config: {}}}
+  - name: an unsupported sample rate
+    http: {method: PUT, path: /api/workflows/audio-presets, body: {name: x, config: {sample_rate: 48000}}}
+  - name: overlapping channels
+    http: {method: PUT, path: /api/workflows/audio-presets, body: {name: x, config: {master: {channels: [0, 1]}, cue: {channels: [1, 2]}}}}
+  - name: a bad channel pair
+    http: {method: PUT, path: /api/workflows/audio-presets, body: {name: x, config: {master: {channels: [0, 0]}}}}
+  - name: a preset needs a name
+    expect_status: 422
+    http: {method: PUT, path: /api/workflows/audio-presets, body: {config: {}}}
+  - name: delete the stored preset
+    http: {method: DELETE, path: /api/workflows/audio-presets/audio-fixed}
+  - name: delete a missing preset
+    http: {method: DELETE, path: /api/workflows/audio-presets/audio-fixed}
+  - name: controller profiles
+    expect_status: 200
+    http: {method: GET, path: /api/workflows/controller-profiles}
+  - name: save a controller profile
+    http:
+      method: PUT
+      path: /api/workflows/controller-profiles
+      body:
+        id: controller-fixed
+        schemaVersion: 1
+        name: My MIDI
+        adapterId: generic-midi
+        bindings:
+          - {id: p, input: {kind: note, channel: 0, number: 11}, actionId: deck.play, deck: A}
+          - {id: t, input: {kind: cc14, channel: 1, number: 31}, actionId: deck.tempo, deck: B}
+  - name: profiles after the save
+    expect_status: 200
+    http: {method: GET, path: /api/workflows/controller-profiles}
+  - name: update with a stale revision
+    http: {method: PUT, path: /api/workflows/controller-profiles, body: {id: controller-fixed, revision: 7, schemaVersion: 1, adapterId: ddj400, bindings: []}}
+  - name: update the profile
+    http: {method: PUT, path: /api/workflows/controller-profiles, body: {id: controller-fixed, revision: 1, schemaVersion: 1, adapterId: ddj400, bindings: []}}
+  - name: an unsupported adapter
+    http: {method: PUT, path: /api/workflows/controller-profiles, body: {schemaVersion: 1, adapterId: other, bindings: []}}
+  - name: bindings must be a list
+    http: {method: PUT, path: /api/workflows/controller-profiles, body: {schemaVersion: 1, adapterId: ddj400, bindings: {}}}
+  - name: an unknown action
+    http: {method: PUT, path: /api/workflows/controller-profiles, body: {schemaVersion: 1, adapterId: ddj400, bindings: [{id: a, actionId: deck.explode}]}}
+  - name: a bad MIDI kind
+    http: {method: PUT, path: /api/workflows/controller-profiles, body: {schemaVersion: 1, adapterId: ddj400, bindings: [{id: a, actionId: deck.play, input: {kind: sysex, channel: 0}}]}}
+  - name: a MIDI number out of range
+    http: {method: PUT, path: /api/workflows/controller-profiles, body: {schemaVersion: 1, adapterId: ddj400, bindings: [{id: a, actionId: deck.play, input: {kind: cc14, channel: 0, number: 40}}]}}
+  - name: a duplicate input
+    http: {method: PUT, path: /api/workflows/controller-profiles, body: {schemaVersion: 1, adapterId: ddj400, bindings: [{id: a, actionId: deck.play, input: {kind: note, channel: 0, number: 1}}, {id: b, actionId: deck.cue, input: {kind: note, channel: 0, number: 1}}]}}
+  - name: a bad deck
+    http: {method: PUT, path: /api/workflows/controller-profiles, body: {schemaVersion: 1, adapterId: ddj400, bindings: [{id: a, actionId: deck.play, deck: E, input: {kind: note, channel: 0, number: 1}}]}}
+  - name: a profile needs an object
+    expect_status: 422
+    http: {method: PUT, path: /api/workflows/controller-profiles, body: [1]}
+
+  # USB handoff
+  - name: no handoffs yet
+    expect_status: 200
+    http: {method: GET, path: /api/workflows/usb/handoffs}
+  - name: handoff of a setlist with a missing file
+    http: {method: POST, path: /api/workflows/usb/handoffs, body: {setlist_id: 1}}
+  - name: handoff of a missing setlist
+    http: {method: POST, path: /api/workflows/usb/handoffs, body: {setlist_id: 99}}
+  - name: handoff to a device that is not connected
+    http: {method: POST, path: /api/workflows/usb/handoffs, body: {setlist_id: 2, usb_device_id: usb-x}}
+  - name: handoff needs a setlist
+    expect_status: 422
+    http: {method: POST, path: /api/workflows/usb/handoffs, body: {}}
+  - name: duplicate a missing handoff
+    http: {method: POST, path: /api/workflows/usb/handoffs/usb-none/duplicate, body: {}}
+  - name: verify a missing handoff
+    http: {method: POST, path: /api/workflows/usb/handoffs/usb-none/verify, body: {level: user_rekordbox_check}}
+  - name: verify with a bad level
+    expect_status: 422
+    http: {method: POST, path: /api/workflows/usb/handoffs/usb-none/verify, body: {level: guess}}
+  - name: eject a device that is not there
+    http: {method: POST, path: /api/workflows/usb/devices/usb-none/eject}
+
+  # recordings
+  - name: timeline
+    expect_status: 200
+    http: {method: GET, path: /api/workflows/recordings/1/timeline}
+  - name: timeline of a missing recording
+    expect_status: 200
+    http: {method: GET, path: /api/workflows/recordings/99/timeline}
+  - name: tracklist text
+    expect_status: 200
+    http: {method: GET, path: /api/workflows/recordings/1/tracklist.txt}
+  - name: replace with a stale revision
+    http: {method: PUT, path: /api/workflows/recordings/1/timeline, body: {revision: 4, segments: []}}
+  - name: replace on a missing recording
+    http: {method: PUT, path: /api/workflows/recordings/99/timeline, body: {revision: 1, segments: []}}
+  - name: a segment outside the recording
+    http: {method: PUT, path: /api/workflows/recordings/1/timeline, body: {revision: 1, segments: [{start_ms: 4000000}]}}
+  - name: an end before the start
+    http: {method: PUT, path: /api/workflows/recordings/1/timeline, body: {revision: 1, segments: [{start_ms: 500, end_ms: 400}]}}
+  - name: replace the manual segments
+    expect_status: 200
+    http: {method: PUT, path: /api/workflows/recordings/1/timeline, body: {revision: 1, segments: [{start_ms: 1000, end_ms: 90000, track_id: 2, event_key: manual-k1}, {start_ms: 120000, title_snapshot: Custom, artist_snapshot: Someone, version_snapshot: Dub, event_key: manual-k2}, {start_ms: 7000, track_id: 999, event_key: manual-k3}]}}
+  - name: tracklist after the edit
+    expect_status: 200
+    http: {method: GET, path: /api/workflows/recordings/1/tracklist.txt}
+  - name: engine timeline
+    expect_status: 200
+    http:
+      method: POST
+      path: /api/workflows/recordings/2/timeline/engine
+      body:
+        sample_rate_hz: 48000
+        frame_count: 4800000
+        segments:
+          - {eventKey: e1, startFrame: 0, endFrame: 480000, trackId: "4", deck: A, loadGeneration: 1, title: T, artist: A}
+          - {eventKey: e2, startFrame: 480000, trackId: 5}
+          - {startFrame: -1}
+          - {eventKey: e3, startFrame: 100, endFrame: 50}
+          - {eventKey: e4, startFrame: 9000000}
+  - name: engine timeline again with drops
+    expect_status: 200
+    http: {method: POST, path: /api/workflows/recordings/2/timeline/engine, body: {sample_rate_hz: 44100, frame_count: 441000, dropped_events: 2, segments: [{eventKey: e1, startFrame: 0, endFrame: 1000000}]}}
+  - name: engine timeline of a missing recording
+    http: {method: POST, path: /api/workflows/recordings/99/timeline/engine, body: {sample_rate_hz: 48000, frame_count: 1, segments: []}}
+  - name: engine sample rate out of range
+    expect_status: 422
+    http: {method: POST, path: /api/workflows/recordings/2/timeline/engine, body: {sample_rate_hz: 100, frame_count: 1, segments: []}}
+  - name: tracklist of the engine timeline
+    expect_status: 200
+    http: {method: GET, path: /api/workflows/recordings/2/tracklist.txt}
+  - name: external recording of a missing file
+    http: {method: POST, path: /api/workflows/recordings/external, body: {filepath: "{media}/nope.wav", title: x}}
+  - name: external recording of a relative path
+    http: {method: POST, path: /api/workflows/recordings/external, body: {filepath: "plain.wav", title: x}}
+  - name: external recording of another format
+    http: {method: POST, path: /api/workflows/recordings/external, body: {filepath: "{media}/tagged.m4a", title: x}}
+  - name: external recording needs a title
+    expect_status: 422
+    http: {method: POST, path: /api/workflows/recordings/external, body: {filepath: "{media}/plain.wav", title: ""}}
+  - name: summary after the edits
+    expect_status: 200
+    http: {method: GET, path: /api/workflows/summary}
+
+  # backup / restore validation
+  - name: backup to a relative path
+    http: {method: POST, path: /api/workflows/backups, body: {destination: relative/x}}
+  - name: backup needs a destination
+    expect_status: 422
+    http: {method: POST, path: /api/workflows/backups, body: {}}
+  - name: inspect a missing archive
+    http: {method: POST, path: /api/workflows/restore/inspect, body: {path: "{media}/none.plumdeck-backup"}}
+  - name: inspect needs a path
+    expect_status: 422
+    http: {method: POST, path: /api/workflows/restore/inspect, body: {}}
+  - name: restore needs confirmation
+    http: {method: POST, path: /api/workflows/restore/apply, body: {path: "{media}/plain.wav"}}

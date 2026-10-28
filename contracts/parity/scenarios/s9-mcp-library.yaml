@@ -1,0 +1,41 @@
+# S9: MCP tools on the library fixture, whose embeddings all have the
+# musicnn dimension (the sets fixture holds a short vector that makes
+# Python's vector search fail): similar tracks, searches with paging and
+# the limit check, genre context by ids, and the lyrics tools' validation.
+name: s9-mcp-library
+db: fixture
+fixture: library
+freeze_now: "2026-05-01 12:34:56.789012"
+steps:
+  - name: similar tracks
+    mcp: {method: tools/call, params: {name: get_track_similar, arguments: {track_id: 2, limit: 4}}}
+  - name: similar tracks, default limit
+    mcp: {method: tools/call, params: {name: get_track_similar, arguments: {track_id: 1}}}
+  - name: similar tracks of a missing track
+    mcp: {method: tools/call, params: {name: get_track_similar, arguments: {track_id: 999}}}
+  - name: search page two
+    mcp: {method: tools/call, params: {name: search_tracks, arguments: {limit: 4, offset: 4}}}
+  - name: search with a limit out of range
+    mcp: {method: tools/call, params: {name: search_tracks, arguments: {limit: 0}}}
+  - name: search lyrics status
+    mcp: {method: tools/call, params: {name: search_tracks, arguments: {lyrics_status: with, status: unverified}}}
+  - name: genre context of the unknown tracks
+    mcp: {method: tools/call, params: {name: get_genre_analysis_context, arguments: {mode: genre, limit: 3}}}
+  - name: genre context by ids
+    mcp: {method: tools/call, params: {name: get_genre_analysis_context, arguments: {track_ids: [4, 2, 999]}}}
+  - name: apply analysis with an alias and a low confidence
+    mcp: {method: tools/call, params: {name: apply_genre_analysis, arguments: {track_id: 7, genre: hip hop, subgenre: contemporary rnb, confidence: " high ", mode: genre}}}
+  - name: apply analysis with an unknown confidence
+    mcp: {method: tools/call, params: {name: apply_genre_analysis, arguments: {track_id: 13, genre: "  ", confidence: sure, reason: because}}}
+  - name: apply analysis to a missing track
+    mcp: {method: tools/call, params: {name: apply_genre_analysis, arguments: {track_id: 999, genre: House}}}
+  - name: register a duplicate batch
+    mcp: {method: tools/call, params: {name: register_track_lyrics_batch, arguments: {items: [{track_id: 3, content: a}, {track_id: 3, content: b}]}}}
+  - name: register over blank lyrics
+    mcp: {method: tools/call, params: {name: register_track_lyrics, arguments: {track_id: 4, content: now set}}}
+  - name: register the same lyrics again
+    mcp: {method: tools/call, params: {name: register_track_lyrics, arguments: {track_id: 4, content: now set, overwrite: true}}}
+  - name: register a batch
+    mcp: {method: tools/call, params: {name: register_track_lyrics_batch, arguments: {items: [{track_id: 6, content: six, language: ja}, {track_id: 12, content: twelve, source: lrclib}, {track_id: 1, content: kept}]}}}
+  - name: lyrics after the batch
+    mcp: {method: tools/call, params: {name: get_track_lyrics, arguments: {track_id: 12}}}

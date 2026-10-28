@@ -10,6 +10,10 @@ publish = false
 name = "plumdeck-backend"
 path = "src/bin/plumdeck-backend.rs"
 
+[[bin]]
+name = "plumdeck-maintenance"
+path = "src/bin/plumdeck-maintenance.rs"
+
 [dependencies]
 anyhow.workspace = true
 axum = { workspace = true, features = ["ws", "multipart"] }

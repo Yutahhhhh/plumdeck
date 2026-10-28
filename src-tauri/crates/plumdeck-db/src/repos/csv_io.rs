@@ -52,18 +52,55 @@ pub fn track_at(conn: &Connection, path: &str) -> Result<Option<TrackRow>, DbErr
         .optional()?)
 }
 
-/// Write a track's editable columns.
-pub fn write_track(conn: &Connection, track: &TrackRow) -> Result<(), DbError> {
-    conn.execute(
-        "UPDATE tracks SET filepath=?, title=?, artist=?, album=?, genre=?, subgenre=?, year=?, bpm=?, key=?, energy=?, \
-         danceability=?, brightness=?, loudness=?, noisiness=?, contrast=?, is_genre_verified=? WHERE tracks.id = ?",
-        params![
-            track.filepath, track.title, track.artist, track.album, track.genre, track.subgenre, track.year,
-            track.bpm.map(|v| v as f32), track.key, track.energy.map(|v| v as f32), track.danceability.map(|v| v as f32),
-            track.brightness.map(|v| v as f32), track.loudness.map(|v| v as f32), track.noisiness.map(|v| v as f32),
-            track.contrast.map(|v| v as f32), track.is_genre_verified, track.id
-        ],
-    )?;
+/// Write the editable columns that differ from `before`, like the ORM's
+/// UPDATE of changed attributes only (rewriting an indexed column such as
+/// `filepath` moves the row in DuckDB's table order, which later unordered
+/// SELECTs and the CSV exports show).
+pub fn write_track(conn: &Connection, before: &TrackRow, track: &TrackRow) -> Result<(), DbError> {
+    let f32v = |v: Option<f64>| v.map_or(Value::Null, |v| Value::Float(v as f32));
+    let text = |v: &Option<String>| v.clone().map_or(Value::Null, Value::Text);
+    let mut sets: Vec<(&str, Value)> = Vec::new();
+    if before.filepath != track.filepath {
+        sets.push(("filepath", Value::Text(track.filepath.clone())));
+    }
+    for (name, old, new) in [
+        ("title", &before.title, &track.title),
+        ("artist", &before.artist, &track.artist),
+        ("album", &before.album, &track.album),
+        ("genre", &before.genre, &track.genre),
+        ("subgenre", &before.subgenre, &track.subgenre),
+        ("key", &before.key, &track.key),
+    ] {
+        if old != new {
+            sets.push((name, text(new)));
+        }
+    }
+    if before.year != track.year {
+        sets.push(("year", track.year.map_or(Value::Null, Value::BigInt)));
+    }
+    for (name, old, new) in [
+        ("bpm", before.bpm, track.bpm),
+        ("energy", before.energy, track.energy),
+        ("danceability", before.danceability, track.danceability),
+        ("brightness", before.brightness, track.brightness),
+        ("loudness", before.loudness, track.loudness),
+        ("noisiness", before.noisiness, track.noisiness),
+        ("contrast", before.contrast, track.contrast),
+    ] {
+        if old != new {
+            sets.push((name, f32v(new)));
+        }
+    }
+    if before.is_genre_verified != track.is_genre_verified {
+        sets.push(("is_genre_verified", track.is_genre_verified.map_or(Value::Null, Value::Boolean)));
+    }
+    if sets.is_empty() {
+        return Ok(());
+    }
+    let assignments: Vec<String> = sets.iter().map(|(name, _)| format!("{name}=?")).collect();
+    let mut values: Vec<Value> = sets.into_iter().map(|(_, value)| value).collect();
+    values.push(Value::BigInt(track.id));
+    conn.execute(&format!("UPDATE tracks SET {} WHERE tracks.id = ?", assignments.join(", ")), params_from_iter(values))?;
     Ok(())
 }
 
@@ -75,12 +112,13 @@ pub fn analysis_extra(conn: &Connection, track_id: i64) -> Result<Option<String>
         .map(|extra| extra.unwrap_or_else(|| "{}".into())))
 }
 
-/// Create or update a track's analysis row: `extra`, and the arrays when given.
+/// Create or update a track's analysis row: `extra`, and the arrays when given
+/// (peaks downsampled to 500 points like the `waveform_peaks` setter).
 pub fn write_analysis(conn: &Connection, track_id: i64, extra: &str, beats: Option<&[f64]>, peaks: Option<&[f64]>) -> Result<(), DbError> {
     let exists = analysis_extra(conn, track_id)?.is_some();
     let beats = beats.and_then(|values| pack_f32(Some(values)));
     let peaks = match peaks {
-        Some(values) => pack_u8_waveform(Some(values), values.len()).map_err(|error| DbError::Invalid(error.to_string()))?,
+        Some(values) => pack_u8_waveform(Some(values), crate::array_codec::WAVEFORM_POINTS).map_err(|error| DbError::Invalid(error.to_string()))?,
         None => None,
     };
     if exists {

@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 
+use axum::extract::multipart::MultipartRejection;
 use axum::extract::{Multipart, State};
 use axum::http::{header, HeaderValue};
 use axum::response::{IntoResponse, Response};
@@ -20,7 +21,7 @@ use plumdeck_db::repos::csv_io::{all_tracks, analysis_extra, export_rows, insert
 use plumdeck_db::repos::tracks::TrackRow;
 use plumdeck_db::DbError;
 
-use crate::body::read_body;
+use crate::body::{parse_body, BodyModel, Fields, ValidationError};
 use crate::models::track_dict;
 use crate::response::{dict, int, pydantic, text, PyJson};
 use crate::AppState;
@@ -56,8 +57,11 @@ fn b(value: Option<bool>) -> String {
     value.map(|v| if v { "True".into() } else { "False".into() }).unwrap_or_default()
 }
 
+/// A `csv.DictReader` row: a short row's missing cells are `None` (restval).
+type CsvRow = BTreeMap<String, Option<String>>;
+
 /// `csv.DictReader` rows (a leading BOM removed).
-fn read_rows(text: &str) -> Vec<BTreeMap<String, String>> {
+fn read_rows(text: &str) -> Vec<CsvRow> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut records: Vec<Vec<String>> = Vec::new();
     let mut record = Vec::new();
@@ -100,7 +104,7 @@ fn read_rows(text: &str) -> Vec<BTreeMap<String, String>> {
     }
     let mut iter = records.into_iter().filter(|r| !(r.len() == 1 && r[0].is_empty()));
     let Some(header) = iter.next() else { return Vec::new() };
-    iter.map(|values| header.iter().cloned().zip(values.into_iter().chain(std::iter::repeat(String::new()))).collect()).collect()
+    iter.map(|values| header.iter().cloned().zip(values.into_iter().map(Some).chain(std::iter::repeat(None))).collect()).collect()
 }
 
 fn decode(bytes: &[u8]) -> String {
@@ -257,33 +261,61 @@ fn apply_safely(track: &mut TrackRow, data: &[(PyValue, PyValue)]) -> bool {
     changed
 }
 
-/// `value_sources.with_sources(extra, {field: "manual"})`.
-fn with_manual(extra: &str, fields: &[&str]) -> String {
-    let mut value: serde_json::Value = serde_json::from_str(extra).ok().filter(serde_json::Value::is_object).unwrap_or_else(|| serde_json::json!({}));
-    let components = value.get("analysis_components").cloned().filter(serde_json::Value::is_object).unwrap_or_else(|| serde_json::json!({}));
-    let mut components = components.as_object().cloned().unwrap_or_default();
-    let mut sources = components.get("sources").and_then(|s| s.as_object().cloned()).unwrap_or_default();
-    sources.retain(|key, v| (key == "bpm" || key == "key") && v.is_string());
-    for field in fields {
-        sources.insert((*field).into(), serde_json::json!("manual"));
+fn dict_get<'a>(pairs: &'a [(PyValue, PyValue)], key: &str) -> Option<&'a PyValue> {
+    pairs.iter().find(|(k, _)| matches!(k, PyValue::Str(n) if n == key)).map(|(_, v)| v)
+}
+
+fn dict_set(pairs: &mut Vec<(PyValue, PyValue)>, key: &str, value: PyValue) {
+    match pairs.iter_mut().find(|(k, _)| matches!(k, PyValue::Str(n) if n == key)) {
+        Some(slot) => slot.1 = value,
+        None => pairs.push((PyValue::Str(key.into()), value)),
     }
-    components.insert("sources".into(), serde_json::Value::Object(sources));
-    value["analysis_components"] = serde_json::Value::Object(components);
-    if fields.contains(&"bpm") {
-        if let Some(object) = value.as_object_mut() {
-            object.remove("bpm_authority");
+}
+
+/// `json.dumps(value_sources.with_sources(analysis.features_extra, {field: "manual"}))`
+/// (`features_extra` is `{}` when the stored text is not a JSON object).
+fn with_manual(extra: &str, fields: &[&str]) -> String {
+    let mut updated = match loads(extra) {
+        Ok(PyValue::Dict(pairs)) => pairs,
+        _ => Vec::new(),
+    };
+    // stored_sources: recorded bpm/key string sources, then the legacy marker.
+    let mut merged: Vec<(PyValue, PyValue)> = Vec::new();
+    if let Some(PyValue::Dict(components)) = dict_get(&updated, "analysis_components") {
+        if let Some(PyValue::Dict(recorded)) = dict_get(components, "sources") {
+            for (key, source) in recorded {
+                if matches!(key, PyValue::Str(k) if k == "bpm" || k == "key") && matches!(source, PyValue::Str(_)) {
+                    merged.push((key.clone(), source.clone()));
+                }
+            }
         }
     }
-    serde_json::to_string(&value).unwrap_or_else(|_| "{}".into())
+    let authority = dict_get(&updated, "bpm_authority").is_some_and(plumdeck_core::compat::pyobj::truthy);
+    if authority && dict_get(&merged, "bpm").is_none() {
+        merged.push((PyValue::Str("bpm".into()), PyValue::Str("rekordbox".into())));
+    }
+    for field in fields {
+        dict_set(&mut merged, field, PyValue::Str("manual".into()));
+    }
+    let mut components = match dict_get(&updated, "analysis_components") {
+        Some(PyValue::Dict(components)) => components.clone(),
+        _ => Vec::new(),
+    };
+    dict_set(&mut components, "sources", PyValue::Dict(merged));
+    dict_set(&mut updated, "analysis_components", PyValue::Dict(components));
+    if fields.contains(&"bpm") {
+        updated.retain(|(k, _)| !matches!(k, PyValue::Str(n) if n == "bpm_authority"));
+    }
+    dumps(&PyValue::Dict(updated), &DumpOptions::default()).unwrap_or_else(|_| "{}".into())
 }
 
 /// `_apply_with_provenance`: apply, then record edited BPM/key as manual.
+/// The caller writes the track (one UPDATE of the changed columns).
 fn apply_with_provenance(conn: &plumdeck_db::duckdb::Connection, track: &mut TrackRow, data: &[(PyValue, PyValue)]) -> Result<bool, DbError> {
     let before = (track.bpm, track.key.clone());
     if !apply_safely(track, data) {
         return Ok(false);
     }
-    write_track(conn, track)?;
     let mut edited = Vec::new();
     if track.bpm != before.0 {
         edited.push("bpm");
@@ -318,13 +350,19 @@ fn missing_file() -> Response {
     )])
 }
 
-fn metadata_row(row: &BTreeMap<String, String>) -> PyValue {
-    let opt = |key: &str| row.get(key).filter(|v| !v.is_empty()).cloned().map_or(PyValue::None, PyValue::Str);
-    let year = row.get("year").filter(|y| !y.is_empty() && y.chars().all(|c| c.is_ascii_digit())).and_then(|y| y.parse::<i128>().ok());
-    let bpm = row.get("bpm").and_then(|v| py_float_from_str(v)).filter(|bpm| bpm.is_finite() && *bpm > 0.0);
-    let verified = row.get("is_genre_verified").filter(|v| !v.is_empty()).map(|v| ["true", "1", "yes", "on"].contains(&py_lower(v).as_str()));
+/// `row.get(key)`: `None` when the column is absent or the row is short.
+fn cell_of<'a>(row: &'a CsvRow, key: &str) -> Option<&'a str> {
+    row.get(key).and_then(|v| v.as_deref())
+}
+
+fn metadata_row(row: &CsvRow) -> PyValue {
+    let opt = |key: &str| cell_of(row, key).map_or(PyValue::None, |v| PyValue::Str(v.to_owned()));
+    let year = cell_of(row, "year").filter(|y| !y.is_empty() && y.chars().all(|c| c.is_ascii_digit())).and_then(|y| y.parse::<i128>().ok());
+    // _parse_bpm(None) is float("None"): no BPM.
+    let bpm = cell_of(row, "bpm").and_then(|v| py_float_from_str(py_strip(v))).filter(|bpm| bpm.is_finite() && *bpm > 0.0);
+    let verified = cell_of(row, "is_genre_verified").filter(|v| !v.is_empty()).map(|v| ["true", "1", "yes", "on"].contains(&py_lower(v).as_str()));
     dict([
-        ("filepath", text(row.get("filepath").cloned().unwrap_or_default())),
+        ("filepath", text(cell_of(row, "filepath").unwrap_or_default())),
         ("title", opt("title")),
         ("artist", opt("artist")),
         ("album", opt("album")),
@@ -345,7 +383,8 @@ fn pairs(value: &PyValue) -> &[(PyValue, PyValue)] {
 }
 
 /// `POST /api/settings/metadata/import/analyze`.
-pub async fn analyze_metadata(State(state): State<AppState>, multipart: Multipart) -> Response {
+pub async fn analyze_metadata(State(state): State<AppState>, multipart: Result<Multipart, MultipartRejection>) -> Response {
+    let Ok(multipart) = multipart else { return missing_file() };
     let Some(text_body) = uploaded_text(multipart).await else { return missing_file() };
     let db = state.db.clone();
     let tracks = match state.blocking(move || db.lease().and_then(|conn| all_tracks(&conn))).await {
@@ -355,7 +394,7 @@ pub async fn analyze_metadata(State(state): State<AppState>, multipart: Multipar
     let by_path: BTreeMap<String, &TrackRow> = tracks.iter().map(|t| (norm_path(&t.filepath), t)).collect();
     let (mut updates, mut not_found) = (Vec::new(), Vec::new());
     for row in read_rows(&text_body) {
-        let path = norm_path(row.get("filepath").map(String::as_str).unwrap_or(""));
+        let path = norm_path(cell_of(&row, "filepath").unwrap_or(""));
         if path.is_empty() {
             continue;
         }
@@ -374,24 +413,38 @@ pub async fn analyze_metadata(State(state): State<AppState>, multipart: Multipar
     pydantic(dict([("total_rows", int(total)), ("updates", PyValue::List(updates)), ("not_found", PyValue::List(not_found))])).into_response()
 }
 
+/// A `Dict[str, Any]` item rebuilt from its fields (the last of duplicate keys).
+fn whole(fields: &Fields<'_>) -> PyValue {
+    PyValue::Dict(fields.names().into_iter().map(|name| (PyValue::Str(name.into()), fields.value(name).cloned().unwrap_or(PyValue::None))).collect())
+}
+
+/// `MetadataImportExecuteRequest`: `updates: List[Dict[str, Any]]`.
+struct MetadataExecuteBody {
+    updates: Vec<PyValue>,
+}
+
+impl BodyModel for MetadataExecuteBody {
+    fn from_fields(fields: &Fields<'_>) -> Result<Self, Vec<ValidationError>> {
+        let updates = fields.model_list("updates", |item| Some(whole(item)));
+        fields.finish(|| updates.map(|updates| Self { updates }))
+    }
+}
+
 /// `POST /api/settings/metadata/import/execute`.
 pub async fn execute_metadata(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
-    let body = match read_body(&headers, &body) {
-        Ok(body) => body,
+    let updates = match parse_body::<MetadataExecuteBody>(&headers, &body) {
+        Ok(request) => request.updates,
         Err(response) => return response,
-    };
-    let updates = match &body {
-        Some(PyValue::Dict(fields)) => match fields.iter().rev().find(|(k, _)| matches!(k, PyValue::Str(n) if n == "updates")) {
-            Some((_, PyValue::List(items))) => items.clone(),
-            _ => return missing_file(),
-        },
-        _ => return missing_file(),
     };
     let db = state.db.clone();
     let result = state
         .blocking(move || {
             db.write(|conn| {
                 let mut count = 0i64;
+                // no_autoflush: lookups read the stored rows (a track already
+                // edited is the session's object); the UPDATEs run at commit,
+                // in primary-key order.
+                let mut pending: BTreeMap<i64, (TrackRow, TrackRow)> = BTreeMap::new();
                 for item in &updates {
                     let item = pairs(item);
                     let get = |key: &str| item.iter().find(|(k, _)| matches!(k, PyValue::Str(n) if n == key)).map(|(_, v)| v);
@@ -403,11 +456,19 @@ pub async fn execute_metadata(State(state): State<AppState>, headers: HeaderMap,
                         Some((_, PyValue::Str(path))) => norm_path(path),
                         _ => String::new(),
                     };
-                    if let Some(mut track) = track_at(conn, &path)? {
+                    if let Some(stored) = track_at(conn, &path)? {
+                        let (before, mut track) = match pending.get(&stored.id) {
+                            Some((before, track)) => (before.clone(), track.clone()),
+                            None => (stored.clone(), stored),
+                        };
                         if apply_with_provenance(conn, &mut track, pairs(data))? {
                             count += 1;
                         }
+                        pending.insert(track.id, (before, track));
                     }
+                }
+                for (before, track) in pending.values() {
+                    write_track(conn, before, track)?;
                 }
                 Ok(count)
             })
@@ -424,47 +485,59 @@ pub async fn execute_metadata(State(state): State<AppState>, headers: HeaderMap,
     }
 }
 
-/// A library CSV row as `CsvImportRow`.
-fn import_row(row: &BTreeMap<String, String>) -> PyValue {
-    let get = |key: &str| row.get(key).cloned().unwrap_or_default();
-    let number = |key: &str| {
-        let value = get(key);
-        if value.is_empty() { Some(0.0) } else { py_float_from_str(&value) }
+/// A library CSV row as `CsvImportRow`; `None` when Python's
+/// `except: continue` skips it (an unparsable number, a short row's
+/// missing filepath/title/artist, a JSON array cell that is not a list of
+/// numbers).
+fn import_row(row: &CsvRow) -> Option<PyValue> {
+    let required = |key: &str| row.get(key).map_or(Some(String::new()), |v| v.clone());
+    let optional = |key: &str| row.get(key).map_or(PyValue::Str(String::new()), |v| v.clone().map_or(PyValue::None, PyValue::Str));
+    // safe_f: float(v) if v else 0.0
+    let number = |key: &str| match cell_of(row, key) {
+        None | Some("") => Some(0.0),
+        Some(value) => py_float_from_str(value),
     };
-    let list = |key: &str| {
-        let value = get(key);
-        match loads(&value) {
-            Ok(PyValue::List(items)) if !value.is_empty() => PyValue::List(items.into_iter().filter_map(|v| match v {
-                PyValue::Int(n) => Some(PyValue::Float(n as f64)),
-                PyValue::Float(x) => Some(PyValue::Float(x)),
-                _ => None,
-            }).collect()),
-            _ => PyValue::List(Vec::new()),
+    // safe_j, then Optional[List[float]]
+    let list = |key: &str| -> Option<PyValue> {
+        let value = cell_of(row, key).unwrap_or_default();
+        if value.is_empty() {
+            return Some(PyValue::List(Vec::new()));
+        }
+        match loads(value) {
+            Ok(PyValue::List(items)) => items
+                .iter()
+                .map(|item| match item {
+                    PyValue::Str(_) | PyValue::Int(_) | PyValue::Float(_) | PyValue::Bool(_) => crate::lax::to_float(item).map(PyValue::Float),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()
+                .map(PyValue::List),
+            Ok(PyValue::None) => Some(PyValue::None),
+            Ok(_) => None,
+            Err(_) => Some(PyValue::List(Vec::new())),
         }
     };
-    let year = row.get("year").filter(|y| !y.is_empty() && y.chars().all(|c| c.is_ascii_digit())).and_then(|y| y.parse::<i128>().ok());
+    let year = cell_of(row, "year").filter(|y| !y.is_empty() && y.chars().all(|c| c.is_ascii_digit())).and_then(|y| y.parse::<i128>().ok());
     let mut fields = vec![
-        ("filepath", text(get("filepath"))),
-        ("title", text(get("title"))),
-        ("artist", text(get("artist"))),
-        ("album", text(get("album"))),
-        ("genre", text(get("genre"))),
-        ("subgenre", text(get("subgenre"))),
+        ("filepath", text(required("filepath")?)),
+        ("title", text(required("title")?)),
+        ("artist", text(required("artist")?)),
+        ("album", optional("album")),
+        ("genre", optional("genre")),
+        ("subgenre", optional("subgenre")),
         ("year", year.map_or(PyValue::None, PyValue::Int)),
+        ("bpm", PyValue::Float(number("bpm")?)),
+        ("key", optional("key")),
     ];
-    for key in ["bpm"] {
-        fields.push((key, number(key).map_or(PyValue::None, PyValue::Float)));
-    }
-    fields.push(("key", text(get("key"))));
     for key in [
         "energy", "danceability", "brightness", "loudness", "noisiness", "contrast", "duration", "loudness_range", "spectral_flux",
         "spectral_rolloff", "bpm_confidence", "key_strength", "bpm_raw",
     ] {
-        fields.push((key, number(key).map_or(PyValue::None, PyValue::Float)));
+        fields.push((key, PyValue::Float(number(key)?)));
     }
-    fields.push(("beat_positions", list("beat_positions")));
-    fields.push(("waveform_peaks", list("waveform_peaks")));
-    dict(fields)
+    fields.push(("beat_positions", list("beat_positions")?));
+    fields.push(("waveform_peaks", list("waveform_peaks")?));
+    Some(dict(fields))
 }
 
 fn field<'a>(value: &'a PyValue, key: &str) -> Option<&'a PyValue> {
@@ -479,7 +552,8 @@ fn field_str(value: &PyValue, key: &str) -> String {
 }
 
 /// `POST /api/settings/import/analyze`.
-pub async fn analyze_import(State(state): State<AppState>, multipart: Multipart) -> Response {
+pub async fn analyze_import(State(state): State<AppState>, multipart: Result<Multipart, MultipartRejection>) -> Response {
+    let Ok(multipart) = multipart else { return missing_file() };
     let Some(text_body) = uploaded_text(multipart).await else { return missing_file() };
     let db = state.db.clone();
     let tracks = match state.blocking(move || db.lease().and_then(|conn| all_tracks(&conn))).await {
@@ -496,10 +570,7 @@ pub async fn analyze_import(State(state): State<AppState>, multipart: Multipart)
     let (mut new_tracks, mut duplicates, mut path_updates) = (Vec::new(), Vec::new(), Vec::new());
     let mut matched = std::collections::BTreeSet::new();
     for row in read_rows(&text_body) {
-        let import = import_row(&row);
-        if ["bpm", "energy", "danceability", "brightness", "loudness", "noisiness", "contrast", "duration"].iter().any(|key| field(&import, key) == Some(&PyValue::None)) {
-            continue;
-        }
+        let Some(import) = import_row(&row) else { continue };
         let path = norm_path(&field_str(&import, "filepath"));
         if path.is_empty() {
             continue;
@@ -552,11 +623,99 @@ fn num(value: Option<&PyValue>) -> Option<f64> {
     }
 }
 
+/// `Optional[float] = 0.0` in lax mode.
+fn lax_float(fields: &Fields<'_>, name: &str) -> PyValue {
+    match fields.value(name) {
+        None => PyValue::Float(0.0),
+        Some(PyValue::None) => PyValue::None,
+        Some(value @ (PyValue::Str(_) | PyValue::Int(_) | PyValue::Float(_) | PyValue::Bool(_))) => match crate::lax::to_float(value) {
+            Some(number) => PyValue::Float(number),
+            None => {
+                fields.reject(name, "float_parsing", "Input should be a valid number, unable to parse string as a number");
+                PyValue::None
+            }
+        },
+        Some(_) => {
+            fields.reject(name, "float_type", "Input should be a valid number");
+            PyValue::None
+        }
+    }
+}
+
+/// `Optional[List[float]] = []`.
+fn float_list(fields: &Fields<'_>, name: &str) -> PyValue {
+    match fields.value(name) {
+        None => PyValue::List(Vec::new()),
+        Some(PyValue::None) => PyValue::None,
+        Some(PyValue::List(items)) => {
+            let parsed: Option<Vec<PyValue>> = items
+                .iter()
+                .map(|item| match item {
+                    PyValue::Str(_) | PyValue::Int(_) | PyValue::Float(_) | PyValue::Bool(_) => crate::lax::to_float(item).map(PyValue::Float),
+                    _ => None,
+                })
+                .collect();
+            parsed.map(PyValue::List).unwrap_or_else(|| {
+                fields.reject(name, "float_parsing", "Input should be a valid number");
+                PyValue::None
+            })
+        }
+        Some(_) => {
+            fields.reject(name, "list_type", "Input should be a valid list");
+            PyValue::None
+        }
+    }
+}
+
+/// `CsvImportRow.model_dump()`: every field, defaults filled in.
+fn csv_import_row(fields: &Fields<'_>) -> Option<PyValue> {
+    let optional_text = |name: &str| match fields.value(name) {
+        None => PyValue::Str(String::new()),
+        Some(_) => fields.optional_str(name).map_or(PyValue::None, PyValue::Str),
+    };
+    let filepath = fields.required_str("filepath");
+    let title = fields.required_str("title");
+    let artist = fields.required_str("artist");
+    let mut out = vec![
+        ("filepath", filepath.map(PyValue::Str).unwrap_or(PyValue::None)),
+        ("title", title.map(PyValue::Str).unwrap_or(PyValue::None)),
+        ("artist", artist.map(PyValue::Str).unwrap_or(PyValue::None)),
+        ("album", optional_text("album")),
+        ("genre", optional_text("genre")),
+        ("subgenre", optional_text("subgenre")),
+        ("year", fields.optional_int("year").map_or(PyValue::None, PyValue::Int)),
+        ("bpm", lax_float(fields, "bpm")),
+        ("key", optional_text("key")),
+    ];
+    for name in [
+        "energy", "danceability", "brightness", "loudness", "noisiness", "contrast", "duration", "loudness_range", "spectral_flux",
+        "spectral_rolloff", "bpm_confidence", "key_strength", "bpm_raw",
+    ] {
+        out.push((name, lax_float(fields, name)));
+    }
+    out.push(("beat_positions", float_list(fields, "beat_positions")));
+    out.push(("waveform_peaks", float_list(fields, "waveform_peaks")));
+    Some(dict(out))
+}
+
+/// `ImportExecuteRequest`.
+struct ImportExecuteBody {
+    new_tracks: Vec<PyValue>,
+    path_updates: Vec<PyValue>,
+}
+
+impl BodyModel for ImportExecuteBody {
+    fn from_fields(fields: &Fields<'_>) -> Result<Self, Vec<ValidationError>> {
+        let new_tracks = fields.model_list("new_tracks", csv_import_row);
+        let path_updates = fields.model_list("path_updates", |item| Some(whole(item)));
+        fields.finish(|| Some(Self { new_tracks: new_tracks?, path_updates: path_updates? }))
+    }
+}
+
 /// `POST /api/settings/import/execute`.
 pub async fn execute_import(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
-    let body = match read_body(&headers, &body) {
-        Ok(Some(body @ PyValue::Dict(_))) => body,
-        Ok(_) => return missing_file(),
+    let request = match parse_body::<ImportExecuteBody>(&headers, &body) {
+        Ok(request) => request,
         Err(response) => return response,
     };
     let now = state.clock.now_naive();
@@ -565,12 +724,17 @@ pub async fn execute_import(State(state): State<AppState>, headers: HeaderMap, b
         .blocking(move || {
             db.write(|conn| {
                 let (mut imported, mut updated) = (0i64, 0i64);
-                if let Some(PyValue::List(moves)) = field(&body, "path_updates") {
-                    for item in moves {
+                {
+                    // As in the metadata import: UPDATEs at the first flush, by id.
+                    let mut pending: BTreeMap<i64, (TrackRow, TrackRow)> = BTreeMap::new();
+                    for item in &request.path_updates {
                         let (old, new) = (field_str(item, "old_path"), field_str(item, "new_path"));
-                        let Some(mut track) = track_at(conn, &old)? else { continue };
+                        let Some(stored) = track_at(conn, &old)? else { continue };
+                        let (before, mut track) = match pending.get(&stored.id) {
+                            Some((before, track)) => (before.clone(), track.clone()),
+                            None => (stored.clone(), stored),
+                        };
                         track.filepath = new;
-                        write_track(conn, &track)?;
                         if let Some(data) = field(item, "track").filter(|v| plumdeck_core::compat::pyobj::truthy(v)) {
                             if apply_with_provenance(conn, &mut track, pairs(data))? {
                                 let extra = analysis_extra(conn, track.id)?.unwrap_or_else(|| "{}".into());
@@ -585,11 +749,15 @@ pub async fn execute_import(State(state): State<AppState>, headers: HeaderMap, b
                                 )?;
                             }
                         }
+                        pending.insert(track.id, (before, track));
                         updated += 1;
                     }
+                    for (before, track) in pending.values() {
+                        write_track(conn, before, track)?;
+                    }
                 }
-                if let Some(PyValue::List(rows)) = field(&body, "new_tracks") {
-                    for row in rows {
+                {
+                    for row in &request.new_tracks {
                         let path = norm_path(&field_str(row, "filepath"));
                         if track_at(conn, &path)?.is_some() {
                             continue;
@@ -633,9 +801,12 @@ pub async fn execute_import(State(state): State<AppState>, headers: HeaderMap, b
                         }
                         let extra = if supplied.is_empty() { "{}".to_owned() } else { with_manual("{}", &supplied) };
                         let id = insert_track(conn, &new, now)?;
-                        let beats = floats(field(row, "beat_positions"));
-                        let peaks = floats(field(row, "waveform_peaks"));
-                        write_analysis(conn, id, &extra, Some(&beats), Some(&peaks))?;
+                        let array = |key: &str| match field(row, key) {
+                            Some(PyValue::None) => None,
+                            other => Some(floats(other)),
+                        };
+                        let (beats, peaks) = (array("beat_positions"), array("waveform_peaks"));
+                        write_analysis(conn, id, &extra, beats.as_deref(), peaks.as_deref())?;
                         imported += 1;
                     }
                 }

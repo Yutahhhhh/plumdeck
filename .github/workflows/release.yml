@@ -11,38 +11,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  prepare-windows-model:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.11'
-      - name: restore verified Windows inference model
-        id: musicnn-model-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: backend/models/msd-musicnn-1.onnx
-          key: musicnn-onnx-49668ffec47e52e94b96f45930bb46a28a1368d4bdfb5c05378fa834aca616e1
-      - name: fetch and verify Windows inference model
-        run: python backend/fetch_musicnn_onnx.py
-      - name: cache verified Windows inference model
-        if: steps.musicnn-model-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: backend/models/msd-musicnn-1.onnx
-          key: ${{ steps.musicnn-model-cache.outputs.cache-primary-key }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windows-inference-model
-          path: backend/models/msd-musicnn-1.onnx
-          if-no-files-found: error
-
   release:
-    needs: prepare-windows-model
     permissions:
       contents: write
     strategy:
@@ -51,11 +20,11 @@ jobs:
         include:
           - platform: 'macos-latest'
             args: '--target aarch64-apple-darwin --config src-tauri/tauri.mixxx.conf.json'
-            sidecar_target: 'aarch64-apple-darwin'
+            rust_target: 'aarch64-apple-darwin'
             update_platform: 'darwin-aarch64'
           - platform: 'windows-2022'
             args: '--config src-tauri/tauri.windows.conf.json'
-            sidecar_target: 'x86_64-pc-windows-msvc'
+            rust_target: 'x86_64-pc-windows-msvc'
             update_platform: 'windows-x86_64'
 
     runs-on: ${{ matrix.platform }}
@@ -74,23 +43,16 @@ jobs:
           version: 9.15.9
           run_install: false
 
-      - name: setup python
-        uses: actions/setup-python@v7
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-          cache-dependency-path: 'backend/requirements.txt'
-
       - name: Validate release tag and updater key
         if: startsWith(github.ref, 'refs/tags/v')
-        run: python scripts/release-artifacts.py validate
+        run: node scripts/release-artifacts.mjs validate
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
 
       - name: install rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.sidecar_target == 'aarch64-apple-darwin' && 'aarch64-apple-darwin' || '' }}
+          targets: ${{ matrix.rust_target == 'aarch64-apple-darwin' && 'aarch64-apple-darwin' || '' }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -101,7 +63,9 @@ jobs:
       - name: install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: install FFmpeg (macOS)
+      # Homebrew's ffmpeg (first in this list) is the recording converter
+      # bundled into the app; packaging-ffmpeg.mjs relocates its dylibs.
+      - name: install build dependencies and FFmpeg (macOS)
         if: matrix.platform == 'macos-latest'
         run: brew install ffmpeg cmake ninja pkgconf qtbase qt5compat qtsvg qtdeclarative qttranslations portaudio libsndfile libsamplerate rubberband sound-touch chromaprint libebur128 taglib protobuf abseil opus libnice openssl@3 flac libogg libvorbis speex mpg123 googletest
 
@@ -109,58 +73,6 @@ jobs:
         if: matrix.platform == 'windows-2022'
         shell: pwsh
         run: choco install ffmpeg -y --no-progress
-
-      - name: install backend dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install --disable-pip-version-check -r backend/requirements.txt
-
-      - name: download verified Windows inference model
-        if: matrix.platform == 'windows-2022'
-        uses: actions/download-artifact@v4
-        with:
-          name: windows-inference-model
-          path: backend/models
-
-      - name: verify downloaded Windows inference model
-        if: matrix.platform == 'windows-2022'
-        run: python backend/fetch_musicnn_onnx.py --verify-only
-
-      - name: verify FFmpeg packaging requirements
-        shell: bash
-        run: |
-          set -euo pipefail
-          ffmpeg -version
-          python backend/packaging_ffmpeg.py
-
-      - name: build backend sidecar
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd backend
-          # Keep CI packaging identical to local releases. The spec includes
-          # FFmpeg, Essentia/MusiCNN on supported platforms and MCP dependencies.
-          python -m PyInstaller --clean --noconfirm plumdeck-server.spec
-
-          mkdir -p ../src-tauri/bin
-
-          EXTENSION=""
-          if [[ "${{ matrix.platform }}" == "windows-2022" ]]; then
-            EXTENSION=".exe"
-          fi
-
-          mv dist/plumdeck-server$EXTENSION ../src-tauri/bin/plumdeck-server-${{ matrix.sidecar_target }}$EXTENSION
-          chmod +x ../src-tauri/bin/plumdeck-server-${{ matrix.sidecar_target }}$EXTENSION 2>/dev/null || true
-          test -f ../src-tauri/bin/plumdeck-server-${{ matrix.sidecar_target }}$EXTENSION
-          ls -la ../src-tauri/bin/
-
-      - name: Exercise packaged API and MCP tools
-        shell: bash
-        run: |
-          EXTENSION=""
-          if [[ "${{ matrix.platform }}" == "windows-2022" ]]; then EXTENSION=".exe"; fi
-          python scripts/smoke-backend.py "src-tauri/bin/plumdeck-server-${{ matrix.sidecar_target }}$EXTENSION"
 
       - uses: ilammy/msvc-dev-cmd@v1
         if: matrix.platform == 'windows-2022'
@@ -170,8 +82,10 @@ jobs:
       - name: Build and stage Windows audio engine
         if: matrix.platform == 'windows-2022'
         run: |
-          python -m pip install cmake ninja
-          python native/mixxx-engine-host/scripts/build-windows.py
+          # The MSVC developer environment puts Visual Studio's CMake and Ninja on PATH.
+          cmake --version
+          ninja --version
+          node native/mixxx-engine-host/scripts/build-windows.mjs
 
       - name: Build and stage macOS audio engine
         if: matrix.platform == 'macos-latest'
@@ -179,26 +93,41 @@ jobs:
           bash native/mixxx-engine-host/scripts/build-macos.sh
           bash native/mixxx-engine-host/scripts/stage-macos.sh
 
-      - name: Verify packaged analysis
-        if: matrix.platform == 'windows-2022'
-        shell: pwsh
-        run: |
-          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
-          & .\src-tauri\bin\plumdeck-server-x86_64-pc-windows-msvc.exe --diagnose-light-analysis
-          if ($LASTEXITCODE -ne 0) { throw 'Packaged light analysis failed' }
-          & .\src-tauri\bin\plumdeck-server-x86_64-pc-windows-msvc.exe --diagnose-analysis
-          if ($LASTEXITCODE -ne 0) { throw 'Packaged analysis failed' }
-
       - name: configure production frontend environment
         shell: bash
         run: cp .env.production.example .env.production
+
+      - name: stage bundled FFmpeg
+        shell: bash
+        run: |
+          set -euo pipefail
+          ffmpeg -version
+          # Selects an FFmpeg with pcm_s16le/flac/libmp3lame for this target and
+          # stages src-tauri/bin/ffmpeg-<triple> (externalBin in the release configs).
+          node scripts/packaging-ffmpeg.mjs --target ${{ matrix.rust_target }}
+          ls -la src-tauri/bin/
 
       - name: build tauri app
         run: pnpm exec tauri build ${{ matrix.args }}
         env:
           CI: true
-          TAURI_SKIP_SIDECAR: true
           PLUMDECK_SHARE_MUSICS_URL: ${{ secrets.PLUMDECK_SHARE_MUSICS_URL }}
+
+      - name: Exercise the backend API and MCP server
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The app embeds the same backend; smoke its headless binary here
+          # (Windows also exercises the installed app below).
+          # Same target directory as the app build above, so dependencies are reused.
+          if [[ "${{ matrix.platform }}" == "windows-2022" ]]; then
+            cargo build --release --manifest-path src-tauri/Cargo.toml -p plumdeck-backend --bin plumdeck-backend
+            BACKEND=src-tauri/target/release/plumdeck-backend.exe
+          else
+            cargo build --release --manifest-path src-tauri/Cargo.toml -p plumdeck-backend --bin plumdeck-backend --target ${{ matrix.rust_target }}
+            BACKEND=src-tauri/target/${{ matrix.rust_target }}/release/plumdeck-backend
+          fi
+          node scripts/smoke-backend.mjs "$BACKEND"
 
       - name: Preserve and verify nested macOS frameworks
         if: matrix.platform == 'macos-latest'
@@ -222,11 +151,11 @@ jobs:
 
       - name: Install and exercise Windows desktop app
         if: matrix.platform == 'windows-2022'
-        run: python scripts/smoke-windows-installer.py
+        run: node scripts/smoke-windows-installer.mjs
 
       - name: Prepare signed update artifacts after final bundle sealing
         if: startsWith(github.ref, 'refs/tags/v')
-        run: python scripts/release-artifacts.py ${{ matrix.update_platform }} release-artifacts
+        run: node scripts/release-artifacts.mjs ${{ matrix.update_platform }} release-artifacts
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -247,16 +176,16 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-node@v7
         with:
-          python-version: '3.11'
+          node-version-file: .node-version
       - uses: actions/download-artifact@v4
         with:
           pattern: release-*
           path: release-artifacts
           merge-multiple: true
       - name: Require both signed platforms before publishing update metadata
-        run: python scripts/release-artifacts.py combine release-artifacts
+        run: node scripts/release-artifacts.mjs combine release-artifacts
       - uses: softprops/action-gh-release@v3
         with:
           draft: false

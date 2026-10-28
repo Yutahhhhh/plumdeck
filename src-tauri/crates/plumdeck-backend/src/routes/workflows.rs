@@ -172,11 +172,26 @@ fn safe_real_file(value: &str) -> Result<PathBuf, Fail> {
     if !path.is_absolute() {
         return fail("絶対パスを指定してください");
     }
-    let resolved = std::fs::canonicalize(&path)?;
+    // Path.resolve(strict=True) raises FileNotFoundError: str() is
+    // "[Errno 2] No such file or directory: '<path>'".
+    let resolved = std::fs::canonicalize(&path).map_err(|error| os_error(&error, &path))?;
     if !resolved.is_file() {
         return fail("ファイルが見つかりません");
     }
     Ok(resolved)
+}
+
+/// `str(OSError)` with a filename, as Python prints it.
+fn os_error(error: &std::io::Error, path: &Path) -> Fail {
+    let text = error.to_string();
+    match error.raw_os_error() {
+        Some(code) => {
+            let strerror = text.split(" (os error").next().unwrap_or(&text);
+            let name = path.to_string_lossy().replace('\\', "\\\\").replace('\'', "\\'");
+            Fail(format!("[Errno {code}] {strerror}: '{name}'"))
+        }
+        None => Fail(text),
+    }
 }
 
 fn operation(conn: &Connection, id: &str, kind: &str, target: &str, state: &str, detail: &Value, progress: f64, now: NaiveDateTime) -> Result<(), Fail> {
@@ -246,9 +261,31 @@ pub async fn diagnose_media(State(state): State<AppState>, headers: HeaderMap, b
         Ok(payload) => payload,
         Err(response) => return response,
     };
+    if let Err(response) = repair_request(&payload) {
+        return response;
+    }
     let now = state.clock.now_naive();
     let db = state.db.clone();
     answer(state.blocking_result(move || db.write(|conn| Ok(diagnose(conn, &payload, now)))).await.and_then(|r| r.map_err(|e| server_error(&e))), 422)
+}
+
+/// `RepairPlanRequest`: list[int] | None and two str | None.
+fn repair_request(payload: &Value) -> Result<(), Response> {
+    match &payload["track_ids"] {
+        Value::Null => {}
+        Value::Array(items) => {
+            if items.iter().any(|item| matches!(item, Value::Bool(_)) || int_of(item).is_none()) {
+                return Err(invalid("track_ids: Input should be a valid integer"));
+            }
+        }
+        _ => return Err(invalid("track_ids: Input should be a valid list")),
+    }
+    for key in ["old_root", "new_root"] {
+        if !matches!(payload[key], Value::Null | Value::String(_)) {
+            return Err(invalid(&format!("{key}: Input should be a valid string")));
+        }
+    }
+    Ok(())
 }
 
 fn diagnose(conn: &Connection, payload: &Value, now: NaiveDateTime) -> Out {
@@ -315,7 +352,8 @@ fn diagnose(conn: &Connection, payload: &Value, now: NaiveDateTime) -> Out {
             } else if sized.len() == 1 {
                 Some(sized[0].clone())
             } else {
-                None
+                // Python leaves the root-mapped candidate in place.
+                candidate
             };
         }
         let (mut candidate_state, mut reason) = ("none", if available { "現在の音源を利用できます" } else { "候補を指定してください" });

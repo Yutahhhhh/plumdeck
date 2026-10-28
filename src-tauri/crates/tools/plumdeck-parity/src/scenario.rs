@@ -77,6 +77,20 @@ pub struct Scenario {
     pub compare_overrides: Overrides,
     #[serde(default)]
     pub side_effects: Vec<Value>,
+    /// Columns the suite's db-diff leaves out, each group under a
+    /// deviations.yaml entry (values only B stamps from the frozen clock,
+    /// e.g. D-21's CURRENT_TIMESTAMP columns): `[{id: D-21, columns:
+    /// [play_sessions.started_at]}]`.
+    #[serde(default)]
+    pub db_deviations: Vec<DbDeviation>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DbDeviation {
+    pub id: String,
+    /// `table.column` names.
+    pub columns: Vec<String>,
 }
 
 fn default_db() -> String {
@@ -200,7 +214,7 @@ pub struct LedgerEntry {
 }
 
 impl Ledger {
-    fn status(&self, id: &str) -> Option<&str> {
+    pub fn status(&self, id: &str) -> Option<&str> {
         self.deviations.iter().find(|entry| entry.id == id).map(|entry| entry.status.as_str())
     }
 }
@@ -242,10 +256,22 @@ impl Step {
     fn label(&self, index: usize) -> String {
         match (&self.name, &self.http) {
             (Some(name), Some(http)) => format!("{name}: {} {}", http.method, http.path),
-            (Some(name), None) => name.clone(),
+            (Some(name), None) => match &self.mcp {
+                Some(mcp) => format!("{name}: MCP {}", mcp_label(mcp)),
+                None => name.clone(),
+            },
+            (None, None) if self.mcp.is_some() => format!("MCP {}", mcp_label(self.mcp.as_ref().unwrap_or(&Value::Null))),
             (None, Some(http)) => format!("{} {}", http.method, http.path),
             (None, None) => format!("step {}", index + 1),
         }
+    }
+}
+
+fn mcp_label(mcp: &Value) -> String {
+    let method = mcp["method"].as_str().unwrap_or_default();
+    match mcp.pointer("/params/name").and_then(Value::as_str) {
+        Some(tool) => format!("{method} {tool}"),
+        None => method.to_owned(),
     }
 }
 
@@ -278,8 +304,14 @@ pub fn load(path: &Path) -> Result<Scenario> {
         if kinds.iter().filter(|k| **k).count() != 1 {
             bail!("{}: step {} needs exactly one of http/mcp/ws/wait", path.display(), index + 1);
         }
+        if let Some(mcp) = &step.mcp {
+            if !mcp.get("method").is_some_and(Value::is_string) {
+                bail!("{}: step {}: mcp needs a method", path.display(), index + 1);
+            }
+            continue;
+        }
         let Some(http) = &step.http else {
-            bail!("{}: step {}: only http steps are supported yet", path.display(), index + 1);
+            bail!("{}: step {}: only http and mcp steps are supported yet", path.display(), index + 1);
         };
         let bodies = [http.body.is_some(), http.raw.is_some(), http.raw_hex.is_some()];
         if bodies.iter().filter(|b| **b).count() > 1 {
@@ -385,6 +417,144 @@ async fn send(client: &reqwest::Client, target: &Target, step: &HttpStep, vars: 
     Ok((Captured { status, content_type, headers, body }, started.elapsed()))
 }
 
+/// An MCP Streamable HTTP session with one side (S9).
+#[derive(Clone, Debug, Default)]
+pub struct McpSession {
+    id: Option<String>,
+    protocol: String,
+}
+
+const MCP_PROTOCOL: &str = "2025-06-18";
+
+async fn post_mcp(
+    client: &reqwest::Client,
+    target: &Target,
+    session: Option<&McpSession>,
+    message: &Value,
+) -> Result<(u16, Vec<(String, String)>, Vec<u8>)> {
+    let url = format!("{}/mcp", target.base.trim_end_matches('/'));
+    let mut request = client
+        .post(&url)
+        .header("accept", "application/json, text/event-stream")
+        .header("content-type", "application/json")
+        .body(message.to_string());
+    if let Some(session) = session {
+        if let Some(id) = &session.id {
+            request = request.header("mcp-session-id", id);
+        }
+        request = request.header("mcp-protocol-version", &session.protocol);
+    }
+    let response = request.send().await.with_context(|| format!("request {url}"))?;
+    let status = response.status().as_u16();
+    let headers = response
+        .headers()
+        .iter()
+        .map(|(name, value)| (name.as_str().to_owned(), String::from_utf8_lossy(value.as_bytes()).into_owned()))
+        .collect();
+    let body = response.bytes().await.with_context(|| format!("read body {url}"))?.to_vec();
+    Ok((status, headers, body))
+}
+
+/// The JSON-RPC message of an MCP answer: the body itself, or the last
+/// `data:` event of an SSE stream.
+fn mcp_message(body: &[u8]) -> Option<Value> {
+    if let Ok(value) = serde_json::from_slice(body) {
+        return Some(value);
+    }
+    let text = String::from_utf8_lossy(body);
+    let mut last = None;
+    for event in text.replace("\r\n", "\n").split("\n\n") {
+        let data: Vec<&str> = event.lines().filter_map(|line| line.strip_prefix("data:")).map(str::trim_start).collect();
+        if !data.is_empty() {
+            if let Ok(value) = serde_json::from_str(&data.join("\n")) {
+                last = Some(value);
+            }
+        }
+    }
+    last
+}
+
+/// Normalize the parts of an MCP answer that legitimately differ: the
+/// server version, and tool text that is JSON (compared by value under
+/// `text_json`, not by its indentation).
+fn normalize_mcp(message: &mut Value) {
+    if let Some(info) = message.pointer_mut("/result/serverInfo").and_then(Value::as_object_mut) {
+        info.remove("version");
+    }
+    if let Some(content) = message.pointer_mut("/result/content").and_then(Value::as_array_mut) {
+        for item in content {
+            let Some(object) = item.as_object_mut() else { continue };
+            let parsed = object.get("text").and_then(Value::as_str).and_then(|t| serde_json::from_str::<Value>(t).ok());
+            if let Some(parsed) = parsed.filter(|v| v.is_object() || v.is_array()) {
+                object.remove("text");
+                object.insert("text_json".into(), parsed);
+            }
+        }
+    }
+}
+
+/// An `mcp` step: `{method, params}` sent as a JSON-RPC request (id 1)
+/// inside a session opened on the side's first MCP step (initialize +
+/// notifications/initialized; an explicit `initialize` step opens it and
+/// is compared). Session ids and transport headers are not compared; the
+/// JSON-RPC message is, as `application/json`.
+async fn send_mcp(
+    client: &reqwest::Client,
+    target: &Target,
+    session: &mut Option<McpSession>,
+    step: &Value,
+    vars: &Vars,
+) -> Result<(Captured, Duration)> {
+    let method = step["method"].as_str().unwrap_or_default();
+    let params = vars.apply_json(step.get("params").unwrap_or(&Value::Null));
+    let init_params = serde_json::json!({
+        "protocolVersion": MCP_PROTOCOL,
+        "capabilities": {},
+        "clientInfo": {"name": "plumdeck-parity", "version": "0"},
+    });
+    if session.is_none() && method != "initialize" {
+        let message = serde_json::json!({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": init_params});
+        let (status, headers, body) = post_mcp(client, target, None, &message).await?;
+        if status != 200 {
+            bail!("MCP initialize on {} answered {status}: {}", target.base, String::from_utf8_lossy(&body));
+        }
+        let id = headers.iter().find(|(n, _)| n == "mcp-session-id").map(|(_, v)| v.clone());
+        let protocol = mcp_message(&body)
+            .and_then(|m| m.pointer("/result/protocolVersion").and_then(Value::as_str).map(str::to_owned))
+            .unwrap_or_else(|| MCP_PROTOCOL.into());
+        let opened = McpSession { id, protocol };
+        let note = serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
+        post_mcp(client, target, Some(&opened), &note).await?;
+        *session = Some(opened);
+    }
+    let params = if method == "initialize" && params.is_null() { init_params } else { params };
+    let mut message = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": method});
+    if !params.is_null() {
+        message["params"] = params;
+    }
+    let started = Instant::now();
+    let (status, headers, body) = post_mcp(client, target, session.as_ref(), &message).await?;
+    let elapsed = started.elapsed();
+    if method == "initialize" && session.is_none() {
+        let id = headers.iter().find(|(n, _)| n == "mcp-session-id").map(|(_, v)| v.clone());
+        let protocol = mcp_message(&body)
+            .and_then(|m| m.pointer("/result/protocolVersion").and_then(Value::as_str).map(str::to_owned))
+            .unwrap_or_else(|| MCP_PROTOCOL.into());
+        let opened = McpSession { id, protocol };
+        let note = serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
+        post_mcp(client, target, Some(&opened), &note).await?;
+        *session = Some(opened);
+    }
+    let captured = match mcp_message(&body) {
+        Some(mut value) => {
+            normalize_mcp(&mut value);
+            Captured { status, content_type: "application/json".into(), headers: Vec::new(), body: value.to_string().into_bytes() }
+        }
+        None => Captured { status, content_type: String::new(), headers: Vec::new(), body },
+    };
+    Ok((captured, elapsed))
+}
+
 /// One compared step for the report.
 pub struct StepResult {
     pub label: String,
@@ -488,8 +658,8 @@ pub async fn run(
     let ties = &scenario.compare_overrides.ties;
     let unordered = &scenario.compare_overrides.unordered;
     let mut steps = Vec::new();
+    let mut sessions: [Option<McpSession>; 2] = [None, None];
     for (index, step) in scenario.steps.iter().enumerate() {
-        let http = step.http.as_ref().expect("validated in load");
         let deviation = match &step.deviation {
             Some(deviation) => {
                 let status = ledger
@@ -499,8 +669,23 @@ pub async fn run(
             }
             None => None,
         };
-        let (ra, ta) = send(&client, a, http, vars).await?;
-        let (rb, tb) = send(&client, b, http, vars).await?;
+        let ((ra, ta), (rb, tb)) = match (&step.http, &step.mcp) {
+            (Some(http), _) => (send(&client, a, http, vars).await?, send(&client, b, http, vars).await?),
+            (None, Some(mcp)) => {
+                let [sa, sb] = &mut sessions;
+                (send_mcp(&client, a, sa, mcp, vars).await?, send_mcp(&client, b, sb, mcp, vars).await?)
+            }
+            (None, None) => unreachable!("validated in load"),
+        };
+        // Debugging aid: PLUMDECK_PARITY_DUMP=DIR writes both answers of every step.
+        if let Some(dir) = std::env::var_os("PLUMDECK_PARITY_DUMP") {
+            let dir = PathBuf::from(dir).join(&scenario.name);
+            if std::fs::create_dir_all(&dir).is_ok() {
+                for (side, captured) in [("a", &ra), ("b", &rb)] {
+                    let _ = std::fs::write(dir.join(format!("{:03}-{side}", index + 1)), &captured.body);
+                }
+            }
+        }
         let verdict = match &step.deviation {
             Some(expected) => deviation_verdict(expected, &ra, &rb),
             None => {

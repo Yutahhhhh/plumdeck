@@ -43,12 +43,8 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 base64 = "0.22"
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 
-# S13: the Rust backend in-process instead of the Python sidecar. Off until
-# the macOS / Windows smoke checks pass (docs/plan/README.md §6).
-plumdeck-backend = { path = "crates/plumdeck-backend", optional = true }
-
-[features]
-rust-backend = ["dep:plumdeck-backend"]
+# The backend runs in-process (S13).
+plumdeck-backend = { path = "crates/plumdeck-backend" }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
@@ -114,6 +110,8 @@ miniz_oxide = "=0.8.9"
 regex = "=1.12.2"
 # FFT for the STFT in plumdeck-dsp (MIT OR Apache-2.0; already locked through symphonia).
 rustfft = "=6.4.1"
+# MusiCNN inference on the frozen TensorFlow graph (plumdeck-analysis).
+tract-tensorflow = "=0.21.19"
 # SQLite with SQLCipher: the analysis-job queue now, rekordbox's encrypted
 # master.db later (one libsqlite3-sys may link per build). macOS uses
 # CommonCrypto; Windows adds bundled-sqlcipher-vendored-openssl per crate.
@@ -139,3 +137,10 @@ uuid = { version = "=1.18.1", features = ["v4"] }
 [profile.release]
 # Handler panics must unwind so the server can answer 500 instead of aborting.
 panic = "unwind"
+
+# MusiCNN inference is unusably slow unoptimized; debug builds (tests, the
+# parity side B) optimize the inference crates only.
+[profile.dev.package.tract-linalg]
+opt-level = 3
+[profile.dev.package.tract-core]
+opt-level = 3

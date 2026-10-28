@@ -75,6 +75,49 @@ fn ints(value: &Value) -> Option<Vec<i64>> {
     value.as_array().map(|a| a.iter().filter_map(Value::as_i64).collect())
 }
 
+/// pydantic's lax bool (`True`/`"yes"`/`1`...).
+fn lax_bool(value: &Value) -> Option<bool> {
+    match value {
+        Value::Bool(b) => Some(*b),
+        Value::Number(n) if n.as_i64() == Some(0) || n.as_f64() == Some(0.0) => Some(false),
+        Value::Number(n) if n.as_i64() == Some(1) || n.as_f64() == Some(1.0) => Some(true),
+        Value::String(s) => match s.trim().to_lowercase().as_str() {
+            "0" | "off" | "f" | "false" | "n" | "no" => Some(false),
+            "1" | "on" | "t" | "true" | "y" | "yes" => Some(true),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `GridBatchRequest` (extra="forbid", StrictInt ids): the parsed
+/// `(track_ids, only_outdated)` or a 422.
+fn grid_request(payload: &Value) -> Result<(Option<Vec<i64>>, bool), Response> {
+    let map = payload.as_object().cloned().unwrap_or_default();
+    if let Some(key) = map.keys().find(|k| !["only_outdated", "track_ids"].contains(&k.as_str())) {
+        return Err(invalid(&format!("{key}: Extra inputs are not permitted")));
+    }
+    let only_outdated = match map.get("only_outdated") {
+        None => true,
+        Some(value) => lax_bool(value).ok_or_else(|| invalid("only_outdated: Input should be a valid boolean"))?,
+    };
+    let track_ids = match map.get("track_ids") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(items)) => {
+            if items.len() > 100_000 {
+                return Err(invalid("track_ids: List should have at most 100000 items"));
+            }
+            let mut ids = Vec::with_capacity(items.len());
+            for item in items {
+                ids.push(item.as_i64().ok_or_else(|| invalid("track_ids: Input should be a valid integer"))?);
+            }
+            Some(ids)
+        }
+        Some(_) => return Err(invalid("track_ids: Input should be a valid list")),
+    };
+    Ok((track_ids, only_outdated))
+}
+
 fn strings(value: &Value) -> Option<Vec<String>> {
     value.as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
 }
@@ -371,8 +414,12 @@ pub async fn plan_grid_job(State(state): State<AppState>, headers: HeaderMap, by
         Ok(payload) => payload,
         Err(response) => return response,
     };
+    let (track_ids, only_outdated) = match grid_request(&payload) {
+        Ok(parsed) => parsed,
+        Err(response) => return response,
+    };
     let jobs = state.analysis.jobs.clone();
-    let result = tokio::task::spawn_blocking(move || jobs.plan(ints(&payload["track_ids"]), None, Some(vec!["rhythm".into()]), payload["only_outdated"].as_bool().unwrap_or(true), None)).await;
+    let result = tokio::task::spawn_blocking(move || jobs.plan(track_ids, None, Some(vec!["rhythm".into()]), only_outdated, None)).await;
     match result {
         Ok(result) => job_answer(result, 422),
         Err(error) => server_error(&error),
@@ -385,8 +432,12 @@ pub async fn start_grid_job(State(state): State<AppState>, headers: HeaderMap, b
         Ok(payload) => payload,
         Err(response) => return response,
     };
+    let (track_ids, only_outdated) = match grid_request(&payload) {
+        Ok(parsed) => parsed,
+        Err(response) => return response,
+    };
     let jobs = state.analysis.jobs.clone();
-    let result = tokio::task::spawn_blocking(move || jobs.start(ints(&payload["track_ids"]), None, Some(vec!["rhythm".into()]), payload["only_outdated"].as_bool().unwrap_or(true), None, 1)).await;
+    let result = tokio::task::spawn_blocking(move || jobs.start(track_ids, None, Some(vec!["rhythm".into()]), only_outdated, None, 1)).await;
     match result {
         Ok(result) => job_answer(result, 409),
         Err(error) => server_error(&error),
@@ -575,6 +626,19 @@ pub async fn create_play_import(State(state): State<AppState>, headers: HeaderMa
     if request_id.is_empty() || request_id.chars().count() > 200 || paths.is_empty() || paths.len() > 2000 {
         return invalid("invalid import request");
     }
+    // PlayImportRequest's Literal fields answer 422 before the service runs.
+    if !payload["target"].is_object() {
+        return invalid("target: Field required");
+    }
+    if !payload["target"]["kind"].as_str().is_some_and(|k| ["collection", "local_playlist"].contains(&k)) {
+        return invalid("target.kind: Input should be 'collection' or 'local_playlist'");
+    }
+    if payload.get("origin").is_some_and(|o| !o.as_str().is_some_and(|o| ["native_file_drop", "file_picker"].contains(&o))) {
+        return invalid("origin: Input should be 'native_file_drop' or 'file_picker'");
+    }
+    if payload.get("analysis_profile").is_some_and(|p| !p.as_str().is_some_and(|p| ["auto", "light", "full"].contains(&p))) {
+        return invalid("analysis_profile: Input should be 'auto', 'light' or 'full'");
+    }
     let kind = payload["target"]["kind"].as_str().unwrap_or("").to_owned();
     let target_id = payload["target"]["id"].as_i64();
     let origin = payload["origin"].as_str().unwrap_or("native_file_drop").to_owned();
@@ -645,7 +709,20 @@ pub async fn create_play_import(State(state): State<AppState>, headers: HeaderMa
 
 /// `GET /api/workflows/play/imports?active=`.
 pub async fn list_play_imports(State(state): State<AppState>, uri: Uri) -> Response {
-    let active = crate::query::Params::from_uri(&uri).opt_str("active").is_some_and(|v| ["true", "1", "yes", "on"].contains(&v.to_lowercase().as_str()));
+    let active = match crate::query::Params::from_uri(&uri).opt_str("active") {
+        None => false,
+        Some(text) => match lax_bool(&Value::String(text)) {
+            Some(active) => active,
+            None => {
+                return crate::body::validation_response(&[crate::body::ValidationError::new(
+                    "bool_parsing",
+                    vec![crate::body::Loc::from("query"), crate::body::Loc::from("active")],
+                    "Input should be a valid boolean, unable to interpret input",
+                    PyValue::None,
+                )])
+            }
+        },
+    };
     let worker = state.clone();
     match tokio::task::spawn_blocking(move || list_batches(&worker, active)).await {
         Ok(Ok(rows)) => answer(&Value::Array(rows)),

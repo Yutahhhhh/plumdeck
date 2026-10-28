@@ -6,7 +6,6 @@ on:
     paths:
       - '.github/workflows/**'
       - '.node-version'
-      - 'backend/**'
       - 'contracts/**'
       - 'src/**'
       - 'src-tauri/**'
@@ -45,7 +44,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - name: Verify signed release artifacts and incomplete-release rejection
-        run: python scripts/test-release-artifacts.py
+        run: node --test scripts/test-release-artifacts.mjs
       - name: MIDI and audio recovery regression tests
         run: node --experimental-strip-types --test src/services/midi/generic-midi.test.mjs src/services/dj-engine/audio-ready.test.mjs src/lib/path-breadcrumbs.test.mjs src/components/docs/topics.test.mjs src/services/junction/control-boundary.test.mjs src/services/junction/exchange-actions.test.mjs src/services/junction/roster-model.test.mjs src/services/junction/turn-state.test.mjs src/services/junction/tracks.test.mjs
       - name: Junction signaling contract tests
@@ -70,98 +69,6 @@ jobs:
       - name: Engine conformance analysis (offline; the audio suite needs BlackHole and a host)
         run: node --test native/mixxx-engine-host/tests/conformance/analysis.test.mjs
 
-  backend:
-    name: Database and import regression tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.11'
-          cache: pip
-          cache-dependency-path: backend/requirements-pr.txt
-      - run: python -m pip install -r backend/requirements-pr.txt
-      - name: Restore verified lightweight inference model
-        id: musicnn-model-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: backend/models/msd-musicnn-1.onnx
-          key: musicnn-onnx-49668ffec47e52e94b96f45930bb46a28a1368d4bdfb5c05378fa834aca616e1
-      - name: Test database integrity without audio inference
-        env:
-          PYTHONPATH: backend
-        run: python -m pytest --confcutdir=backend/tests/workflow_integrity backend/tests/workflow_integrity -q
-      - name: Test portable runtime paths
-        env:
-          PYTHONPATH: backend
-        run: python -m pytest --confcutdir=backend/tests/portability backend/tests/portability -q
-      - name: Test cue API and resumable rhythm updates
-        env:
-          PYTHONPATH: backend
-        run: python -m pytest backend/tests/test_rekordbox_cues.py backend/tests/test_playback_grid.py backend/tests/test_analysis_jobs.py -q
-      - name: Test lightweight DSP without librosa or model dependencies
-        env:
-          PYTHONPATH: backend
-        run: python -m pytest --confcutdir=backend/tests/portable_audio backend/tests/portable_audio/test_light_analysis.py -q
-      - name: Test real lightweight model and whole-track grid in cold workers
-        env:
-          PYTHONPATH: backend
-          OMP_NUM_THREADS: '1'
-          OPENBLAS_NUM_THREADS: '1'
-        run: |
-          if ! command -v ffmpeg >/dev/null; then
-            sudo apt-get update -qq
-            sudo apt-get install -y ffmpeg
-          fi
-          python -m pip install onnxruntime==1.30.0
-          if [ "${{ steps.musicnn-model-cache.outputs.cache-hit }}" != "true" ]; then
-            python backend/fetch_musicnn_onnx.py
-          fi
-          python backend/fetch_musicnn_onnx.py --verify-only
-          python backend/light_analysis_diagnostic.py
-      - name: Test isolated worker progress, timeout and recovery
-        env:
-          PYTHONPATH: backend
-        run: python backend/tests/analysis_process_smoke.py
-      - name: Verify attack alignment with the real rhythm analyzer
-        env:
-          PYTHONPATH: backend
-        run: |
-          python -m pip install essentia==2.1b6.dev1389 --only-binary=:all:
-          python -m pytest --confcutdir=backend/tests/portable_audio backend/tests/portable_audio/test_beat_alignment.py -q
-
-  windows-light-analysis:
-    name: Windows light analysis with real model
-    runs-on: windows-2022
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.11'
-          cache: pip
-          cache-dependency-path: backend/requirements-pr.txt
-      - name: Restore verified lightweight inference model
-        id: musicnn-model-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: backend/models/msd-musicnn-1.onnx
-          key: musicnn-onnx-49668ffec47e52e94b96f45930bb46a28a1368d4bdfb5c05378fa834aca616e1
-      - run: choco install ffmpeg -y --no-progress
-      - run: python -m pip install -r backend/requirements-pr.txt onnxruntime==1.30.0
-      - name: Fetch lightweight inference model when uncached
-        if: steps.musicnn-model-cache.outputs.cache-hit != 'true'
-        run: python backend/fetch_musicnn_onnx.py
-      - name: Verify lightweight inference model
-        run: python backend/fetch_musicnn_onnx.py --verify-only
-      - name: Verify whole-track grid and real embeddings in fresh workers
-        env:
-          PYTHONPATH: backend
-          OMP_NUM_THREADS: '1'
-          OPENBLAS_NUM_THREADS: '1'
-        run: python backend/light_analysis_diagnostic.py
-
   backend-port:
     name: Rust backend port crates and parity tooling
     runs-on: ubuntu-latest
@@ -174,11 +81,11 @@ jobs:
           workspaces: './src-tauri -> target'
           key: backend-port
           cache-on-failure: true
-      - name: Test plumdeck-core, -db, -domain, -media, -backend and -parity
+      - name: Test plumdeck-core, -db, -domain, -media, -key, -backend, -analysis and -parity
         working-directory: src-tauri
         # One invocation: testing these packages separately splits host
         # build-dependency features and rebuilds bundled DuckDB per package.
-        run: cargo test -p plumdeck-core -p plumdeck-db -p plumdeck-domain -p plumdeck-media -p plumdeck-key -p plumdeck-backend -p plumdeck-parity
+        run: cargo test -p plumdeck-core -p plumdeck-db -p plumdeck-domain -p plumdeck-media -p plumdeck-key -p plumdeck-backend -p plumdeck-analysis -p plumdeck-parity
       - name: Test plumdeck-dsp (release; filter quality and no-allocation checks)
         working-directory: src-tauri
         run: cargo test -p plumdeck-dsp --release
@@ -194,11 +101,6 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
           cache-on-failure: true
-      - name: Create build-only sidecar placeholder
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force src-tauri/bin | Out-Null
-          New-Item -ItemType File -Force src-tauri/bin/plumdeck-server-x86_64-pc-windows-msvc.exe | Out-Null
       - name: Compile and test native Windows shell
         working-directory: src-tauri
         env:

@@ -83,22 +83,21 @@ Settingsの「解析方法」では、自動（Auto）・軽量（Light）・詳
 
 macOSでは従来どおりEssentiaによる詳細解析を維持し、「軽量」は選択できません。Windowsの詳細解析はFFmpeg・librosa・ONNX RuntimeでBPM／キー／音色／波形／MusiCNN埋め込みを解析します。MusiCNNのモデルと入力スペクトル仕様は共通です。BPM・キーの推定アルゴリズムにはOS差があるため、解析履歴には使用したコンポーネントのバージョンを記録します。
 
-Release workflowは両OSでネイティブ音声エンジンをビルドし、必要なDLL／Frameworkとバックエンドを同梱します。Windows distribution validationでは、通常のPATHを外した同梱exeの診断に加え、インストール済みTauriアプリを起動し、タグなし音源を実際の `/api/ingest` から軽量解析します。解析ワーカー到達後の進捗、完了、エラー0を確認できないビルドは配布しません。音声デバイス、DDJ本体、rekordboxのUIとの実機検証はこのCIとは別です。
+Release workflowは両OSでネイティブ音声エンジンをビルドし、必要なDLL／Frameworkを同梱します。バックエンドはRustでTauriアプリに組み込まれており、別プロセスのサイドカーはありません。CIではヘッドレス版 `plumdeck-backend` を一時プロファイルで起動し、APIとMCPを確認します。Windowsでは、通常のPATHを外してインストール済みTauriアプリを起動し、タグなし音源を実際の `/api/ingest` から軽量解析します。解析ワーカー到達後の進捗、完了、エラー0を確認できないビルドは配布しません。音声デバイス、DDJ本体、rekordboxのUIとの実機検証はこのCIとは別です。
 
 ## ローカル開発
 
-フロントエンドはNode / pnpm、デスクトップはRust / Tauri、バックエンドはPython環境を使います。ネイティブ音声エンジンのビルド対象はmacOS / Apple SiliconとWindows x64です。ブラウザだけでは音声エンジン、MIDI、rekordboxデッキ取得、外部アプリへのドラッグは利用できません。
+フロントエンドはNode / pnpm、デスクトップとバックエンドはRust / Tauriです（バックエンドは `src-tauri/crates/plumdeck-backend`）。Pythonは不要です。ネイティブ音声エンジンのビルド対象はmacOS / Apple SiliconとWindows x64です。ブラウザだけでは音声エンジン、MIDI、rekordboxデッキ取得、外部アプリへのドラッグは利用できません。
 
 ```bash
 cp .env.example .env
 pnpm install
-pnpm backend:install
 pnpm tauri
 ```
 
 環境ごとの値はGit管理外の `.env` で変更します。本番用の環境ファイルが必要な場合は、`.env.production.example` を `.env.production` へコピーしてください。exampleファイルには共有可能な既定値だけを置き、認証情報や端末固有のパスは追加しません。
 
-個別に起動する場合は `pnpm backend:dev` と `pnpm dev` を使います。開発時のバックエンドは通常 `127.0.0.1:8001`、フロントエンドは `127.0.0.1:1420` です。APIの参照先は `src/services/api-client.ts` と環境変数に集約しています。
+個別に起動する場合は `pnpm backend:dev`（`cargo run -p plumdeck-backend`）と `pnpm dev` を使います。DBのバックアップ・復元などの保守コマンド（`pnpm backup:db`、`pnpm restore:db`、`pnpm db:cli` など）は `plumdeck-maintenance` を実行します。開発時のバックエンドは通常 `127.0.0.1:8001`、フロントエンドは `127.0.0.1:1420` です。APIの参照先は `src/services/api-client.ts` と環境変数に集約しています。
 
 ```bash
 pnpm build
@@ -119,7 +118,7 @@ pnpm dj-engine:stage
 pnpm tauri:build:performance
 ```
 
-WindowsではVisual Studioの「x64 Native Tools Command Prompt」でビルドします。Python 3.11、Git、Node 24、Rust、CMake、Ninjaが必要です（`python -m pip install cmake ninja`）。依存ソースとWindowsライブラリは固定リビジョン／ハッシュから取得し、DLL・Qtプラグイン・リソースをステージへまとめます。Windows利用者側にVisual Studio、Python、WSL、Homebrewは不要です。
+WindowsではVisual Studioの「x64 Native Tools Command Prompt」でビルドします。Git、Node 24、Rust、CMake、Ninjaが必要です（CMakeとNinjaはVisual Studioの「C++ CMake tools for Windows」に含まれ、このコマンドプロンプトでPATHに入ります）。依存ソースとWindowsライブラリは固定リビジョン／ハッシュから取得し、DLL・Qtプラグイン・リソースをステージへまとめます。Windows利用者側にVisual Studio、Python、WSL、Homebrewは不要です。
 
 Apple Siliconでは `/opt/homebrew` のARM64ツールチェーンを使用します。依存バージョンは `native/mixxx-engine-host/dependency-versions.json`、固定リビジョンと取得処理はビルドスクリプトにあります。Mixxxホストを含む配布では、同梱ライブラリ・署名・対応ソースの確認も必要です。
 

@@ -1,0 +1,45 @@
+# GET /api/tracks/{id}/similar (backend/api/routers/tracks.py over
+# TrackRepository.get_similar_tracks) on the sets fixture's embeddings, and
+# POST /api/system/save-file / reveal-file (backend/api/routers/system.py)
+# on the synthetic media directory. reveal-file only covers the paths that
+# do not start a file manager.
+name: s3-similar-system
+db: fixture
+fixture: sets
+freeze_now: "2026-05-01 12:34:56.789012"
+# A vector that does not cast to FLOAT[200] makes every search a 500 (both
+# sides); drop those rows so the ranking is compared. A zero vector ranks
+# every track NaN (order undefined), so it has no step.
+fixture_sql: |
+  DELETE FROM track_embeddings WHERE TRY_CAST(embedding_json AS FLOAT[200]) IS NULL;
+steps:
+  - name: similar to track 1
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/1/similar}
+  - name: similar with a limit
+    expect_status: 200
+    http: {method: GET, path: /api/tracks/2/similar, query: {limit: 3}}
+  - name: no embedding
+    expect_status: 404
+    http: {method: GET, path: /api/tracks/999/similar}
+  - name: bad id
+    expect_status: 422
+    http: {method: GET, path: /api/tracks/x/similar}
+  - name: bad limit
+    expect_status: 422
+    http: {method: GET, path: /api/tracks/1/similar, query: {limit: x}}
+  - name: save a file
+    expect_status: 200
+    http: {method: POST, path: /api/system/save-file, body: {path: "{media}/saved.txt", content: "日本語 line\n"}}
+  - name: save into a missing directory
+    expect_status: 500
+    http: {method: POST, path: /api/system/save-file, body: {path: "{media}/no/such/dir.txt", content: "x"}}
+  - name: save needs content
+    expect_status: 422
+    http: {method: POST, path: /api/system/save-file, body: {path: "{media}/x.txt"}}
+  - name: reveal a missing file
+    expect_status: 200
+    http: {method: POST, path: /api/system/reveal-file, body: {path: "{media}/does-not-exist.mp3"}}
+  - name: reveal needs a path
+    expect_status: 422
+    http: {method: POST, path: /api/system/reveal-file, body: {}}

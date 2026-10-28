@@ -7,7 +7,7 @@ mkdir -p "$dep_root/build-config"
 if [[ ! -f "$dep_root/source.tar.bz2" ]]; then
  curl --fail --location --proto '=https' --tlsv1.2 https://breakfastquay.com/files/releases/rubberband-4.0.0.tar.bz2 -o "$dep_root/source.tar.bz2"
 fi
-python3 "$host_root/scripts/prepare-rubberband.py" "$dep_root"
+node "$host_root/scripts/prepare-rubberband.mjs" "$dep_root"
 cp "$host_root/cmake/rubberband-source.cmake" "$dep_root/build-config/CMakeLists.txt"
 cmake -S "$dep_root/build-config" -B "$dep_root/build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 \
  -DRB_SOURCE="$dep_root/source"

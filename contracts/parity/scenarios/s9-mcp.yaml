@@ -1,0 +1,182 @@
+# S9: the MCP server at /mcp (backend/mcp_server) on the sets fixture.
+# `mcp` steps run inside one Streamable HTTP session per side (the runner
+# initializes it); session ids and transport headers are not compared, the
+# JSON-RPC message is (tool text that is JSON by value). Covers initialize,
+# tools/list (contracts/mcp/tools.v1.json), prompts, and tools/call of the
+# library, setlist, genre, lyrics, wordplay and assist tools, including
+# their error results. Time is frozen; the suite db-diffs both libraries.
+name: s9-mcp
+db: fixture
+fixture: sets
+freeze_now: "2026-05-01 12:34:56.789012"
+steps:
+  - name: initialize
+    mcp: {method: initialize}
+  - name: ping
+    mcp: {method: ping}
+  - name: tool list
+    mcp: {method: tools/list}
+  - name: prompt list
+    mcp: {method: prompts/list}
+  - name: unknown method
+    mcp: {method: bogus/method}
+  - name: unknown tool
+    mcp: {method: tools/call, params: {name: no_such_tool, arguments: {}}}
+
+  # library
+  - name: search everything
+    mcp: {method: tools/call, params: {name: search_tracks, arguments: {}}}
+  - name: search free text
+    mcp: {method: tools/call, params: {name: search_tracks, arguments: {q: night}}}
+  - name: search by genre list and bpm
+    mcp: {method: tools/call, params: {name: search_tracks, arguments: {genres: [House, house], bpm: 126, bpm_range: 3}}}
+  - name: search by artist and key
+    mcp: {method: tools/call, params: {name: search_tracks, arguments: {artist: DJ, key: "F minor"}}}
+  - name: search by duration and energy
+    mcp: {method: tools/call, params: {name: search_tracks, arguments: {min_duration: 100, max_duration: 300, min_energy: 0.3}}}
+  - name: search verified only, limited
+    mcp: {method: tools/call, params: {name: search_tracks, arguments: {status: verified, limit: 3}}}
+  - name: similar tracks fail on the short vector
+    mcp: {method: tools/call, params: {name: get_track_similar, arguments: {track_id: 1, limit: 3}}}
+  - name: similar tracks of a missing track
+    mcp: {method: tools/call, params: {name: get_track_similar, arguments: {track_id: 999}}}
+  - name: suggest genre
+    mcp: {method: tools/call, params: {name: suggest_track_genre, arguments: {track_id: 2}}}
+  - name: update genre
+    mcp: {method: tools/call, params: {name: update_track_genre, arguments: {track_id: 7, genre: Techno}}}
+  - name: update genre of a missing track
+    mcp: {method: tools/call, params: {name: update_track_genre, arguments: {track_id: 999, genre: Techno}}}
+  - name: update genre without a track id (argument errors are brief)
+    deviation: {id: D-22, b_status: 200}
+    mcp: {method: tools/call, params: {name: update_track_genre, arguments: {genre: Techno}}}
+  - name: update info
+    mcp: {method: tools/call, params: {name: update_track_info, arguments: {track_id: 13, title: Renamed, year: 2001}}}
+  - name: update info of a missing track
+    mcp: {method: tools/call, params: {name: update_track_info, arguments: {track_id: 999, title: x}}}
+
+  # setlists
+  - name: list setlists
+    mcp: {method: tools/call, params: {name: list_setlists, arguments: {}}}
+  - name: setlist entries
+    mcp: {method: tools/call, params: {name: get_setlist_tracks, arguments: {setlist_id: 1}}}
+  - name: entries of a missing setlist
+    mcp: {method: tools/call, params: {name: get_setlist_tracks, arguments: {setlist_id: 99}}}
+  - name: create setlist
+    mcp: {method: tools/call, params: {name: create_setlist, arguments: {name: MCP set}}}
+  - name: rename setlist
+    mcp: {method: tools/call, params: {name: rename_setlist, arguments: {setlist_id: 4, name: MCP set 2}}}
+  - name: rename a missing setlist
+    mcp: {method: tools/call, params: {name: rename_setlist, arguments: {setlist_id: 99, name: x}}}
+  - name: set tracks by id
+    mcp: {method: tools/call, params: {name: set_setlist_tracks, arguments: {setlist_id: 4, track_ids: [1, 2, 3]}}}
+  - name: add a track at a position
+    mcp: {method: tools/call, params: {name: add_track_to_setlist, arguments: {setlist_id: 4, track_id: 5, position: 1}}}
+  - name: add a track at the end
+    mcp: {method: tools/call, params: {name: add_track_to_setlist, arguments: {setlist_id: 4, track_id: 8}}}
+  - name: remove a track
+    mcp: {method: tools/call, params: {name: remove_track_from_setlist, arguments: {setlist_id: 4, track_id: 2}}}
+  - name: remove a track that is not there
+    mcp: {method: tools/call, params: {name: remove_track_from_setlist, arguments: {setlist_id: 4, track_id: 12}}}
+  - name: entries after the edits
+    mcp: {method: tools/call, params: {name: get_setlist_tracks, arguments: {setlist_id: 4}}}
+  - name: set tracks by entry data
+    mcp: {method: tools/call, params: {name: set_setlist_tracks, arguments: {setlist_id: 4, track_data: [{track_id: 3}, {track_id: 1, transition_note: cut}]}}}
+  - name: set tracks with neither list
+    mcp: {method: tools/call, params: {name: set_setlist_tracks, arguments: {setlist_id: 4}}}
+  - name: validate export
+    mcp: {method: tools/call, params: {name: validate_setlist_export, arguments: {setlist_id: 1}}}
+  - name: export m3u8
+    mcp: {method: tools/call, params: {name: export_setlist_m3u8, arguments: {setlist_id: 2}}}
+  - name: export a missing setlist
+    mcp: {method: tools/call, params: {name: export_setlist_m3u8, arguments: {setlist_id: 99}}}
+  - name: add with wordplay
+    mcp: {method: tools/call, params: {name: add_track_to_setlist_with_wordplay, arguments: {setlist_id: 4, track_id: 4, keyword: night, source_phrase: into the night, target_phrase: night falls, from_timestamp: 10.5, to_timestamp: 20}}}
+  - name: entries with wordplay
+    mcp: {method: tools/call, params: {name: get_setlist_tracks, arguments: {setlist_id: 4}}}
+  - name: update entry wordplay
+    mcp: {method: tools/call, params: {name: update_setlist_track_wordplay, arguments: {setlist_track_id: 2, wordplay: {keyword: blend, note: x}}}}
+  - name: clear entry wordplay
+    mcp: {method: tools/call, params: {name: clear_setlist_track_wordplay, arguments: {setlist_track_id: 2}}}
+  - name: update wordplay of a missing entry
+    mcp: {method: tools/call, params: {name: update_setlist_track_wordplay, arguments: {setlist_track_id: 999, wordplay: {keyword: x}}}}
+  - name: recommend next
+    mcp: {method: tools/call, params: {name: recommend_next_track, arguments: {track_id: 1, limit: 5}}}
+  - name: recommend next page
+    mcp: {method: tools/call, params: {name: recommend_next_track_page, arguments: {track_id: 1, limit: 3, offset: 1}}}
+  - name: bridge setlist
+    mcp: {method: tools/call, params: {name: generate_bridge_setlist, arguments: {start_track_id: 1, end_track_id: 5, length: 3}}}
+  - name: delete setlist
+    mcp: {method: tools/call, params: {name: delete_setlist, arguments: {setlist_id: 4}}}
+  - name: delete a missing setlist
+    mcp: {method: tools/call, params: {name: delete_setlist, arguments: {setlist_id: 4}}}
+
+  # genres
+  - name: genres
+    mcp: {method: tools/call, params: {name: list_genres, arguments: {}}}
+  - name: subgenres
+    mcp: {method: tools/call, params: {name: list_subgenres, arguments: {}}}
+  - name: unknown genre tracks
+    mcp: {method: tools/call, params: {name: get_unknown_genre_tracks, arguments: {limit: 5}}}
+  - name: unknown subgenre tracks
+    mcp: {method: tools/call, params: {name: get_unknown_genre_tracks, arguments: {mode: subgenre}}}
+  - name: unknown tracks with a bad mode
+    mcp: {method: tools/call, params: {name: get_unknown_genre_tracks, arguments: {mode: bogus}}}
+  - name: analysis context
+    mcp: {method: tools/call, params: {name: get_genre_analysis_context, arguments: {track_ids: [1, 2], mode: both}}}
+  - name: apply one analysis
+    mcp: {method: tools/call, params: {name: apply_genre_analysis, arguments: {track_id: 2, genre: House, subgenre: Deep House, confidence: High, reason: test}}}
+  - name: apply analyses
+    mcp: {method: tools/call, params: {name: apply_genre_analyses, arguments: {analyses: [{track_id: 6, genre: Techno, subgenre: Peak Time}, {track_id: 999, genre: House}]}}}
+  - name: cleanup suggestions
+    mcp: {method: tools/call, params: {name: get_genre_cleanup_suggestions, arguments: {}}}
+  - name: similar genre suggestions
+    mcp: {method: tools/call, params: {name: get_similar_genre_suggestions, arguments: {track_id: 1}}}
+  - name: similar genre suggestions with a threshold
+    mcp: {method: tools/call, params: {name: get_similar_genre_suggestions, arguments: {track_id: 3, threshold: 0.5}}}
+  - name: similar genre suggestions without a track (argument errors are brief)
+    deviation: {id: D-22, b_status: 200}
+    mcp: {method: tools/call, params: {name: get_similar_genre_suggestions, arguments: {}}}
+
+  # lyrics
+  - name: lyrics of a track
+    mcp: {method: tools/call, params: {name: get_track_lyrics, arguments: {track_id: 1}}}
+  - name: lyrics of a track without lyrics
+    mcp: {method: tools/call, params: {name: get_track_lyrics, arguments: {track_id: 3}}}
+  - name: search lyrics
+    mcp: {method: tools/call, params: {name: search_lyrics, arguments: {q: night}}}
+  - name: search lyrics excluding a track
+    mcp: {method: tools/call, params: {name: search_lyrics, arguments: {q: night, exclude_track_id: 1}}}
+  - name: wordplay links
+    mcp: {method: tools/call, params: {name: find_wordplay_links, arguments: {track_id: 1, keywords: [night, a, Night, dance]}}}
+  - name: register lyrics
+    mcp: {method: tools/call, params: {name: register_track_lyrics, arguments: {track_id: 3, content: "line one\nline two", language: en}}}
+  - name: register lyrics over existing ones
+    mcp: {method: tools/call, params: {name: register_track_lyrics, arguments: {track_id: 1, content: replaced}}}
+  - name: register a batch
+    mcp: {method: tools/call, params: {name: register_track_lyrics_batch, arguments: {items: [{track_id: 5, content: five}, {track_id: 999, content: nope}], overwrite: true}}}
+
+  # wordplay registry
+  - name: list pairs
+    mcp: {method: tools/call, params: {name: list_wordplay_pairs, arguments: {}}}
+  - name: list pending pairs
+    mcp: {method: tools/call, params: {name: list_wordplay_pairs, arguments: {status: pending, limit: 2}}}
+  - name: list pairs by source and query
+    mcp: {method: tools/call, params: {name: list_wordplay_pairs, arguments: {from_track_id: 1, query: night}}}
+  - name: propose pairs
+    mcp: {method: tools/call, params: {name: propose_wordplay_pairs, arguments: {pairs: [{from_track_id: 5, to_track_id: 6, keyword: Lights, source_phrase: the lights, target_phrase: lights out}]}}}
+  - name: propose nothing
+    mcp: {method: tools/call, params: {name: propose_wordplay_pairs, arguments: {pairs: []}}}
+  - name: approve a pair
+    mcp: {method: tools/call, params: {name: approve_wordplay_pair, arguments: {pair_id: 3}}}
+  - name: approve a missing pair
+    mcp: {method: tools/call, params: {name: approve_wordplay_pair, arguments: {pair_id: 999}}}
+  - name: reject a pair
+    mcp: {method: tools/call, params: {name: reject_wordplay_pair, arguments: {pair_id: 4}}}
+  - name: reject a missing pair
+    mcp: {method: tools/call, params: {name: reject_wordplay_pair, arguments: {pair_id: 4}}}
+
+  # assist
+  - name: assist state
+    mcp: {method: tools/call, params: {name: assist_get_state, arguments: {}}}
+  - name: assist clear
+    mcp: {method: tools/call, params: {name: assist_clear_tracks, arguments: {}}}

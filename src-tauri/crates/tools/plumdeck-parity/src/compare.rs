@@ -39,6 +39,9 @@ pub enum ToleranceMode {
     Rel,
     /// `|a - b| <= value`.
     Abs,
+    /// Any value of the same JSON kind (generated ids such as uuid4,
+    /// random file names): only presence and kind compare.
+    Generated,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -157,6 +160,13 @@ impl JsonComparer {
     }
 
     fn walk(&self, a: &Value, b: &Value, path: &mut Vec<Seg>, out: &mut Vec<String>) {
+        if self.rule_for(path).is_some_and(|rule| rule.mode == ToleranceMode::Generated) {
+            let kind = |v: &Value| std::mem::discriminant(v);
+            if kind(a) != kind(b) {
+                out.push(format!("{}: {} vs {} (generated: kinds differ)", render(path), short(a), short(b)));
+            }
+            return;
+        }
         match (a, b) {
             (Value::Object(ma), Value::Object(mb)) => {
                 for key in ma.keys().filter(|k| !mb.contains_key(*k)) {
@@ -207,6 +217,7 @@ impl JsonComparer {
             ToleranceMode::F32 => (fa as f32) == (fb as f32),
             ToleranceMode::Rel => (fa - fb).abs() <= mode.1 * fa.abs().max(fb.abs()),
             ToleranceMode::Abs => (fa - fb).abs() <= mode.1,
+            ToleranceMode::Generated => true,
         };
         (!equal).then(|| format!("{a} vs {b} ({:?})", mode.0))
     }

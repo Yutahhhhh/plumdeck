@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use lofty::config::WriteOptions;
+use lofty::config::{ParseOptions, WriteOptions};
 use lofty::file::TaggedFileExt;
 use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::probe::Probe;
@@ -29,7 +29,10 @@ fn rich_format(path: &Path) -> bool {
 }
 
 fn edit(path: &Path, change: impl FnOnce(&mut Tag)) -> Result<(), String> {
-    let mut tagged = Probe::open(path).and_then(|probe| probe.read()).map_err(|error| error.to_string())?;
+    // Tags only: mutagen edits files whose audio properties do not parse
+    // (no decodable stream), so lofty must not require them either.
+    let options = ParseOptions::new().read_properties(false);
+    let mut tagged = Probe::open(path).and_then(|probe| probe.options(options).read()).map_err(|error| error.to_string())?;
     let kind = tagged.primary_tag_type();
     if tagged.primary_tag_mut().is_none() {
         tagged.insert_tag(Tag::new(kind));
@@ -86,4 +89,18 @@ pub fn write_lyrics_and_art(path: &Path, lyrics: Option<&str>, artwork: Option<&
         }
     })
     .is_ok()
+}
+
+#[cfg(test)]
+mod scratch_probe {
+    #[test]
+    fn probe_env_file() {
+        let Ok(path) = std::env::var("PROBE_FILE") else { return };
+        let r = super::edit(std::path::Path::new(&path), |tag| {
+            tag.push_picture(lofty::picture::Picture::unchecked(vec![1, 2, 3]).pic_type(lofty::picture::PictureType::CoverFront).mime_type(lofty::picture::MimeType::Jpeg).build());
+        });
+        eprintln!("PROBE {r:?}");
+        let r = super::edit(std::path::Path::new(&path), |tag| { lofty::tag::Accessor::set_title(tag, "x".into()); });
+        eprintln!("PROBE2 {r:?}");
+    }
 }

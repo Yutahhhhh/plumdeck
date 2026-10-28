@@ -3,10 +3,11 @@
 //!
 //! One decode at 11.025 kHz mono feeds the rhythm (whole track), key and
 //! timbre (a centred 30-second window) and the 500-point overview waveform.
-//! Embeddings are not computed here yet (W1-27/W1-28): the `embedding`
-//! component answers an error so the caller can fall back.
+//! The `embedding` component decodes separately at 16 kHz for MusiCNN
+//! (see [`musicnn`]).
 
 pub mod dsp;
+pub mod musicnn;
 
 use std::io::{BufRead, Write};
 #[allow(unused_imports)]
@@ -141,14 +142,31 @@ pub fn analyze_selected(path: &str, features: &[String], progress: Progress<'_>)
     if features.is_empty() || features.iter().any(|f| !KNOWN.contains(&f.as_str())) {
         return Err("Unknown or empty analysis components".into());
     }
-    if features.iter().any(|f| f == "embedding") {
-        return Err("embedding is not available in the Rust analyzer yet".into());
-    }
-    let audio = decode(path)?;
-    let (excerpt, _) = window(&audio);
     let mut result = Map::new();
     let mut extra = Map::new();
     let mut components = Map::new();
+    if features.iter().any(|f| f == "embedding") {
+        progress("decode", "類似曲検索用に音源を読み込んでいます（16kHz）".into());
+        let pcm = plumdeck_decode::decode_mono(Path::new(path), plumdeck_decode::Basis::Canonical, Some(musicnn::SAMPLE_RATE as u32), (dsp::MAX_SECONDS + 1) as f64)
+            .map_err(|error| format!("音声をデコードできません: {error}"))?;
+        if pcm.samples.is_empty() || pcm.samples.iter().any(|x| !x.is_finite()) {
+            return Err("Audio is empty or contains non-finite samples".into());
+        }
+        let mut embedding = musicnn::embed(&pcm.samples, &mut *progress)?;
+        if let Some(Value::Object(more)) = embedding.get_mut("features_extra").map(Value::take) {
+            extra.extend(more);
+        }
+        result.insert("embedding".into(), embedding["embedding"].take());
+        result.insert("embedding_model".into(), embedding["embedding_model"].take());
+        components.insert("embedding".into(), json!(musicnn::PIPELINE_VERSION));
+        if features.len() == 1 {
+            extra.insert("analysis_components".into(), Value::Object(components));
+            result.insert("features_extra".into(), Value::Object(extra));
+            return Ok(Value::Object(result));
+        }
+    }
+    let audio = decode(path)?;
+    let (excerpt, _) = window(&audio);
     let (bpm_hint, _, tonic, scale, _) = dsp::rhythm_and_key(excerpt)?;
     let mut confidence = None;
     if features.iter().any(|f| f == "rhythm") {

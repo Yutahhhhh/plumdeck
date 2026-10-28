@@ -75,7 +75,11 @@ pub fn start(
                     }
                 };
                 let state = AppState::new(library.db.clone(), cors);
-                state.analysis.jobs.launch_next();
+                let jobs = state.analysis.jobs.clone();
+                tokio::task::spawn_blocking(move || {
+                    jobs.launch_next();
+                    jobs.enqueue_missing_embeddings();
+                });
                 let mut shutdown = stopped.clone();
                 let mut server = tokio::spawn(serve(listener, state, async move {
                     let _ = shutdown.wait_for(|stop| *stop).await;

@@ -1,0 +1,247 @@
+# S6: the Assist routes (backend/api/routers/assist.py) on the sets
+# fixture. The parity sides have no rekordbox master.db (PLUMDECK_REKORDBOX_DB
+# points at a missing file), so every path that needs the collection answers
+# its "unavailable" note; the steps cover what is decided before that read:
+# request validation (422s), unknown tracks (404s), the early notes (scope,
+# BPM, year, wordplay, filters, transition), filter descriptions, the
+# artist list, deck resolution without a library, and the in-memory window
+# and agent bridge.
+name: s6-assist
+db: fixture
+fixture: sets
+freeze_now: "2026-05-01 12:34:56.789012"
+steps:
+  - name: library status without master.db
+    expect_status: 200
+    http: {method: GET, path: /api/assist/library-status}
+  - name: artists, most tracks first
+    expect_status: 200
+    http: {method: GET, path: /api/assist/artists}
+
+  # ---------------------------------------------------------- decks/resolve
+  - name: resolve with no decks
+    expect_status: 200
+    http: {method: POST, path: /api/assist/decks/resolve, body: {}}
+  - name: resolve empty, unloaded and loaded decks
+    expect_status: 200
+    http:
+      method: POST
+      path: /api/assist/decks/resolve
+      body:
+        decks:
+          - {slot: 1, loaded: false}
+          - {slot: 2, loaded: true, title: "  ", artist: x}
+          - {slot: 3, loaded: true, title: Alpha Song, artist: DJ Alpha, track_bpm: 124, tempo_bpm: 125.5, display_key: 4A}
+          - {slot: 4, loaded: true, title: Unknown}
+        open_audio_paths: ["{media}/id3v23.mp3", "/elsewhere/x.wav"]
+  - name: resolve rejects a slot out of range
+    expect_status: 422
+    http: {method: POST, path: /api/assist/decks/resolve, body: {decks: [{slot: 5}]}}
+  - name: resolve rejects unknown keys
+    expect_status: 422
+    http: {method: POST, path: /api/assist/decks/resolve, body: {decks: [{slot: 1, bogus: 1}]}}
+  - name: resolve rejects more than four decks
+    expect_status: 422
+    http: {method: POST, path: /api/assist/decks/resolve, body: {decks: [{slot: 1}, {slot: 2}, {slot: 3}, {slot: 4}, {slot: 1}]}}
+  - name: resolve rejects a top-level unknown key
+    expect_status: 422
+    http: {method: POST, path: /api/assist/decks/resolve, body: {decks: [], extra: true}}
+  - name: resolve without a body
+    expect_status: 422
+    http: {method: POST, path: /api/assist/decks/resolve}
+
+  # -------------------------------------------------------- recommendations
+  - name: recommend without master.db
+    expect_status: 200
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 1}}
+  - name: recommend hype with filters and tolerance
+    expect_status: 200
+    http:
+      method: POST
+      path: /api/assist/recommendations
+      body: {source_track_id: 1, intent: hype, tempo_tolerance: 4, limit: 3, exclude_track_ids: [3, 99],
+             filters: {bpm_min: 100, bpm_max: 140, genres: [house, Techno], keys: [8A, "F minor"], year_min: 1990, query: a}}
+  - name: recommend legacy groove intent
+    expect_status: 200
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 4, intent: groove, transition: true}}
+  - name: recommend wordplay with approved pairs
+    expect_status: 200
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 1, intent: wordplay, transition: true, tempo_tolerance: 2}}
+  - name: recommend wordplay without pairs
+    expect_status: 200
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 4, intent: wordplay}}
+  - name: recommend from an unanalysed BPM
+    expect_status: 200
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 7, intent: calm}}
+  - name: recommend from an unanalysed BPM, wordplay
+    expect_status: 200
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 7, intent: wordplay}}
+  - name: throwback needs a year
+    expect_status: 200
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 3, intent: throwback}}
+  - name: throwback with a year
+    expect_status: 200
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 6, intent: throwback}}
+  - name: same genre with no genre
+    expect_status: 200
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 13, genre_scope: same_genre}}
+  - name: same subgenre with no subgenre
+    expect_status: 200
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 2, genre_scope: same_subgenre}}
+  - name: same genre with a genre
+    expect_status: 200
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 1, genre_scope: same_genre, intent: dance}}
+  - name: filters that match nothing
+    expect_status: 200
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 1, filters: {artists: [nobody here]}}}
+  - name: filters by artist and subgenre
+    expect_status: 200
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 1, intent: emotional, filters: {artists: [dj], subgenres: [deep house]}}}
+  - name: transition with no partner
+    expect_status: 200
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 1, transition: true, filters: {bpm_min: 300}}}
+  - name: transition with partners
+    expect_status: 200
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 2, intent: bright, transition: true}}
+  - name: recommend an unknown track
+    expect_status: 404
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 999}}
+  - name: recommend an unknown intent
+    expect_status: 422
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 1, intent: party}}
+  - name: recommend a limit out of range
+    expect_status: 422
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 1, limit: 51}}
+  - name: recommend a bad tolerance
+    expect_status: 422
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 1, tempo_tolerance: 0}}
+  - name: recommend a bad scope
+    expect_status: 422
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 1, genre_scope: other}}
+  - name: recommend bad filter bpm
+    expect_status: 422
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 1, filters: {bpm_min: 500}}}
+  - name: recommend unknown filter key
+    expect_status: 422
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 1, filters: {mood: x}}}
+  - name: recommend reversed bpm range
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 1, filters: {bpm_min: 140, bpm_max: 120}}}
+  - name: recommend reversed year range
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 1, filters: {year_min: 2020, year_max: 2000}}}
+  - name: recommend an unknown key filter
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 1, filters: {keys: [H major]}}}
+  - name: recommend with genres list
+    expect_status: 200
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: 1, genres: [House]}}
+  - name: recommend needs a source
+    expect_status: 422
+    http: {method: POST, path: /api/assist/recommendations, body: {}}
+  - name: recommend with a string source id
+    http: {method: POST, path: /api/assist/recommendations, body: {source_track_id: "2"}}
+
+  # ----------------------------------------------------------------- routes
+  - name: route without master.db
+    expect_status: 200
+    http: {method: POST, path: /api/assist/routes, body: {source_track_id: 1, target_track_id: 4}}
+  - name: route with transition
+    expect_status: 200
+    http: {method: POST, path: /api/assist/routes, body: {source_track_id: 1, target_track_id: 4, transition: true, max_intermediate: 0, limit: 5}}
+  - name: route wordplay
+    expect_status: 200
+    http: {method: POST, path: /api/assist/routes, body: {source_track_id: 1, target_track_id: 999, intent: wordplay, max_intermediate: 3}}
+  - name: route to itself
+    expect_status: 200
+    http: {method: POST, path: /api/assist/routes, body: {source_track_id: 2, target_track_id: 2, transition: true}}
+  - name: route unknown source
+    expect_status: 404
+    http: {method: POST, path: /api/assist/routes, body: {source_track_id: 999, target_track_id: 2}}
+  - name: route unknown target
+    expect_status: 404
+    http: {method: POST, path: /api/assist/routes, body: {source_track_id: 2, target_track_id: 999}}
+  - name: route too many intermediates
+    expect_status: 422
+    http: {method: POST, path: /api/assist/routes, body: {source_track_id: 1, target_track_id: 2, max_intermediate: 5}}
+  - name: route bad filters
+    expect_status: 422
+    http: {method: POST, path: /api/assist/routes, body: {source_track_id: 1, target_track_id: 2, filters: {year_min: 1800}}}
+  - name: route needs a target
+    expect_status: 422
+    http: {method: POST, path: /api/assist/routes, body: {source_track_id: 1}}
+
+  # ----------------------------------------------------------------- search
+  - name: search with no conditions
+    expect_status: 200
+    http: {method: POST, path: /api/assist/search, body: {}}
+  - name: search without master.db
+    expect_status: 200
+    http: {method: POST, path: /api/assist/search, body: {filters: {genres: [house]}, limit: 5}}
+  - name: search that matches nothing
+    expect_status: 200
+    http: {method: POST, path: /api/assist/search, body: {filters: {query: zzzz-nothing}}}
+  - name: search excluding the matches
+    expect_status: 200
+    http: {method: POST, path: /api/assist/search, body: {filters: {artists: [DJ Alpha]}, exclude_track_ids: [1]}}
+  - name: search with a full filter
+    expect_status: 200
+    http: {method: POST, path: /api/assist/search, body: {filters: {bpm_min: 60.5, bpm_max: 180, keys: [4a, 8B], year_min: 1900, year_max: 2100, subgenres: [liquid], query: "  M4A "}}}
+  - name: search bad limit
+    expect_status: 422
+    http: {method: POST, path: /api/assist/search, body: {limit: 0}}
+  - name: search unknown key
+    expect_status: 422
+    http: {method: POST, path: /api/assist/search, body: {bogus: 1}}
+  - name: search reversed range
+    http: {method: POST, path: /api/assist/search, body: {filters: {bpm_min: 150, bpm_max: 100}}}
+
+  # ---------------------------------------------------------- window/agent
+  - name: agent before anything
+    expect_status: 200
+    http: {method: GET, path: /api/assist/agent}
+  - name: report the window
+    expect_status: 200
+    http: {method: PUT, path: /api/assist/window, body: {deck_slot: 2, source_track_id: 1, intent: hype, shown_track_ids: [3, 4], filters: {genres: [House]}}}
+  - name: report an empty window
+    expect_status: 200
+    http: {method: PUT, path: /api/assist/window, body: {}}
+  - name: report a bad window
+    expect_status: 422
+    http: {method: PUT, path: /api/assist/window, body: {deck_slot: 0}}
+  - name: report a window with an unknown key
+    expect_status: 422
+    http: {method: PUT, path: /api/assist/window, body: {extra: 1}}
+  - name: dismiss with no list
+    expect_status: 200
+    http: {method: DELETE, path: /api/assist/agent/list}
+  - name: agent after dismiss
+    expect_status: 200
+    http: {method: GET, path: /api/assist/agent}
+  - name: agent applies settings
+    mcp: {method: tools/call, params: {name: assist_apply_settings, arguments: {intent: groove, transition: true, limit: 99, filters: {genres: [House], year_min: 2000}, agent_name: Test Agent}}}
+  - name: agent applies a bad scope
+    mcp: {method: tools/call, params: {name: assist_apply_settings, arguments: {genre_scope: everywhere}}}
+  - name: agent shows tracks
+    mcp: {method: tools/call, params: {name: assist_show_tracks, arguments: {title: "  Picks  ", note: " two lines ", tracks: [{track_id: 1, reason: " warm "}, {track_id: 999}, {track_id: 3, reason: ""}]}}}
+  - name: agent shows a bad track
+    mcp: {method: tools/call, params: {name: assist_show_tracks, arguments: {tracks: [{reason: x}]}}}
+  - name: window sees the agent's settings and list
+    expect_status: 200
+    http: {method: GET, path: /api/assist/agent}
+  - name: agent reads the window
+    mcp: {method: tools/call, params: {name: assist_get_state, arguments: {}}}
+  - name: window dismisses the list
+    expect_status: 200
+    http: {method: DELETE, path: /api/assist/agent/list}
+  - name: dismissing twice keeps the revision
+    expect_status: 200
+    http: {method: DELETE, path: /api/assist/agent/list}
+  - name: agent after the dismissal
+    expect_status: 200
+    http: {method: GET, path: /api/assist/agent}
+  - name: agent clears an empty list
+    mcp: {method: tools/call, params: {name: assist_clear_tracks, arguments: {}}}
+# The bridge stamps time.time(), which the oracle does not freeze (B uses
+# its frozen clock): those numbers are not compared, everything else is.
+compare_overrides:
+  tolerances:
+    - {path: "$..created_at", mode: abs, value: 1.0e+12}
+    - {path: "$..reported_seconds_ago", mode: abs, value: 1.0e+12}

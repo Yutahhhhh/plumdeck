@@ -18,9 +18,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": [
-      "bin/plumdeck-server"
-    ],
     "resources": [],
     "macOS": {
       "entitlements": "Entitlements.plist"

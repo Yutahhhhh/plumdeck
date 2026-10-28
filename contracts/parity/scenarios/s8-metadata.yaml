@@ -1,0 +1,125 @@
+# S8: metadata jobs and tag writing (backend/api/routers/metadata.py,
+# filesystem.py PATCH /api/metadata/update, genres.py apply-to-files) on
+# the S3 library. Only paths that make no network request run: jobs over
+# no matching track, cancel, the skip cache, validation and 404s. Both
+# sides write the same shared synthetic media, so each write is followed
+# by GET /api/metadata: Python reading what Rust wrote must agree with
+# Rust reading it. Time is frozen so every `now` agrees.
+name: s8-metadata
+db: fixture
+fixture: library
+freeze_now: "2026-05-01 12:34:56.789012"
+steps:
+  - name: lyrics job over no track
+    expect_status: 200
+    http: {method: POST, path: /api/metadata/update, body: {type: lyrics, track_ids: []}}
+  - name: release-date job over tracks that already have a year
+    expect_status: 200
+    http: {method: POST, path: /api/metadata/update, body: {type: release_date, track_ids: [1, 4, 999]}}
+  - name: unknown job type over no track
+    expect_status: 200
+    http: {method: POST, path: /api/metadata/update, body: {type: other, overwrite: true, track_ids: [999]}}
+  - name: job needs a type
+    expect_status: 422
+    http: {method: POST, path: /api/metadata/update, body: {}}
+  - name: job with a bad overwrite
+    expect_status: 422
+    http: {method: POST, path: /api/metadata/update, body: {type: lyrics, overwrite: maybe}}
+  - name: job with bad ids
+    expect_status: 422
+    http: {method: POST, path: /api/metadata/update, body: {type: lyrics, track_ids: [a]}}
+  - name: job without a body
+    expect_status: 422
+    http: {method: POST, path: /api/metadata/update}
+  - name: cancel
+    expect_status: 200
+    http: {method: POST, path: /api/metadata/cancel}
+  - name: clear one cache
+    expect_status: 200
+    http: {method: POST, path: /api/metadata/clear-cache, body: {update_type: lyrics}}
+  - name: clear an unknown cache
+    expect_status: 200
+    http: {method: POST, path: /api/metadata/clear-cache, body: {update_type: nope}}
+  - name: clear every cache
+    expect_status: 200
+    http: {method: POST, path: /api/metadata/clear-cache}
+  - name: clear with a bad type
+    expect_status: 422
+    http: {method: POST, path: /api/metadata/clear-cache, body: {update_type: 5}}
+  - name: single lyrics for a missing track
+    expect_status: 404
+    http: {method: POST, path: /api/metadata/fetch-lyrics-single, body: {track_id: 999}}
+  - name: single lyrics needs a track
+    expect_status: 422
+    http: {method: POST, path: /api/metadata/fetch-lyrics-single, body: {}}
+  - name: single lyrics bad id
+    expect_status: 422
+    http: {method: POST, path: /api/metadata/fetch-lyrics-single, body: {track_id: x}}
+  - name: artwork for a missing track
+    expect_status: 404
+    http: {method: POST, path: /api/metadata/fetch-artwork-info, body: {track_id: 999}}
+  - name: artwork needs a track
+    expect_status: 422
+    http: {method: POST, path: /api/metadata/fetch-artwork-info, body: {}}
+  - name: write lyrics into an ID3 file
+    expect_status: 200
+    http: {method: PATCH, path: /api/metadata/update, body: {track_id: 1, lyrics: "line one\nライン二"}}
+  - name: read the ID3 file back
+    expect_status: 200
+    http: {method: GET, path: /api/metadata, query: {track_id: 1}}
+  - name: write lyrics and artwork into a FLAC file
+    expect_status: 200
+    http: {method: PATCH, path: /api/metadata/update, body: {track_id: 3, lyrics: "flac words", artwork_data: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="}}
+  - name: read the FLAC file back
+    expect_status: 200
+    http: {method: GET, path: /api/metadata, query: {track_id: 3}}
+  - name: write artwork into an MP4 file
+    expect_status: 200
+    http: {method: PATCH, path: /api/metadata/update, body: {track_id: 4, artwork_data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="}}
+  - name: read the MP4 file back
+    expect_status: 200
+    http: {method: GET, path: /api/metadata, query: {track_id: 4}}
+  - name: write empty lyrics into an untagged FLAC
+    http: {method: PATCH, path: /api/metadata/update, body: {track_id: 11, lyrics: ""}}
+  - name: read the untagged FLAC back
+    http: {method: GET, path: /api/metadata, query: {track_id: 11}}
+  - name: nothing to write
+    expect_status: 200
+    http: {method: PATCH, path: /api/metadata/update, body: {track_id: 10}}
+  - name: write into a missing file
+    http: {method: PATCH, path: /api/metadata/update, body: {track_id: 10, lyrics: x}}
+  - name: write for a missing track
+    expect_status: 404
+    http: {method: PATCH, path: /api/metadata/update, body: {track_id: 999, lyrics: x}}
+  - name: write needs a track id
+    expect_status: 422
+    http: {method: PATCH, path: /api/metadata/update, body: {lyrics: x}}
+  - name: apply genres to some files
+    expect_status: 200
+    http: {method: POST, path: /api/genres/apply-to-files, body: {track_ids: [1, 2, 3, 4, 10, 999]}}
+  - name: read an ID3 file after apply
+    expect_status: 200
+    http: {method: GET, path: /api/metadata, query: {track_id: 1}}
+  - name: read the Unicode file after apply
+    expect_status: 200
+    http: {method: GET, path: /api/metadata, query: {track_id: 2}}
+  - name: read the FLAC file after apply
+    expect_status: 200
+    http: {method: GET, path: /api/metadata, query: {track_id: 3}}
+  - name: read the MP4 file after apply
+    expect_status: 200
+    http: {method: GET, path: /api/metadata, query: {track_id: 4}}
+  - name: apply genres to every file
+    expect_status: 200
+    http: {method: POST, path: /api/genres/apply-to-files, body: {track_ids: []}}
+  - name: read the WAV file after apply
+    http: {method: GET, path: /api/metadata, query: {track_id: 5}}
+  - name: read an ID3v1 file after apply
+    http: {method: GET, path: /api/metadata, query: {track_id: 6}}
+  - name: read the noise file after apply
+    http: {method: GET, path: /api/metadata, query: {track_id: 8}}
+  - name: read the upper-case file after apply
+    http: {method: GET, path: /api/metadata, query: {track_id: 12}}
+  - name: apply needs ids
+    expect_status: 422
+    http: {method: POST, path: /api/genres/apply-to-files, body: {}}

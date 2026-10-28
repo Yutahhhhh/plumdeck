@@ -92,7 +92,12 @@ pub async fn post(State(state): State<AppState>, headers: HeaderMap, body: Bytes
                 session.get_or_insert_with(|| uuid::Uuid::new_v4().simple().to_string());
                 Ok(json!({
                     "protocolVersion": version,
-                    "capabilities": {"prompts": {"listChanged": false}, "tools": {"listChanged": false}},
+                    "capabilities": {
+                        "experimental": {},
+                        "prompts": {"listChanged": false},
+                        "resources": {"subscribe": false, "listChanged": false},
+                        "tools": {"listChanged": false},
+                    },
                     "serverInfo": {"name": "plumdeck", "title": "plumdeck Music Library", "version": env!("CARGO_PKG_VERSION")},
                     "instructions": INSTRUCTIONS.trim_end(),
                 }))
@@ -110,6 +115,12 @@ pub async fn post(State(state): State<AppState>, headers: HeaderMap, body: Bytes
         };
         replies.push(match result {
             Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
+            // The SDK names the unknown method in `data`.
+            Err((-32601, message)) => {
+                let mut error = rpc_error(id, -32601, &message);
+                error["error"]["data"] = json!(method);
+                error
+            }
             Err((code, message)) => rpc_error(id, code, &message),
         });
     }
@@ -304,7 +315,16 @@ async fn run(state: &AppState, name: &str, a: &Value) -> ToolResult {
                 "max_energy", "min_danceability", "max_danceability", "min_brightness", "max_brightness", "min_year", "max_year", "year_status",
                 "lyrics_status", "lyrics", "status", "limit", "offset",
             ];
-            let pairs: Vec<(&str, Option<&Value>)> = keys.iter().map(|k| (*k, a.get(*k))).collect();
+            // The tool's own defaults (limit 50), not the HTTP route's.
+            let (limit_value, offset_value) = (json!(limit), json!(offset));
+            let pairs: Vec<(&str, Option<&Value>)> = keys
+                .iter()
+                .map(|k| match *k {
+                    "limit" => (*k, Some(&limit_value)),
+                    "offset" => (*k, Some(&offset_value)),
+                    _ => (*k, a.get(*k)),
+                })
+                .collect();
             let page = ok(state, Method::GET, &format!("/api/tracks/page{}", query(&pairs)), None).await?;
             let items = page["items"].as_array().cloned().unwrap_or_default();
             Ok(json!({
@@ -315,7 +335,19 @@ async fn run(state: &AppState, name: &str, a: &Value) -> ToolResult {
         "get_track_similar" => {
             let id = required_int(a, "track_id")?;
             let limit = int_arg(a, "limit")?.unwrap_or(20);
-            Ok(track_list(similar(state, id, limit).await?))
+            // TrackAppService.get_similar_tracks: the HTTP route's search; the
+            // tool serializes the model_dump dicts (no `lyrics`).
+            let (status, mut value) = api(state, Method::GET, &format!("/api/tracks/{id}/similar?limit={limit}"), None).await;
+            if status >= 400 {
+                // A ValueError (or any non-ToolError) is reported without its text.
+                return Err(None);
+            }
+            for item in value.as_array_mut().into_iter().flatten() {
+                if let Some(map) = item.as_object_mut() {
+                    map.remove("lyrics");
+                }
+            }
+            Ok(track_list(value))
         }
         "suggest_track_genre" => ok(state, Method::GET, &format!("/api/tracks/{}/suggest-genre", required_int(a, "track_id")?), None).await,
         "update_track_genre" => {
@@ -465,7 +497,15 @@ async fn run(state: &AppState, name: &str, a: &Value) -> ToolResult {
                 "target_intro_timestamp", "target_landing_timestamp",
             ] {
                 if let Some(value) = arg(a, key) {
-                    wordplay.insert(key.into(), value.clone());
+                    // Optional[float] parameters: pydantic hands json.dumps a float (20 -> 20.0).
+                    let value = match value {
+                        Value::Number(n) if key.ends_with("_timestamp") => n.as_f64().map_or_else(|| value.clone(), |x| json!(x)),
+                        Value::String(text) if key.ends_with("_timestamp") => {
+                            plumdeck_core::compat::text::py_strip(text).parse::<f64>().map_or_else(|_| value.clone(), |x| json!(x))
+                        }
+                        _ => value.clone(),
+                    };
+                    wordplay.insert(key.into(), value);
                 }
             }
             let mut entry = json!({"id": track});
@@ -504,18 +544,28 @@ async fn run(state: &AppState, name: &str, a: &Value) -> ToolResult {
         "list_subgenres" => Ok(json!({"subgenres": ok(state, Method::GET, "/api/genres/subgenres", None).await?})),
         "get_unknown_genre_tracks" => {
             let pairs = [("offset", a.get("offset")), ("limit", a.get("limit")), ("mode", a.get("mode"))];
-            Ok(track_list(ok(state, Method::GET, &format!("/api/genres/unknown{}", query(&pairs)), None).await?))
+            let mut items = ok(state, Method::GET, &format!("/api/genres/unknown{}", query(&pairs)), None).await?;
+            // serialize(Track): the table's columns, not the HTTP TrackRead extras.
+            for item in items.as_array_mut().into_iter().flatten() {
+                if let Some(map) = item.as_object_mut() {
+                    for key in ["is_analyzed", "lyrics", "has_lyrics"] {
+                        map.remove(key);
+                    }
+                }
+            }
+            Ok(track_list(items))
         }
+        "get_genre_analysis_context" => genre_context(state, a).await,
         "apply_genre_analysis" => {
             let id = required_int(a, "track_id")?;
+            let response = analysis_response(state, id, a).await?;
             let body = json!({
                 "analyses": [{"track_id": id, "genre": a.get("genre"), "subgenre": a.get("subgenre"),
                     "confidence": a.get("confidence").cloned().unwrap_or(json!("Medium")), "reason": a.get("reason").cloned().unwrap_or(json!(""))}],
                 "mode": a.get("mode").cloned().unwrap_or(json!("both")), "overwrite": a.get("overwrite").cloned().unwrap_or(json!(false)),
             });
-            let result = ok(state, Method::POST, "/api/genres/apply-analyses", Some(body)).await?;
-            let analysis = result.get("results").and_then(|r| r.get(0)).cloned().unwrap_or(result);
-            Ok(json!({"track_id": id, "analysis": analysis}))
+            ok(state, Method::POST, "/api/genres/apply-analyses", Some(body)).await?;
+            Ok(json!({"track_id": id, "analysis": response}))
         }
         "apply_genre_analyses" => {
             let body = json!({
@@ -542,7 +592,33 @@ async fn run(state: &AppState, name: &str, a: &Value) -> ToolResult {
         // ---- lyrics
         "get_track_lyrics" => {
             let id = required_int(a, "track_id")?;
-            ok(state, Method::GET, &format!("/api/tracks/{id}/lyrics"), None).await
+            let (status, mut value) = api(state, Method::GET, &format!("/api/tracks/{id}/lyrics"), None).await;
+            if status == 404 {
+                return Err(None); // ValueError("Lyrics not found ..."): text hidden
+            }
+            if status >= 400 {
+                return Err(None);
+            }
+            // serialize(Lyrics): every column, the keyword cache included.
+            let db = state.db.clone();
+            let cache = state
+                .blocking_result(move || -> Result<Vec<plumdeck_core::compat::pyjson::PyValue>, plumdeck_db::DbError> {
+                    let conn = db.lease()?;
+                    plumdeck_db::repos::rows::py_rows(
+                        &conn,
+                        "SELECT keywords_json, keywords_content_hash FROM lyrics WHERE track_id = ?",
+                        vec![plumdeck_db::duckdb::types::Value::BigInt(id)],
+                    )
+                })
+                .await
+                .map_err(|_| None)?
+                .map_err(|_| None)?;
+            if let (Some(map), Some(row)) = (value.as_object_mut(), cache.first()) {
+                if let Value::Object(extra) = py_to_json(row) {
+                    map.extend(extra);
+                }
+            }
+            Ok(value)
         }
         "search_lyrics" => {
             let pairs = [("q", a.get("q")), ("exclude_track_id", a.get("exclude_track_id"))];
@@ -570,28 +646,18 @@ async fn run(state: &AppState, name: &str, a: &Value) -> ToolResult {
             Ok(json!({"track_id": id, "keywords": keywords, "links": links}))
         }
         "register_track_lyrics" => {
-            let id = required_int(a, "track_id")?;
-            let body = json!({
-                "content": a.get("content"), "source": a.get("source").cloned().unwrap_or(json!("user")),
-                "language": a.get("language"), "overwrite": a.get("overwrite").cloned().unwrap_or(json!(false)),
+            let item = json!({
+                "track_id": a.get("track_id"), "content": a.get("content"),
+                "source": a.get("source").cloned().unwrap_or(json!("user")), "language": a.get("language"),
             });
-            let result = ok(state, Method::PUT, &format!("/api/tracks/{id}/lyrics"), Some(body)).await?;
-            Ok(result.get("results").and_then(|r| r.get(0)).cloned().unwrap_or(result))
+            let overwrite = a.get("overwrite").and_then(Value::as_bool).unwrap_or(false);
+            let result = register_lyrics(state, vec![item], overwrite).await?;
+            Ok(result["results"][0].clone())
         }
         "register_track_lyrics_batch" => {
-            let items = a["items"].as_array().cloned().unwrap_or_default();
-            if items.is_empty() || items.len() > 100 {
-                return Err(None);
-            }
-            let overwrite = a.get("overwrite").cloned().unwrap_or(json!(false));
-            let mut results = Vec::new();
-            for item in &items {
-                let id = item["track_id"].as_i64().ok_or(None)?;
-                let body = json!({"content": item["content"], "source": item.get("source").cloned().unwrap_or(json!("user")), "language": item.get("language"), "overwrite": overwrite});
-                let result = ok(state, Method::PUT, &format!("/api/tracks/{id}/lyrics"), Some(body)).await?;
-                results.push(result.get("results").and_then(|r| r.get(0)).cloned().unwrap_or(result));
-            }
-            Ok(json!({"results": results}))
+            let Some(Value::Array(items)) = a.get("items") else { return Err(Some("items: Field required".into())) };
+            let overwrite = a.get("overwrite").and_then(Value::as_bool).unwrap_or(false);
+            register_lyrics(state, items.clone(), overwrite).await
         }
         // ---- wordplay
         "list_wordplay_pairs" => {
@@ -782,7 +848,10 @@ async fn run(state: &AppState, name: &str, a: &Value) -> ToolResult {
                 .blocking_result(move || {
                     let conn = db.lease().map_err(|e| e.to_string())?;
                     let lookup = |seed: i64, limit: i64| -> Option<Vec<i64>> {
-                        similar_tracks(&conn, seed, limit, now).ok().map(|items| items.iter().filter_map(|t| t["id"].as_i64()).collect())
+                        // TrackRepository.get_similar_tracks: DuckDB's cosine order, NaN rows included.
+                        plumdeck_db::repos::tracks::similar_tracks(&conn, plumdeck_db::repos::tracks::BigInt(i128::from(seed)), plumdeck_db::repos::tracks::BigInt(i128::from(limit)))
+                            .ok()
+                            .map(|hits| hits.iter().map(|hit| hit.track.id).collect())
                     };
                     crate::routes::set_planner::plan(&conn, &phases, options, &lookup, now)
                 })
@@ -926,16 +995,244 @@ async fn assist_rank(state: &AppState, name: &str, a: &Value) -> ToolResult {
     Ok(result)
 }
 
-async fn similar(state: &AppState, id: i64, limit: i64) -> ToolResult {
+fn py_to_json(value: &plumdeck_core::compat::pyjson::PyValue) -> Value {
+    let text = plumdeck_core::compat::pyjson::dumps(value, &plumdeck_core::compat::pyjson::DumpOptions::compact_unicode_default_str()).unwrap_or_default();
+    serde_json::from_str(&text).unwrap_or(Value::Null)
+}
+
+/// `LyricsRegistration`: the pydantic checks of one item, briefly (D-22).
+fn lyrics_item(item: &Value) -> Result<(i64, String, String, Option<String>), Option<String>> {
+    let track_id = match item.get("track_id") {
+        Some(Value::Number(n)) if n.is_i64() => n.as_i64().unwrap_or(0),
+        Some(Value::Number(n)) if n.as_f64().is_some_and(|x| x.fract() == 0.0) => n.as_f64().unwrap_or(0.0) as i64,
+        Some(Value::String(s)) => s.trim().parse().map_err(|_| Some("track_id: Input should be a valid integer".to_owned()))?,
+        None | Some(Value::Null) => return Err(Some("track_id: Field required".into())),
+        Some(_) => return Err(Some("track_id: Input should be a valid integer".into())),
+    };
+    if track_id <= 0 {
+        return Err(Some("track_id: Input should be greater than 0".into()));
+    }
+    let text = |key: &str, default: Option<&str>, max: usize| -> Result<Option<String>, Option<String>> {
+        match item.get(key) {
+            None => Ok(default.map(str::to_owned)),
+            Some(Value::Null) if default.is_none() && key == "language" => Ok(None),
+            Some(Value::String(s)) => {
+                if s.chars().count() > max {
+                    return Err(Some(format!("{key}: String should have at most {max} characters")));
+                }
+                Ok(Some(s.clone()))
+            }
+            Some(_) => Err(Some(format!("{key}: Input should be a valid string"))),
+        }
+    };
+    let content = text("content", None, 200_000)?.ok_or_else(|| Some("content: Field required".to_owned()))?;
+    let source = text("source", Some("user"), 2048)?.unwrap_or_default();
+    let language = text("language", None, 64)?;
+    for (key, value) in [("content", &content), ("source", &source)] {
+        if value.is_empty() {
+            return Err(Some(format!("{key}: String should have at least 1 character")));
+        }
+        if plumdeck_core::compat::text::py_strip(value).is_empty() {
+            return Err(Some(format!("{key}: Value error, must not be blank")));
+        }
+    }
+    Ok((track_id, content, source, language))
+}
+
+/// `register_lyrics` (app/services/lyrics_app_service.py): the whole batch
+/// is validated before any write; existing lyrics are kept unless
+/// `overwrite`.
+async fn register_lyrics(state: &AppState, items: Vec<Value>, overwrite: bool) -> ToolResult {
+    let mut parsed = Vec::new();
+    for item in &items {
+        parsed.push(lyrics_item(item)?);
+    }
+    if parsed.is_empty() || parsed.len() > 100 {
+        return Err(None); // ValueError: the SDK hides its text
+    }
+    let mut seen = std::collections::HashSet::new();
+    if !parsed.iter().all(|item| seen.insert(item.0)) {
+        return Err(None); // ValueError("Duplicate track IDs are not allowed")
+    }
     let db = state.db.clone();
     let now = state.clock.now_naive();
     state
         .blocking_result(move || -> ToolResult {
-            let conn = db.lease().map_err(|_| None)?;
-            similar_tracks(&conn, id, limit, now).map(Value::Array).map_err(|_| None)
+            use plumdeck_db::duckdb::types::Value as Db;
+            let stamp = Db::Timestamp(plumdeck_db::duckdb::types::TimeUnit::Microsecond, now.and_utc().timestamp_micros());
+            db.write(|conn| {
+                for item in &parsed {
+                    if plumdeck_db::repos::rows::scalar_int(conn, "SELECT id FROM tracks WHERE id = ?", vec![Db::BigInt(item.0)])?.is_none() {
+                        return Ok(Err(None)); // ValueError("Track N not found")
+                    }
+                }
+                conn.execute_batch("BEGIN TRANSACTION")?;
+                let mut results = Vec::new();
+                for (track_id, content, source, language) in &parsed {
+                    let mut statement = conn.prepare("SELECT content, source, language FROM lyrics WHERE track_id = ?")?;
+                    let mut rows = statement.query([Db::BigInt(*track_id)])?;
+                    let existing: Option<(Option<String>, Option<String>, Option<String>)> = match rows.next()? {
+                        Some(row) => Some((row.get(0)?, row.get(1)?, row.get(2)?)),
+                        None => None,
+                    };
+                    let status = match &existing {
+                        Some((Some(c), _, _)) if !plumdeck_core::compat::text::py_strip(c).is_empty() && !overwrite => "skipped_existing",
+                        Some((c, s, l)) if c.as_deref() == Some(content.as_str()) && s.as_deref() == Some(source.as_str()) && l == language => "unchanged",
+                        Some(_) => "updated",
+                        None => "created",
+                    };
+                    match status {
+                        "updated" => {
+                            conn.execute(
+                                "UPDATE lyrics SET content = ?, source = ?, language = ?, keywords_json = NULL, keywords_content_hash = NULL, updated_at = ? WHERE track_id = ?",
+                                plumdeck_db::duckdb::params_from_iter(vec![
+                                    Db::Text(content.clone()), Db::Text(source.clone()),
+                                    language.clone().map_or(Db::Null, Db::Text), stamp.clone(), Db::BigInt(*track_id),
+                                ]),
+                            )?;
+                        }
+                        "created" => {
+                            conn.execute(
+                                "INSERT INTO lyrics (track_id, content, source, language, keywords_json, keywords_content_hash, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)",
+                                plumdeck_db::duckdb::params_from_iter(vec![
+                                    Db::BigInt(*track_id), Db::Text(content.clone()), Db::Text(source.clone()),
+                                    language.clone().map_or(Db::Null, Db::Text), stamp.clone(), stamp.clone(),
+                                ]),
+                            )?;
+                        }
+                        _ => {}
+                    }
+                    results.push(json!({"track_id": track_id, "status": status}));
+                }
+                conn.execute_batch("COMMIT")?;
+                Ok(Ok(json!({"count": results.len(), "results": results})))
+            })
+            .map_err(|_| None)?
         })
         .await
         .map_err(|_| None)?
+}
+
+/// `GenreAppService.apply_genre_analysis`'s answer (GenreAnalysisResponse),
+/// normalized against the library before the write.
+async fn analysis_response(state: &AppState, id: i64, a: &Value) -> ToolResult {
+    let db = state.db.clone();
+    let genre = a.get("genre").filter(|v| !v.is_null()).map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_owned));
+    let subgenre = a.get("subgenre").filter(|v| !v.is_null()).map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_owned));
+    let confidence = match a.get("confidence") {
+        None => "Medium".to_owned(),
+        Some(Value::String(s)) => s.clone(),
+        Some(other) => other.to_string(),
+    };
+    let reason = match a.get("reason") {
+        None | Some(Value::Null) => String::new(),
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Bool(b)) => if *b { "True".into() } else { String::new() },
+        Some(other) => other.to_string(),
+    };
+    state
+        .blocking_result(move || -> ToolResult {
+            use plumdeck_domain::genre_rules::{label_map, normalize_genre_label, normalize_subgenre_label};
+            let conn = db.lease().map_err(|_| None)?;
+            let Some(track) = plumdeck_db::repos::tracks::get_track(&conn, plumdeck_db::repos::tracks::BigInt(id as i128)).map_err(|_| None)? else {
+                return Err(None); // ValueError("Track not found")
+            };
+            let genre = match genre {
+                Some(value) => normalize_genre_label(&value, &label_map(&plumdeck_db::repos::genres::all_genres(&conn).map_err(|_| None)?)),
+                None => track.genre.clone().filter(|g| !g.is_empty()).unwrap_or_else(|| "Unknown".into()),
+            };
+            let subgenre = match subgenre {
+                Some(value) => normalize_subgenre_label(&value, &label_map(&plumdeck_db::repos::genres::all_subgenres(&conn).map_err(|_| None)?)),
+                None => track.subgenre.clone().unwrap_or_default(),
+            };
+            let confidence = py_title(plumdeck_core::compat::text::py_strip(&confidence));
+            let confidence = if ["High", "Medium", "Low"].contains(&confidence.as_str()) { confidence } else { "Low".to_owned() };
+            let reason = if reason.is_empty() { "Classified by the connected MCP client.".to_owned() } else { reason };
+            let reason: String = reason.chars().take(500).collect();
+            Ok(json!({"genre": genre, "subgenre": subgenre, "reason": reason, "confidence": confidence}))
+        })
+        .await
+        .map_err(|_| None)?
+}
+
+/// `str.title()` for the confidence labels.
+fn py_title(text: &str) -> String {
+    let mut out = String::new();
+    let mut previous_cased = false;
+    for c in text.chars() {
+        if previous_cased {
+            out.extend(c.to_lowercase());
+        } else {
+            out.extend(c.to_uppercase());
+        }
+        previous_cased = c.is_alphabetic();
+    }
+    out
+}
+
+const DJ_GENRE_GUIDE: &str = "DJ library taxonomy:\n\
+- Use the best-known public/catalog genre for the exact track when the title and artist are recognizable.\n\
+- Use one concise main genre and one concise subgenre when available.\n\
+- Do not choose a vague umbrella label when a more recognized specific genre is clearly known.\n\
+- Do not restrict yourself to any fixed genre list.";
+
+/// `GenreAppService.get_analysis_context`.
+async fn genre_context(state: &AppState, a: &Value) -> ToolResult {
+    let mode = a.get("mode").and_then(Value::as_str).unwrap_or("both").to_owned();
+    if !["genre", "subgenre", "both"].contains(&mode.as_str()) {
+        return Err(None); // ValueError: not a valid AnalysisMode
+    }
+    let ids: Vec<i64> = match a.get("track_ids") {
+        Some(Value::Array(items)) if !items.is_empty() => {
+            let mut ids = Vec::new();
+            for item in items {
+                ids.push(item.as_i64().ok_or_else(|| Some("track_ids: Input should be a valid integer".to_owned()))?);
+            }
+            ids.sort_unstable();
+            ids.dedup();
+            ids
+        }
+        _ => {
+            let (default_limit, mode_value) = (json!(50), json!(mode));
+            let pairs = [("offset", a.get("offset")), ("limit", a.get("limit").or(Some(&default_limit))), ("mode", Some(&mode_value))];
+            let items = ok(state, Method::GET, &format!("/api/genres/unknown{}", query(&pairs)), None).await?;
+            items.as_array().into_iter().flatten().filter_map(|t| t["id"].as_i64()).collect()
+        }
+    };
+    let genres = ok(state, Method::GET, "/api/genres/list", None).await?;
+    let subgenres = ok(state, Method::GET, "/api/genres/subgenres", None).await?;
+    let take = |value: &Value, n: usize| Value::Array(value.as_array().map(|v| v.iter().take(n).cloned().collect()).unwrap_or_default());
+    let db = state.db.clone();
+    let tracks = state
+        .blocking_result(move || -> ToolResult {
+            let conn = db.lease().map_err(|_| None)?;
+            let mut tracks = Vec::new();
+            for id in ids {
+                let Some(t) = plumdeck_db::repos::tracks::get_track(&conn, plumdeck_db::repos::tracks::BigInt(id as i128)).map_err(|_| None)? else { continue };
+                tracks.push(json!({
+                    "id": t.id, "title": t.title, "artist": t.artist, "album": t.album, "year": t.year, "bpm": t.bpm, "key": t.key,
+                    "energy": t.energy, "danceability": t.danceability, "brightness": t.brightness, "noisiness": t.noisiness,
+                    "genre": t.genre, "subgenre": t.subgenre, "is_genre_verified": t.is_genre_verified,
+                }));
+            }
+            Ok(Value::Array(tracks))
+        })
+        .await
+        .map_err(|_| None)??;
+    Ok(json!({
+        "mode": mode,
+        "taxonomy_guide": DJ_GENRE_GUIDE,
+        "rules": [
+            "Use English genre labels.",
+            "Choose one dominant genre and one concise subgenre when applicable.",
+            "Do not include edit labels such as Intro, Clean, Dirty, or Extended.",
+            "Reuse the library vocabulary when it fits; introduce a label only when needed.",
+            "Use confidence High, Medium, or Low. Do not mark uncertain guesses as High.",
+        ],
+        "existing_genres": take(&genres, 60),
+        "existing_subgenres": take(&subgenres, 80),
+        "tracks": tracks,
+    }))
 }
 
 /// `get_similar_tracks`: the library ranked by embedding similarity.

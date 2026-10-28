@@ -2,8 +2,8 @@
 //! `GET /api/tracks`, `/page`, `/count`, `/ids`, `PATCH
 //! /api/tracks/{id}/info` and `/genre`.
 //!
-//! `/similar`, `/suggest-genre` and the MCP-only `target_params` arrive with
-//! S4/S9. `/count` runs only the count query; Python also built (and threw
+//! `GET /api/tracks/{id}/similar` ranks by the stored embeddings; `/suggest-genre`
+//! and the MCP-only `target_params` live with S4/S9. `/count` runs only the count query; Python also built (and threw
 //! away) a one-item page, which cannot fail differently.
 
 use axum::body::Bytes;
@@ -14,7 +14,7 @@ use plumdeck_core::compat::pyjson::PyValue;
 use plumdeck_core::compat::text::py_strip;
 use plumdeck_core::error::ApiError;
 use plumdeck_db::repos::tracks::{
-    count_tracks, search_track_ids, search_tracks, update_genre, update_track_info, BigInt, TrackFilters, TrackHit,
+    count_tracks, search_track_ids, search_tracks, similar_tracks, update_genre, SimilarError, update_track_info, BigInt, TrackFilters, TrackHit,
     TrackInfo,
 };
 
@@ -163,6 +163,35 @@ pub async fn get_track_ids(State(state): State<AppState>, uri: Uri) -> Response 
         .await
         .map(|ids| pydantic(PyValue::List(ids.into_iter().map(int).collect())))
         .into_response()
+}
+
+/// `GET /api/tracks/{track_id}/similar`: `List[TrackRead]` by embedding.
+pub async fn get_similar(State(state): State<AppState>, Path(track_id): Path<String>, uri: Uri) -> Response {
+    let mut params = Params::from_uri(&uri);
+    let id = params.path_int("track_id", &track_id);
+    let limit = params.int_or("limit", 20);
+    if let Err(response) = params.finish() {
+        return response;
+    }
+    let id = id.expect("validated");
+    let db = state.db.clone();
+    let found = state
+        .blocking(move || db.lease().map(|conn| similar_tracks(&conn, BigInt(id), BigInt(limit))))
+        .await;
+    match found {
+        Ok(Ok(hits)) => {
+            let reads = track_reads(hits.iter().map(|hit| {
+                (&hit.track, TrackExtras { is_analyzed: Some(hit.is_analyzed), lyrics: None, has_lyrics: has_lyrics(hit.lyrics.as_deref()) })
+            }));
+            match reads {
+                Some(value) => pydantic(value).into_response(),
+                None => server_error(&"response validation failed (TrackRead)"),
+            }
+        }
+        Ok(Err(SimilarError::NoEmbedding)) => HttpError(ApiError::new(404, "Track embedding not found. Please analyze the track first.")).into_response(),
+        Ok(Err(SimilarError::Db(error))) => HttpError(ApiError::new(500, format!("Vector search failed: {error}"))).into_response(),
+        Err(response) => response,
+    }
 }
 
 /// `TrackInfoUpdate`.

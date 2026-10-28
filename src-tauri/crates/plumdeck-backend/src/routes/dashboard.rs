@@ -1,15 +1,21 @@
 //! `GET /api/dashboard` (backend/api/routers/system.py
-//! `get_dashboard_stats`). `POST /api/system/save-file` and
-//! `/api/system/reveal-file` are not ported: they move to Tauri at cutover
-//! (S13, plan §2.2 items 14-15); `GET /api/` is dropped (§2.2 item 1).
+//! `get_dashboard_stats`), and `POST /api/system/save-file` /
+//! `/api/system/reveal-file`, which the desktop uses to save exports and show
+//! them in the file manager (the backend runs inside the app since S13).
+//! `GET /api/` is dropped (§2.2 item 1).
 
+use axum::body::Bytes;
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use plumdeck_core::compat::pyjson::PyValue;
 use plumdeck_db::repos::dashboard::{dashboard_stats, DashboardStats, SetlistRow};
 
 use crate::response::{datetime, dict, int, opt, text, PyJson};
+use crate::body::{parse_body_for, BodyModel, Fields, ValidationError};
 use crate::AppState;
+use crate::HttpError;
+use plumdeck_core::error::ApiError;
 
 /// `jsonable_encoder(Setlist)`: every model field, datetimes in ISO form.
 /// A NaN duration makes the whole answer a 500, as in Python.
@@ -102,5 +108,104 @@ mod tests {
         library.execute("UPDATE setlists SET target_duration = 'nan'");
         let answer = send(app(), Method::GET, "/api/dashboard", &[], "").await;
         assert_eq!((answer.status.as_u16(), answer.body.as_str()), (500, "Internal Server Error"));
+    }
+}
+
+/// `SaveFileRequest` / `RevealFileRequest`.
+struct PathContent {
+    path: String,
+    content: Option<String>,
+}
+
+struct SaveFile(PathContent);
+struct RevealFile(PathContent);
+
+impl BodyModel for SaveFile {
+    fn from_fields(fields: &Fields<'_>) -> Result<Self, Vec<ValidationError>> {
+        let path = fields.required_str("path");
+        let content = fields.required_str("content");
+        fields.finish(|| Some(Self(PathContent { path: path?, content: Some(content?) })))
+    }
+}
+
+impl BodyModel for RevealFile {
+    fn from_fields(fields: &Fields<'_>) -> Result<Self, Vec<ValidationError>> {
+        let path = fields.required_str("path");
+        fields.finish(|| Some(Self(PathContent { path: path?, content: None })))
+    }
+}
+
+/// `str(OSError)` as Python prints it.
+fn os_error(error: &std::io::Error, path: &str) -> String {
+    match error.raw_os_error() {
+        Some(code) => {
+            let text = error.to_string();
+            let reason = text.split(" (os error").next().unwrap_or(&text).to_string();
+            format!("[Errno {code}] {reason}: '{path}'")
+        }
+        None => error.to_string(),
+    }
+}
+
+/// `POST /api/system/save-file`: write `content` (UTF-8) to `path`.
+pub async fn save_file(headers: HeaderMap, body: Bytes) -> Response {
+    let request = match parse_body_for::<SaveFile>(&headers, &body) {
+        Ok(Ok(SaveFile(request))) => request,
+        Ok(Err(errors)) => return crate::body::validation_response(&errors),
+        Err(response) => return response,
+    };
+    let content = request.content.unwrap_or_default();
+    match tokio::task::spawn_blocking(move || std::fs::write(&request.path, content.as_bytes()).map_err(|e| os_error(&e, &request.path))).await {
+        Ok(Ok(())) => PyJson(dict([("status", text("success"))])).into_response(),
+        Ok(Err(reason)) => HttpError(ApiError::new(500, format!("Failed to save file: {reason}"))).into_response(),
+        Err(error) => HttpError(ApiError::new(500, format!("Failed to save file: {error}"))).into_response(),
+    }
+}
+
+fn reveal(path: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let status = std::process::Command::new("open").arg("-R").arg(path).status();
+    #[cfg(windows)]
+    let status = {
+        use std::os::windows::process::CommandExt;
+        let absolute = std::path::absolute(path).unwrap_or_else(|_| path.into());
+        // explorer parses its own command line; the quoted path keeps %, & and spaces.
+        return std::process::Command::new("explorer.exe")
+            .raw_arg(format!("/select,\"{}\"", absolute.display()))
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string());
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let status = {
+        let parent = std::path::Path::new(path).parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        std::process::Command::new("xdg-open").arg(parent).status()
+    };
+    #[cfg(not(windows))]
+    match status {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(format!("Command returned non-zero exit status {}.", status.code().unwrap_or(-1))),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// `POST /api/system/reveal-file`: show the file in the OS file manager.
+pub async fn reveal_file(headers: HeaderMap, body: Bytes) -> Response {
+    let request = match parse_body_for::<RevealFile>(&headers, &body) {
+        Ok(Ok(RevealFile(request))) => request,
+        Ok(Err(errors)) => return crate::body::validation_response(&errors),
+        Err(response) => return response,
+    };
+    if request.path.contains('\0') || !std::path::Path::new(&request.path).exists() {
+        tracing::info!("File not found for reveal: {}", request.path);
+        return PyJson(dict([("status", text("error")), ("detail", text("File not found"))])).into_response();
+    }
+    match tokio::task::spawn_blocking(move || reveal(&request.path)).await {
+        Ok(Ok(())) => PyJson(dict([("status", text("success"))])).into_response(),
+        Ok(Err(reason)) => {
+            tracing::info!("Failed to reveal file: {reason}");
+            PyJson(dict([("status", text("error")), ("detail", text(reason))])).into_response()
+        }
+        Err(error) => PyJson(dict([("status", text("error")), ("detail", text(error.to_string()))])).into_response(),
     }
 }

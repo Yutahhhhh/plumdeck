@@ -167,6 +167,15 @@ fn main() -> ExitCode {
         if let Some(clock) = frozen_clock(args.parity) {
             state.clock = Arc::new(clock);
         }
+        // main.py's lifespan: resume queued analysis jobs and backfill missing
+        // embeddings. A parity side B leaves the queue to the scenario.
+        if !args.parity {
+            let jobs = state.analysis.jobs.clone();
+            tokio::task::spawn_blocking(move || {
+                jobs.launch_next();
+                jobs.enqueue_missing_embeddings();
+            });
+        }
         let mut server = tokio::spawn(serve(listener, state, async move {
             let _ = stopped.wait_for(|stop| *stop).await;
         }));

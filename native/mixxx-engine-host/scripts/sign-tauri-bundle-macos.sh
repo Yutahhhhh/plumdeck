@@ -28,6 +28,21 @@ rm -rf -- "$nested"
 # project's Developer ID + notarization workflow.
 identity="${APPLE_SIGNING_IDENTITY:--}"
 codesign --force --deep --sign "$identity" "$nested"
+
+# Recording converter staged by scripts/packaging-ffmpeg.mjs: the externalBin
+# lands in Contents/MacOS and its relocated Homebrew dylibs are a resource
+# folder. codesign does not sign Mach-O files under Resources on its own, so
+# sign every one explicitly with the release identity before sealing the app.
+ffmpeg="$bundle/Contents/MacOS/ffmpeg"
+ffmpeg_libs="$bundle/Contents/Resources/ffmpeg-libs"
+[[ -x "$ffmpeg" && -d "$ffmpeg_libs" ]] || {
+  echo "Bundled FFmpeg is missing; run node scripts/packaging-ffmpeg.mjs before tauri build" >&2
+  exit 1
+}
+while IFS= read -r -d '' dylib; do
+  codesign --force --sign "$identity" "$dylib"
+done < <(find "$ffmpeg_libs" -type f -name '*.dylib' -print0)
+codesign --force --sign "$identity" "$ffmpeg"
 if [[ "$identity" == "-" ]]; then
   # Local builds use ad-hoc signing. Pin the app's designated requirement to
   # its bundle identifier so macOS TCC permissions survive code-hash changes

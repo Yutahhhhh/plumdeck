@@ -91,8 +91,21 @@ fn run_one(
     if !sa.success() || !sb.success() {
         db_diffs.push(format!("exit: A {sa} B {sb}"));
     }
-    let result = dbdiff::diff(&a.ud().join(DB_NAME), &b.ud().join(DB_NAME), 20)?;
-    let db_note = result.lines.last().cloned().unwrap_or_default();
+    let mut ignored = Vec::new();
+    let mut ignored_note = Vec::new();
+    for group in &loaded.db_deviations {
+        let status = ledger.status(&group.id).with_context(|| format!("db_deviations: {} is not in deviations.yaml", group.id))?;
+        for column in &group.columns {
+            let (table, name) = column.split_once('.').with_context(|| format!("db_deviations: {column} is not table.column"))?;
+            ignored.push((table.to_owned(), name.to_owned()));
+        }
+        ignored_note.push(format!("{} ({status}): {}", group.id, group.columns.join(", ")));
+    }
+    let result = dbdiff::diff_ignoring(&a.ud().join(DB_NAME), &b.ud().join(DB_NAME), 20, &ignored)?;
+    let mut db_note = result.lines.last().cloned().unwrap_or_default();
+    if !ignored_note.is_empty() {
+        db_note = format!("{db_note}; not compared: {}", ignored_note.join("; "));
+    }
     if result.differences != 0 {
         db_diffs.push(format!("db-diff:\n    {}", result.lines.join("\n    ")));
     }

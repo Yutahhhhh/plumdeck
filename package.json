@@ -4,10 +4,6 @@
   "version": "0.6.3",
   "type": "module",
   "scripts": {
-    "docker:start": "colima start plumdeck --cpu 5 --memory 8",
-    "docker:stop": "colima stop plumdeck",
-    "docker:restart": "colima stop plumdeck && colima start plumdeck --cpu 5 --memory 8",
-    "backend:install": "node scripts/project.mjs backend-install",
     "backend:dev": "node scripts/project.mjs backend-dev",
     "db:ui": "duckdb -ui",
     "db:cli": "node scripts/project.mjs backend-tool db-cli",
@@ -35,8 +31,7 @@
     "junction:test:audio": "node scripts/project.mjs junction-test program-output",
     "junction:test:ui": "tsc --noEmit && node --experimental-strip-types --test src/services/junction/control-boundary.test.mjs src/services/junction/exchange-actions.test.mjs src/services/junction/roster-model.test.mjs src/services/junction/program-mixer.test.mjs src/services/junction/turn-state.test.mjs src/services/midi/junction-channel.test.mjs src/services/junction/share-musics/automation.test.mjs src/services/play-drag-routing.test.mjs",
     "junction:test:network": "pnpm --dir services/junction-signaling build && node scripts/project.mjs junction-test media-transport && pnpm --dir services/junction-signaling test",
-    "package": "node scripts/project.mjs package",
-    "backend:build": "node scripts/project.mjs backend-build"
+    "package": "node scripts/project.mjs package"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

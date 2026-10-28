@@ -1,0 +1,430 @@
+# S7: the Play routes (backend/api/routers/play.py) on the sets fixture:
+# local playlists (pages, create, rename, delete, entries), the rekordbox
+# mirror (import with validation, sources, tree, pages, copy into a local
+# playlist), sessions, play history upserts and recordings (upsert merge
+# rules, list, audio, renaming in place, discard without a media file).
+# Renames whose name keeps the file name and discards of rows without an
+# audio file are the only recording mutations: both sides share the media
+# directory, so no step moves or deletes a file. Time is frozen; Python's
+# SQL CURRENT_TIMESTAMP stamps are not, so steps that show them and those
+# columns in the db-diff are D-21.
+name: s7-play
+db: fixture
+fixture: sets
+freeze_now: "2026-05-01 12:34:56.789012"
+fixture_sql: |
+  INSERT INTO recordings (recording_key, session_id, filepath, started_at, ended_at, duration_ms, status, sample_rate_hz, frame_count)
+  VALUES ('rec-live', NULL, '{media}/live.wav', '2026-04-10 20:00:00', NULL, 0, 'recording', 48000, 10),
+         ('rec-done', 's-old', '{media}/plain.wav', '2026-04-09 20:00:00', '2026-04-09 21:00:00', 3600000, 'completed', 44100, 100),
+         ('rec-gone', NULL, '{media}/gone.wav', '2026-04-08 20:00:00', NULL, 5, 'failed', NULL, NULL),
+         ('rec-text', NULL, '{media}/notes.txt', '2026-04-07 20:00:00', NULL, 0, 'completed', NULL, NULL);
+db_deviations:
+  - id: D-21
+    columns: [rekordbox_sources.imported_at, play_sessions.started_at, play_sessions.ended_at,
+              setlists.created_at, setlists.updated_at, setlist_tracks.created_at]
+steps:
+  # ------------------------------------------------------- local playlists
+  - name: playlists page
+    expect_status: 200
+    http: {method: GET, path: /api/play/playlists}
+  - name: playlists second page
+    expect_status: 200
+    http: {method: GET, path: /api/play/playlists, query: {limit: 1, offset: 1}}
+  - name: playlists past the end
+    expect_status: 200
+    http: {method: GET, path: /api/play/playlists, query: {offset: 50}}
+  - name: playlists bad limit
+    expect_status: 422
+    http: {method: GET, path: /api/play/playlists, query: {limit: 0}}
+  - name: playlists bad offset
+    expect_status: 422
+    http: {method: GET, path: /api/play/playlists, query: {offset: -1}}
+  - name: create a playlist
+    expect_status: 200
+    http: {method: POST, path: /api/play/playlists, body: {name: "  Night set  "}}
+  - name: create a blank playlist
+    expect_status: 422
+    http: {method: POST, path: /api/play/playlists, body: {name: "   "}}
+  - name: create an empty name
+    expect_status: 422
+    http: {method: POST, path: /api/play/playlists, body: {name: ""}}
+  - name: create without a name
+    expect_status: 422
+    http: {method: POST, path: /api/play/playlists, body: {}}
+  - name: rename a playlist
+    expect_status: 200
+    http: {method: PATCH, path: /api/play/playlists/2, body: {name: " Renamed "}}
+  - name: rename blank
+    expect_status: 422
+    http: {method: PATCH, path: /api/play/playlists/2, body: {name: " "}}
+  - name: rename missing
+    expect_status: 404
+    http: {method: PATCH, path: /api/play/playlists/99, body: {name: x}}
+  - name: playlist entries page
+    expect_status: 200
+    http: {method: GET, path: /api/play/playlists/1/tracks}
+  - name: playlist entries offset
+    expect_status: 200
+    http: {method: GET, path: /api/play/playlists/1/tracks, query: {limit: 2, offset: 1}}
+  - name: entries of an empty playlist
+    expect_status: 200
+    http: {method: GET, path: /api/play/playlists/3/tracks}
+  - name: entries of a missing playlist
+    expect_status: 404
+    http: {method: GET, path: /api/play/playlists/99/tracks}
+  - name: add a track at the end
+    expect_status: 200
+    http: {method: POST, path: /api/play/playlists/1/tracks, body: {track_id: 5}}
+  - name: add a track at a position
+    expect_status: 200
+    http: {method: POST, path: /api/play/playlists/1/tracks, body: {track_id: 2, position: 1}}
+  - name: add a track past the end
+    expect_status: 200
+    http: {method: POST, path: /api/play/playlists/3/tracks, body: {track_id: 4, position: 10}}
+  - name: entries after adding
+    expect_status: 200
+    http: {method: GET, path: /api/play/playlists/1/tracks}
+  - name: add a missing track
+    expect_status: 404
+    http: {method: POST, path: /api/play/playlists/1/tracks, body: {track_id: 999}}
+  - name: add to a missing playlist
+    expect_status: 404
+    http: {method: POST, path: /api/play/playlists/99/tracks, body: {track_id: 1}}
+  - name: add with a negative position
+    expect_status: 422
+    http: {method: POST, path: /api/play/playlists/1/tracks, body: {track_id: 1, position: -1}}
+  - name: remove an entry
+    expect_status: 200
+    http: {method: DELETE, path: /api/play/playlists/1/tracks/2}
+  - name: remove an entry of another playlist
+    expect_status: 404
+    http: {method: DELETE, path: /api/play/playlists/1/tracks/5}
+  - name: remove a missing entry
+    expect_status: 404
+    http: {method: DELETE, path: /api/play/playlists/1/tracks/999}
+  - name: entries after removing
+    expect_status: 200
+    http: {method: GET, path: /api/play/playlists/1/tracks}
+  - name: delete a playlist
+    expect_status: 200
+    http: {method: DELETE, path: /api/play/playlists/2}
+  - name: delete a missing playlist
+    expect_status: 404
+    http: {method: DELETE, path: /api/play/playlists/2}
+
+  - name: lax playlist id
+    expect_status: 200
+    http: {method: GET, path: /api/play/playlists/01/tracks}
+  - name: bad playlist id
+    expect_status: 422
+    http: {method: GET, path: /api/play/playlists/x/tracks}
+  - name: bad entry id
+    expect_status: 422
+    http: {method: DELETE, path: /api/play/playlists/1/tracks/x}
+  - name: add with a string track id
+    expect_status: 200
+    http: {method: POST, path: /api/play/playlists/3/tracks, body: {track_id: "6", position: 0}}
+  - name: add without a body
+    expect_status: 422
+    http: {method: POST, path: /api/play/playlists/3/tracks}
+  - name: rename with a name over 300 characters
+    expect_status: 422
+    http: {method: PATCH, path: /api/play/playlists/3, body: {name: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}}
+  - name: entries of the edited playlist
+    expect_status: 200
+    http: {method: GET, path: /api/play/playlists/3/tracks}
+
+  # ------------------------------------------------------ rekordbox mirror
+  - name: no sources yet
+    expect_status: 200
+    http: {method: GET, path: /api/play/rekordbox/sources}
+  - name: import a mirror
+    expect_status: 200
+    http:
+      method: POST
+      path: /api/play/rekordbox/import
+      body:
+        source_id: rb-main
+        source_name: Main collection
+        playlists:
+          - {external_id: f1, name: Folder, order: 0, kind: folder}
+          - {external_id: p1, parent_external_id: f1, name: Peak, order: 2}
+          - {external_id: p2, parent_external_id: f1, name: Opening, order: 1}
+          - {external_id: p3, parent_external_id: "", name: Root list, order: 5, kind: smart}
+          - {external_id: p4, name: Empty}
+        members:
+          - {playlist_external_id: p1, position: 0, external_track_id: "101", local_track_id: 1, title: ignored}
+          - {playlist_external_id: p1, position: 1, external_track_id: "102", filepath: "{media}/vorbis.flac"}
+          - {playlist_external_id: p1, position: 2, external_track_id: "103", local_track_id: 999, filepath: "/nowhere/x.mp3", title: Lost, artist: Nobody, bpm: 120.5, key: 8A, duration: 200}
+          - {playlist_external_id: p1, position: 3, external_track_id: "104", local_track_id: 4}
+          - {playlist_external_id: p2, position: 0, local_track_id: 2}
+          - {playlist_external_id: p2, position: 1, title: Only metadata}
+          - {playlist_external_id: p3, position: 0, filepath: "{media}/./tagged.m4a"}
+  - name: sources after import
+    expect_status: 200
+    deviation: {id: D-21, b_status: 200}
+    http: {method: GET, path: /api/play/rekordbox/sources}
+  - name: tree
+    expect_status: 200
+    deviation: {id: D-21, b_status: 200}
+    http: {method: GET, path: /api/play/rekordbox/rb-main/tree}
+  - name: tree of a missing source
+    expect_status: 404
+    http: {method: GET, path: /api/play/rekordbox/nope/tree}
+  - name: root page
+    expect_status: 200
+    deviation: {id: D-21, b_status: 200}
+    http: {method: GET, path: /api/play/rekordbox/rb-main/tree/page}
+  - name: folder page
+    expect_status: 200
+    deviation: {id: D-21, b_status: 200}
+    http: {method: GET, path: /api/play/rekordbox/rb-main/tree/page, query: {parent_external_id: f1, limit: 1}}
+  - name: folder second page
+    expect_status: 200
+    deviation: {id: D-21, b_status: 200}
+    http: {method: GET, path: /api/play/rekordbox/rb-main/tree/page, query: {parent_external_id: f1, limit: 1, offset: 1}}
+  - name: page of a missing source
+    expect_status: 404
+    http: {method: GET, path: /api/play/rekordbox/nope/tree/page}
+  - name: page bad limit
+    expect_status: 422
+    http: {method: GET, path: /api/play/rekordbox/rb-main/tree/page, query: {limit: 501}}
+  - name: mirror tracks
+    expect_status: 200
+    http: {method: GET, path: /api/play/rekordbox/rb-main/playlists/p1/tracks}
+  - name: mirror tracks of an unknown playlist
+    expect_status: 200
+    http: {method: GET, path: /api/play/rekordbox/rb-main/playlists/zz/tracks}
+  - name: mirror tracks page
+    expect_status: 200
+    http: {method: GET, path: /api/play/rekordbox/rb-main/playlists/p1/tracks/page, query: {limit: 2, offset: 1}}
+  - name: mirror tracks page of an unknown playlist
+    expect_status: 404
+    http: {method: GET, path: /api/play/rekordbox/rb-main/playlists/zz/tracks/page}
+  - name: copy a mirror playlist
+    expect_status: 200
+    deviation: {id: D-21, b_status: 200}
+    http: {method: POST, path: /api/play/rekordbox/rb-main/playlists/p1/copy, body: {}}
+  - name: copy with a name
+    expect_status: 200
+    deviation: {id: D-21, b_status: 200}
+    http: {method: POST, path: /api/play/rekordbox/rb-main/playlists/p2/copy, body: {name: "  Copied  "}}
+  - name: copy an empty playlist
+    expect_status: 200
+    deviation: {id: D-21, b_status: 200}
+    http: {method: POST, path: /api/play/rekordbox/rb-main/playlists/p4/copy, body: {name: Copy of empty}}
+  - name: copy an unknown playlist
+    expect_status: 404
+    http: {method: POST, path: /api/play/rekordbox/rb-main/playlists/zz/copy, body: {}}
+  - name: copy with an empty name
+    expect_status: 422
+    http: {method: POST, path: /api/play/rekordbox/rb-main/playlists/p1/copy, body: {name: ""}}
+  - name: local playlists after the copies
+    expect_status: 200
+    deviation: {id: D-21, b_status: 200}
+    http: {method: GET, path: /api/play/playlists}
+  - name: copied entries
+    expect_status: 200
+    http: {method: GET, path: /api/play/playlists/4/tracks}
+  - name: import duplicate playlist ids
+    expect_status: 422
+    http: {method: POST, path: /api/play/rekordbox/import, body: {source_id: x, source_name: y, playlists: [{external_id: a, name: a}, {external_id: a, name: b}]}}
+  - name: import unknown parent
+    expect_status: 400
+    http: {method: POST, path: /api/play/rekordbox/import, body: {source_id: x, source_name: y, playlists: [{external_id: a, parent_external_id: q, name: a}]}}
+  - name: import unknown member playlist
+    expect_status: 400
+    http: {method: POST, path: /api/play/rekordbox/import, body: {source_id: x, source_name: y, playlists: [{external_id: a, name: a}], members: [{playlist_external_id: b}]}}
+  - name: import a cycle
+    expect_status: 422
+    http: {method: POST, path: /api/play/rekordbox/import, body: {source_id: x, source_name: y, playlists: [{external_id: a, parent_external_id: a, name: a}]}}
+  - name: import a bad kind
+    expect_status: 422
+    http: {method: POST, path: /api/play/rekordbox/import, body: {source_id: x, source_name: y, playlists: [{external_id: a, name: a, kind: other}]}}
+  - name: import without playlists
+    expect_status: 422
+    http: {method: POST, path: /api/play/rekordbox/import, body: {source_id: x, source_name: y}}
+  - name: import an empty source id
+    expect_status: 422
+    http: {method: POST, path: /api/play/rekordbox/import, body: {source_id: "", source_name: y, playlists: []}}
+  - name: re-import replaces the source
+    expect_status: 200
+    http:
+      method: POST
+      path: /api/play/rekordbox/import
+      body:
+        source_id: rb-main
+        source_name: Renamed collection
+        playlists: [{external_id: p9, name: Only one}]
+        members: [{playlist_external_id: p9, position: 4, local_track_id: 3}]
+  - name: a second source
+    expect_status: 200
+    http: {method: POST, path: /api/play/rekordbox/import, body: {source_id: rb-b, source_name: Another, playlists: []}}
+  - name: sources after re-import
+    expect_status: 200
+    deviation: {id: D-21, b_status: 200}
+    http: {method: GET, path: /api/play/rekordbox/sources}
+  - name: tree after re-import
+    expect_status: 200
+    deviation: {id: D-21, b_status: 200}
+    http: {method: GET, path: /api/play/rekordbox/rb-main/tree}
+
+  # -------------------------------------------------------------- sessions
+  - name: start a session
+    expect_status: 200
+    http: {method: POST, path: /api/play/sessions, body: {id: s-1}}
+  - name: start a four-deck session
+    expect_status: 200
+    http: {method: POST, path: /api/play/sessions, body: {id: s-2, deck_count: 4}}
+  - name: bad deck count
+    expect_status: 422
+    http: {method: POST, path: /api/play/sessions, body: {id: s-3, deck_count: 3}}
+  - name: empty session id
+    expect_status: 422
+    http: {method: POST, path: /api/play/sessions, body: {id: ""}}
+  - name: restart a session
+    expect_status: 200
+    http: {method: POST, path: /api/play/sessions, body: {id: s-1, deck_count: 4}}
+  - name: end an unknown session
+    expect_status: 200
+    http: {method: POST, path: /api/play/sessions/nope/end}
+
+  # --------------------------------------------------------------- history
+  - name: history is empty
+    expect_status: 200
+    http: {method: GET, path: /api/play/history}
+  - name: load a track
+    expect_status: 200
+    http: {method: PUT, path: /api/play/history, body: {event_key: e-1, session_id: s-1, deck: A, track_id: 1, loaded_at: "2026-05-01T12:00:00"}}
+  - name: load another track without a time
+    expect_status: 200
+    http: {method: PUT, path: /api/play/history, body: {event_key: e-2, session_id: s-1, deck: B, track_id: 3}}
+  - name: first play and progress
+    expect_status: 200
+    http: {method: PUT, path: /api/play/history, body: {event_key: e-1, session_id: s-1, deck: A, track_id: 1, first_played_at: "2026-05-01T12:01:00", played_ms: 30000, reason: playing}}
+  - name: completed
+    expect_status: 200
+    http: {method: PUT, path: /api/play/history, body: {event_key: e-1, session_id: s-1, deck: A, track_id: 1, first_played_at: "2026-05-01T12:09:00", ended_at: "2026-05-01T12:06:00", played_ms: 300000, completed: true, reason: finished}}
+  - name: a completed row keeps its end
+    expect_status: 200
+    http: {method: PUT, path: /api/play/history, body: {event_key: e-1, session_id: s-1, deck: A, track_id: 1, ended_at: "2026-05-01T13:00:00", played_ms: 5, reason: later}}
+  - name: a track that is not in the library
+    expect_status: 200
+    http: {method: PUT, path: /api/play/history, body: {event_key: e-3, session_id: s-2, deck: D, track_id: 999, loaded_at: "2026-05-01T11:00:00", played_ms: 10}}
+  - name: history newest first
+    expect_status: 200
+    http: {method: GET, path: /api/play/history}
+  - name: history limited
+    expect_status: 200
+    http: {method: GET, path: /api/play/history, query: {limit: 1}}
+  - name: history bad deck
+    expect_status: 422
+    http: {method: PUT, path: /api/play/history, body: {event_key: e-9, session_id: s-1, deck: E, track_id: 1}}
+  - name: history negative ms
+    expect_status: 422
+    http: {method: PUT, path: /api/play/history, body: {event_key: e-9, session_id: s-1, deck: A, track_id: 1, played_ms: -1}}
+  - name: history bad limit
+    expect_status: 422
+    http: {method: GET, path: /api/play/history, query: {limit: 501}}
+  - name: end a session
+    expect_status: 200
+    http: {method: POST, path: /api/play/sessions/s-1/end}
+
+  # ------------------------------------------------------------ recordings
+  - name: export formats backed by the local FFmpeg
+    expect_status: 200
+    http: {method: GET, path: /api/play/recordings/formats}
+  - name: recordings newest first
+    expect_status: 200
+    http: {method: GET, path: /api/play/recordings}
+  - name: recordings limited
+    expect_status: 200
+    http: {method: GET, path: /api/play/recordings, query: {limit: 2}}
+  - name: start a recording
+    expect_status: 200
+    http: {method: PUT, path: /api/play/recordings, body: {recording_key: rec-new, session_id: s-2, filepath: "{media}/new.wav", started_at: "2026-05-01T12:10:00", sample_rate_hz: 48000}}
+  - name: progress a recording
+    expect_status: 200
+    http: {method: PUT, path: /api/play/recordings, body: {recording_key: rec-new, session_id: s-other, filepath: "", started_at: "2026-05-01T12:20:00", duration_ms: 1000, frame_count: 48000, timeline_quality: complete, timeline_dropped_events: 2}}
+  - name: finish a recording
+    expect_status: 200
+    http: {method: PUT, path: /api/play/recordings, body: {recording_key: rec-new, filepath: "{media}/final.wav", started_at: "2026-05-01T12:05:00", ended_at: "2026-05-01T12:30:00", duration_ms: 500, status: completed, timeline_quality: not_recorded}}
+  - name: a finished recording keeps its state
+    expect_status: 200
+    http: {method: PUT, path: /api/play/recordings, body: {recording_key: rec-new, filepath: "{media}/other.wav", started_at: "2026-05-01T12:06:00", duration_ms: 9000, status: failed, error: late}}
+  - name: recording bad status
+    expect_status: 422
+    http: {method: PUT, path: /api/play/recordings, body: {recording_key: r, filepath: x, started_at: "2026-05-01T12:00:00", status: paused}}
+  - name: recording needs a start
+    expect_status: 422
+    http: {method: PUT, path: /api/play/recordings, body: {recording_key: r, filepath: x}}
+  - name: recording with a timezone and a numeric start
+    expect_status: 200
+    http: {method: PUT, path: /api/play/recordings, body: {recording_key: rec-tz, filepath: "{media}/tz.wav", started_at: "2026-05-01T12:00:00+09:00", ended_at: 1777777777}}
+  - name: recording with a UTC offset
+    expect_status: 200
+    http: {method: PUT, path: /api/play/recordings, body: {recording_key: rec-z, filepath: "{media}/z.wav", started_at: "2026-05-01T23:30:00Z", ended_at: "2026-05-02 01:00:00-02:00"}}
+  - name: recording bad sample rate
+    expect_status: 422
+    http: {method: PUT, path: /api/play/recordings, body: {recording_key: r, filepath: x, started_at: "2026-05-01T12:00:00", sample_rate_hz: 0}}
+  - name: history with a date-only time and a bad time
+    expect_status: 422
+    http: {method: PUT, path: /api/play/history, body: {event_key: e-8, session_id: s-1, deck: A, track_id: 1, loaded_at: "yesterday"}}
+  - name: history with a date-only time
+    expect_status: 200
+    http: {method: PUT, path: /api/play/history, body: {event_key: e-7, session_id: s-1, deck: C, track_id: 2, loaded_at: "2026-04-30", completed: true}}
+  - name: recordings after upserts
+    expect_status: 200
+    http: {method: GET, path: /api/play/recordings}
+  - name: audio of a completed recording
+    expect_status: 200
+    compare_headers: [content-type, cache-control]
+    http: {method: GET, path: /api/play/recordings/2/audio}
+  - name: audio while recording
+    expect_status: 409
+    http: {method: GET, path: /api/play/recordings/1/audio}
+  - name: audio of a missing file
+    expect_status: 404
+    http: {method: GET, path: /api/play/recordings/3/audio}
+  - name: audio of a non-audio file
+    expect_status: 404
+    http: {method: GET, path: /api/play/recordings/4/audio}
+  - name: audio of a missing recording
+    expect_status: 404
+    http: {method: GET, path: /api/play/recordings/99/audio}
+  - name: rename keeping the file name
+    expect_status: 200
+    http: {method: PATCH, path: /api/play/recordings/2, body: {artist: "  ", title: " plain "}}
+  - name: rename while recording
+    expect_status: 409
+    http: {method: PATCH, path: /api/play/recordings/1, body: {title: x}}
+  - name: rename a missing file
+    expect_status: 404
+    http: {method: PATCH, path: /api/play/recordings/3, body: {title: x}}
+  - name: rename a missing recording
+    expect_status: 404
+    http: {method: PATCH, path: /api/play/recordings/99, body: {title: x}}
+  - name: rename with a blank title
+    expect_status: 422
+    http: {method: PATCH, path: /api/play/recordings/2, body: {title: "   "}}
+  - name: rename with a bad format
+    expect_status: 422
+    http: {method: PATCH, path: /api/play/recordings/2, body: {title: x, format: ogg}}
+  - name: rename to an existing name
+    expect_status: 409
+    http: {method: PATCH, path: /api/play/recordings/2, body: {artist: "", title: vorbis, format: flac}}
+  - name: discard while recording
+    expect_status: 409
+    http: {method: DELETE, path: /api/play/recordings/1}
+  - name: discard without a file
+    expect_status: 200
+    http: {method: DELETE, path: /api/play/recordings/3}
+  - name: discard a non-audio row
+    expect_status: 200
+    http: {method: DELETE, path: /api/play/recordings/4}
+  - name: discard a missing recording
+    expect_status: 404
+    http: {method: DELETE, path: /api/play/recordings/3}
+  - name: recordings at the end
+    expect_status: 200
+    http: {method: GET, path: /api/play/recordings}

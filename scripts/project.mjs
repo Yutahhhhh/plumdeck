@@ -1,18 +1,21 @@
 // OS-aware commands. Paths are passed as arguments, including spaces and Unicode.
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, copyFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { createServer } from 'node:net';
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const win = process.platform === 'win32';
-const python = process.env.PLUMDECK_PYTHON || (win ? 'python' : 'python3');
-const venv = join(root, 'backend', '.venv', win ? 'Scripts/python.exe' : 'bin/python');
+const manifest = join(root, 'src-tauri/Cargo.toml');
 const host = join(root, 'native/mixxx-engine-host');
 const stage = win ? join(host, 'stage/PlumdeckMixxxHost/plumdeck-mixxx-engine-host.exe')
     : join(host, 'stage/PlumdeckMixxxHost.app/Contents/MacOS/plumdeck-mixxx-engine-host');
 const tauri = join(root, 'node_modules/@tauri-apps/cli/tauri.js');
+// The Rust backend crates; plumdeck-backend serves the API and MCP, and
+// plumdeck-maintenance replaces the old Python maintenance scripts.
+const backendCrates = ['plumdeck-core', 'plumdeck-db', 'plumdeck-domain', 'plumdeck-media', 'plumdeck-key',
+    'plumdeck-backend', 'plumdeck-analysis'];
 function run(command, args, options = {}) {
     return new Promise((resolve, reject) => {
         const child = spawn(command, args, { cwd: root, stdio: 'inherit', ...options });
@@ -32,7 +35,6 @@ function availableLoopbackPort() {
     });
 }
 async function tauriStackDev() {
-    requireVenv();
     const bridgePort = await availableLoopbackPort();
     const bridgeToken = randomBytes(32).toString('hex');
     const env = {
@@ -64,38 +66,18 @@ async function tauriStackDev() {
         }
     });
 }
-function requireVenv() {
-    if (!existsSync(venv)) throw new Error('Run pnpm backend:install first.');
+async function backendDev() {
+    if (existsSync(join(root, '.env'))) process.loadEnvFile(join(root, '.env'));
+    const env = { ...process.env, ENV: 'dev', DB_PATH: process.env.DB_PATH || join(root, 'db_data/plumdeck.duckdb'),
+        MUSIC_DIR: process.env.MUSIC_DIR || join(root, 'music_data') };
+    env.PLUMDECK_PORT = env.PLUMDECK_PORT && env.PLUMDECK_PORT !== '0' ? env.PLUMDECK_PORT : '8001';
+    await run('cargo', ['run', '--manifest-path', manifest, '-p', 'plumdeck-backend', '--bin', 'plumdeck-backend'], { env });
 }
-async function backendBuild() {
-    requireVenv();
-    if (!win && process.platform !== 'darwin') throw new Error('Desktop packages target macOS or Windows.');
-    if (win && process.arch !== 'x64') throw new Error('Use the Windows x64 Node/Python/MSVC toolchain.');
-    const machines = process.arch === 'arm64' ? ['arm64', 'aarch64'] : ['amd64', 'x86_64'];
-    await run(venv, ['-c', 'import platform,sys; assert sys.maxsize>2**32 and platform.machine().lower() in sys.argv[1:], "Use a 64-bit Python matching the Node/desktop architecture"', ...machines]);
-    await run(venv, ['-m', 'PyInstaller', '--clean', '--noconfirm', 'plumdeck-server.spec'], { cwd: join(root, 'backend') });
-    const triple = win ? 'x86_64-pc-windows-msvc' : `${process.arch === 'arm64' ? 'aarch64' : 'x86_64'}-apple-darwin`;
-    const destination = join(root, `src-tauri/bin/plumdeck-server-${triple}${win ? '.exe' : ''}`);
-    mkdirSync(join(root, 'src-tauri/bin'), { recursive: true });
-    copyFileSync(join(root, `backend/dist/plumdeck-server${win ? '.exe' : ''}`), destination);
-    return destination;
-}
-// These suites exercise real Essentia/mutagen, which the top-level conftest
-// mocks, so they run with their own conftest only, as CI runs them. Extra
-// arguments (for example -q or -x) are passed to every run.
-const isolatedSuites = ['portable_audio', 'portability', 'workflow_integrity'];
 async function backendTest(args) {
-    requireVenv();
-    const env = { ...process.env, PYTHONPATH: join(root, 'backend') };
-    const ignored = isolatedSuites.map((suite) => `--ignore=backend/tests/${suite}`);
-    await run(venv, ['-m', 'pytest', 'backend/tests', ...ignored, ...args], { env });
-    for (const suite of isolatedSuites) {
-        const directory = `backend/tests/${suite}`;
-        await run(venv, ['-m', 'pytest', `--confcutdir=${directory}`, directory, ...args], { env });
-    }
+    await run('cargo', ['test', '--manifest-path', manifest, ...backendCrates.flatMap((crate) => ['-p', crate]), ...args]);
 }
 async function engineBuild() {
-    if (win) await run(python, [join(host, 'scripts/build-windows.py')]);
+    if (win) await run(process.execPath, [join(host, 'scripts/build-windows.mjs')]);
     else if (process.platform === 'darwin') await run('bash', [join(host, 'scripts/build-macos.sh')]);
     else throw new Error('Desktop audio builds target macOS or Windows.');
 }
@@ -105,27 +87,16 @@ async function engineStage() {
 }
 async function appBuild() {
     if (!existsSync(stage)) throw new Error('Build and stage the audio engine first.');
+    // The release configs bundle FFmpeg (externalBin bin/ffmpeg, plus its dylibs
+    // on macOS); stage it for the host triple. Dev builds use the base config and
+    // the backend falls back to ffmpeg on PATH.
+    await run(process.execPath, [join(root, 'scripts/packaging-ffmpeg.mjs')]);
     await run(process.execPath, [tauri, 'build', '--config', win ? 'src-tauri/tauri.windows.conf.json' : 'src-tauri/tauri.mixxx.conf.json']);
     if (!win) await run('bash', [join(host, 'scripts/sign-tauri-bundle-macos.sh')]);
 }
 try {
     switch (process.argv[2]) {
-        case 'backend-install':
-            if (!existsSync(venv)) await run(python, ['-m', 'venv', join(root, 'backend/.venv')]);
-            await run(venv, ['-m', 'pip', 'install', '-r', 'requirements.txt'], { cwd: join(root, 'backend') });
-            break;
-        case 'backend-dev': {
-            requireVenv();
-            if (existsSync(join(root, '.env'))) process.loadEnvFile(join(root, '.env'));
-            const env = { ...process.env, ENV: 'dev', DB_PATH: process.env.DB_PATH || join(root, 'db_data/plumdeck.duckdb'),
-                MUSIC_DIR: process.env.MUSIC_DIR || join(root, 'music_data'), TF_CPP_MIN_LOG_LEVEL: '3' };
-            const port = env.PLUMDECK_PORT && env.PLUMDECK_PORT !== '0' ? env.PLUMDECK_PORT : '8001';
-            const args = ['-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', port, '--reload',
-                '--reload-exclude', '*.duckdb', '--reload-exclude', '*.duckdb.wal', '--reload-exclude', '*.log'];
-            if (existsSync(join(root, '.env'))) args.push('--env-file', join(root, '.env'));
-            await run(venv, args, { cwd: join(root, 'backend'), env });
-            break;
-        }
+        case 'backend-dev': await backendDev(); break;
         case 'tauri-dev':
             await run(process.execPath, [tauri, 'dev'], { env: { ...process.env, TAURI_SKIP_SIDECAR: '1', TAURI_CONFIG: JSON.stringify({ bundle: { resources: [] } }) } });
             break;
@@ -134,11 +105,10 @@ try {
         case 'engine-stage': await engineStage(); break;
         case 'app-build': await appBuild(); break;
         case 'backend-tool':
-            requireVenv();
-            await run(venv, [join(root, 'scripts/maintenance.py'), ...process.argv.slice(3)]);
+            await run('cargo', ['run', '--manifest-path', manifest, '-p', 'plumdeck-backend', '--bin', 'plumdeck-maintenance',
+                '--', ...process.argv.slice(3), '--root', root]);
             break;
         case 'backend-test': await backendTest(process.argv.slice(3)); break;
-        case 'backend-build': await backendBuild(); break;
         case 'junction-test': {
             const executable = join(host, win ? 'build-seam/junction-core-tests.exe' : 'build-junction/junction-core-tests');
             await run(executable, process.argv.slice(3), { env: { ...process.env, JUNCTION_AUDIO_DEVICE_TEST: '1' } });
@@ -146,10 +116,13 @@ try {
         }
         case 'pre-release':
         case 'package': {
-            const sidecar = await backendBuild();
+            if (!win && process.platform !== 'darwin') throw new Error('Desktop packages target macOS or Windows.');
+            // The backend is compiled into the Tauri app; there is no sidecar to build.
             await engineBuild(); await engineStage(); await appBuild();
             if (process.argv[2] === 'pre-release') {
-                await run(venv, [join(root, 'scripts/smoke-backend.py'), sidecar]);
+                await run('cargo', ['build', '--release', '--manifest-path', manifest, '-p', 'plumdeck-backend', '--bin', 'plumdeck-backend']);
+                const backend = join(root, `src-tauri/target/release/plumdeck-backend${win ? '.exe' : ''}`);
+                await run(process.execPath, [join(root, 'scripts/smoke-backend.mjs'), backend]);
             }
             break;
         }

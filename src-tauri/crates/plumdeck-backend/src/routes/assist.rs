@@ -732,8 +732,13 @@ pub async fn resolve_decks(State(state): State<AppState>, headers: HeaderMap, bo
     let result = state
         .blocking(move || {
             let conn = db.lease()?;
+            // Python only opens master.db when there is a path or a loaded
+            // deck title to look up (lookup_by_paths / lookup_by_identities
+            // return {} first), so an empty request reports no library error.
+            let needs_library = paths.iter().any(|p| !p.is_empty())
+                || decks.iter().any(|d| d.loaded && !normalize_text(d.title.as_deref()).is_empty());
             let library = Rekordbox::open();
-            let mut library_error = library.error.clone();
+            let mut library_error = if needs_library { library.error.clone() } else { None };
             let mut entries: Vec<plumdeck_rekordbox::masterdb::Content> = Vec::new();
             let mut identity_entries: Vec<plumdeck_rekordbox::masterdb::Content> = Vec::new();
             if let Some(rb) = &library.db {

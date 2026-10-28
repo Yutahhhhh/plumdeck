@@ -1,0 +1,92 @@
+# S8: CSV export and import (backend/api/routers/settings.py over
+# csv_app_service.py) on the S3 library plus rows with fixed paths: both
+# exports, the library-CSV dry run (duplicates, moved files matched by
+# title/artist, new rows, NFD paths, a BOM, bad cells, Shift-JIS bytes),
+# its execution (path updates with provenance, new tracks and analyses),
+# and the metadata CSV dry run and execution. Time is frozen; the suite
+# db-diffs both libraries afterwards.
+name: s8-csv
+db: fixture
+fixture: library
+freeze_now: "2026-05-01 12:34:56.789012"
+fixture_sql: |
+  INSERT INTO tracks (filepath, title, artist, album, genre, subgenre, year, bpm, key, duration, is_genre_verified, energy, created_at) VALUES
+    ('/csv/old/moved.mp3', 'Moved Song', 'Mover', 'M', 'House', '', 2001, 120.0, '8A', 200.0, false, 0.5, '2026-03-09 00:00:00'),
+    ('/csv/old/twin1.mp3', 'Twin', 'Same', NULL, 'Techno', NULL, NULL, NULL, NULL, 100.0, NULL, NULL, '2026-03-09 00:00:01'),
+    ('/csv/old/twin2.mp3', 'Twin', 'Same', NULL, 'Techno', NULL, NULL, NULL, NULL, 100.0, NULL, NULL, '2026-03-09 00:00:02'),
+    ('/csv/keep/café.mp3', 'Cafe', 'Barista', NULL, 'Jazz', NULL, 1990, 90.0, 'C major', 120.0, true, NULL, '2026-03-09 00:00:03');
+steps:
+  - name: library export
+    expect_status: 200
+    compare_headers: [content-type, content-disposition]
+    http: {method: GET, path: /api/settings/export/csv}
+  - name: metadata export
+    expect_status: 200
+    compare_headers: [content-type, content-disposition]
+    http: {method: GET, path: /api/settings/metadata/export}
+  - name: library dry run
+    expect_status: 200
+    http:
+      method: POST
+      path: /api/settings/import/analyze
+      headers: {content-type: "multipart/form-data; boundary=XBOUND"}
+      raw: "--XBOUND\r\nContent-Disposition: form-data; name=\"file\"; filename=\"lib.csv\"\r\nContent-Type: text/csv\r\n\r\n﻿filepath,title,artist,album,genre,subgenre,year,bpm,key,energy,duration,beat_positions,waveform_peaks\r\n/csv/keep/café.mp3,Cafe,Barista,,Jazz,,1990,90,C major,,120,,\r\n/csv/new/moved.mp3,  MOVED song ,mover,M,House,,2001,121.5,8A,0.6,200,\"[0.5, 1.0]\",[1]\r\n/csv/new/twin.mp3,twin,same,,,,abc,,,,,not json,\r\n/csv/new/twin-b.mp3,Twin,Same,,,,2002,,,,,,\r\n/csv/new/twin-c.mp3,Twin,Same,,,,,,,,,,\r\n/csv/new/fresh.mp3,Fresh,New Artist,Alb,Techno,Peak,2024,130,9A,0.7,300,[],[]\r\n/csv/new/bad.mp3,Bad,Row,,,,,notanumber,,,,,\r\n,No,Path,,,,,,,,,,\r\n\r\n--XBOUND--\r\n"
+  - name: library dry run of Shift-JIS bytes
+    expect_status: 200
+    http:
+      method: POST
+      path: /api/settings/import/analyze
+      headers: {content-type: "multipart/form-data; boundary=XBOUND"}
+      raw_hex: "2d2d58424f554e440d0a436f6e74656e742d446973706f736974696f6e3a20666f726d2d646174613b206e616d653d2266696c65223b2066696c656e616d653d22732e637376220d0a0d0a66696c65706174682c7469746c652c6172746973740d0a2f6373762f736a69732e6d70332c93fa967b8cea2c41ff0d0a0d0a2d2d58424f554e442d2d0d0a"
+  - name: library dry run needs a file
+    expect_status: 422
+    http: {method: POST, path: /api/settings/import/analyze, body: {}}
+  - name: execute the import
+    expect_status: 200
+    http:
+      method: POST
+      path: /api/settings/import/execute
+      body:
+        new_tracks:
+          - {filepath: "/csv/new/fresh.mp3", title: Fresh, artist: New Artist, album: Alb, genre: Techno, subgenre: Peak, year: 2024, bpm: 130, key: 9A, energy: 0.7, duration: 300, beat_positions: [0.5, 1.0], waveform_peaks: [0.25]}
+          - {filepath: "  /csv/new/blank.mp3 ", title: "", artist: "", bpm: 0, key: ""}
+          - {filepath: "/csv/keep/café.mp3", title: Dup, artist: Dup}
+        path_updates:
+          - {old_path: "/csv/old/moved.mp3", new_path: "/csv/new/moved.mp3", track: {title: Moved Song, artist: Mover, bpm: 121.5, key: 9A, year: 2001, energy: 0.6, beat_positions: [0.5, 1.0], waveform_peaks: []}}
+          - {old_path: "/csv/old/twin1.mp3", new_path: "/csv/new/twin.mp3", track: {title: unknown, artist: " ", genre: Unknown}}
+          - {old_path: "/csv/old/twin2.mp3", new_path: "/csv/new/twin-b.mp3"}
+          - {old_path: "/csv/old/none.mp3", new_path: "/csv/new/none.mp3"}
+  - name: execute needs both lists
+    expect_status: 422
+    http: {method: POST, path: /api/settings/import/execute, body: {new_tracks: []}}
+  - name: execute with a bad row
+    expect_status: 422
+    http: {method: POST, path: /api/settings/import/execute, body: {new_tracks: [{filepath: x}], path_updates: []}}
+  - name: metadata dry run
+    expect_status: 200
+    http:
+      method: POST
+      path: /api/settings/metadata/import/analyze
+      headers: {content-type: "multipart/form-data; boundary=XBOUND"}
+      raw: "--XBOUND\r\nContent-Disposition: form-data; name=\"file\"; filename=\"meta.csv\"\r\n\r\nfilepath,title,artist,album,genre,subgenre,year,bpm,key,is_genre_verified\r\n/csv/new/moved.mp3,Moved Song,Mover,M,Deep House,,2001,121.5,9A,yes\r\n/csv/keep/café.mp3,Cafe,Barista,,Jazz,,1990,90,C major,TRUE\r\n/csv/keep/café.mp3,Cafe,Barista,,Jazz,,abc,-5,,no\r\n/csv/new/fresh.mp3,unknown,,,,,,inf,,\r\n/csv/gone.mp3,Gone,Nobody,,,,,,,\r\n,,,,,,,,,\r\n--XBOUND--\r\n"
+  - name: execute the metadata import
+    expect_status: 200
+    http:
+      method: POST
+      path: /api/settings/metadata/import/execute
+      body:
+        updates:
+          - {current: {}, new: {filepath: "/csv/new/moved.mp3", genre: Deep House, bpm: 121.5, key: 10A, is_genre_verified: true}}
+          - {data: {filepath: " /csv/keep/café.mp3", title: "  Café  ", year: 1991, bpm: 0, energy: "0.25", danceability: "x"}}
+          - {new: {filepath: "/csv/gone.mp3", title: Gone}}
+          - {new: null}
+          - {}
+  - name: metadata execute needs updates
+    expect_status: 422
+    http: {method: POST, path: /api/settings/metadata/import/execute, body: {}}
+  - name: library export after the imports
+    expect_status: 200
+    http: {method: GET, path: /api/settings/export/csv}
+  - name: metadata export after the imports
+    expect_status: 200
+    http: {method: GET, path: /api/settings/metadata/export}

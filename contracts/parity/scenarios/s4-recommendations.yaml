@@ -1,0 +1,189 @@
+# S4: recommendations (backend/api/routers/setlists.py: next, next/page,
+# auto, path), wordplay pairs (list, approve, patch, delete) and genre
+# suggestions (tracks.py suggest-genre, genres.py grouped-suggestions) on
+# the sets fixture, whose embeddings are small integers so every score is
+# exact. Time is frozen so every `now` agrees.
+name: s4-recommendations
+db: fixture
+fixture: sets
+freeze_now: "2026-05-01 12:34:56.789012"
+steps:
+  - name: next for an analyzed track
+    expect_status: 200
+    http: {method: GET, path: /api/recommendations/next, query: {track_id: 1}}
+  - name: next with a limit
+    expect_status: 200
+    http: {method: GET, path: /api/recommendations/next, query: {track_id: 3, limit: 2}}
+  - name: next with a zero limit
+    http: {method: GET, path: /api/recommendations/next, query: {track_id: 3, limit: 0}}
+  - name: next filtered by genre
+    expect_status: 200
+    http: {method: GET, path: /api/recommendations/next, query: {track_id: 1, genres: [house, Techno]}}
+  - name: next filtered by subgenre
+    expect_status: 200
+    http: {method: GET, path: /api/recommendations/next, query: {track_id: 4, subgenres: [liquid]}}
+  - name: next for a track without a vector
+    http: {method: GET, path: /api/recommendations/next, query: {track_id: 9}}
+  - name: next for a zero vector
+    http: {method: GET, path: /api/recommendations/next, query: {track_id: 6}}
+  - name: next for a short vector
+    http: {method: GET, path: /api/recommendations/next, query: {track_id: 10}}
+  - name: next for an unknown track
+    http: {method: GET, path: /api/recommendations/next, query: {track_id: 999}}
+  - name: next needs a track id
+    expect_status: 422
+    http: {method: GET, path: /api/recommendations/next}
+  - name: next with a bad track id
+    expect_status: 422
+    http: {method: GET, path: /api/recommendations/next, query: {track_id: x}}
+  - name: page default
+    expect_status: 200
+    http: {method: GET, path: /api/recommendations/next/page, query: {track_id: 1}}
+  - name: page with offset and limit
+    expect_status: 200
+    http: {method: GET, path: /api/recommendations/next/page, query: {track_id: 1, limit: 2, offset: 1}}
+  - name: page past the end
+    expect_status: 200
+    http: {method: GET, path: /api/recommendations/next/page, query: {track_id: 1, offset: 50}}
+  - name: page with targets
+    expect_status: 200
+    http: {method: GET, path: /api/recommendations/next/page, query: {track_id: 2, target_bpm: 128, target_energy: 0.5, target_danceability: 0.6, target_brightness: 0.4, target_noisiness: 0.2}}
+  - name: page with a year range
+    expect_status: 200
+    http: {method: GET, path: /api/recommendations/next/page, query: {track_id: 1, year_min: 2000, year_max: 2015}}
+  - name: page filtered by genre
+    expect_status: 200
+    http: {method: GET, path: /api/recommendations/next/page, query: {track_id: 1, genres: [House], subgenres: [deep house]}}
+  - name: page limit too big
+    expect_status: 422
+    http: {method: GET, path: /api/recommendations/next/page, query: {track_id: 1, limit: 501}}
+  - name: page negative offset
+    expect_status: 422
+    http: {method: GET, path: /api/recommendations/next/page, query: {track_id: 1, offset: -1}}
+  - name: page for an unknown track
+    http: {method: GET, path: /api/recommendations/next/page, query: {track_id: 999}}
+  - name: page for a track without a vector
+    http: {method: GET, path: /api/recommendations/next/page, query: {track_id: 9}}
+  - name: auto with defaults
+    http: {method: POST, path: /api/recommendations/auto, body: {}}
+  - name: auto with a seed and a limit
+    http: {method: POST, path: /api/recommendations/auto, body: {seed_track_ids: [1], limit: 4}}
+  - name: auto with a fixed length range (randint is random otherwise)
+    http: {method: POST, path: /api/recommendations/auto, body: {seed_track_ids: [3, 1], min_length: 3, max_length: 3}}
+  - name: auto with an inverted length range
+    http: {method: POST, path: /api/recommendations/auto, body: {seed_track_ids: [1], min_length: 4, max_length: 2}}
+  - name: auto with genres
+    http: {method: POST, path: /api/recommendations/auto, body: {seed_track_ids: [1], limit: 3, genres: [House]}}
+  - name: auto with an unknown seed
+    http: {method: POST, path: /api/recommendations/auto, body: {seed_track_ids: [999], limit: 3}}
+  - name: auto with a bad limit
+    expect_status: 422
+    http: {method: POST, path: /api/recommendations/auto, body: {limit: abc}}
+  - name: auto without a body
+    http: {method: POST, path: /api/recommendations/auto}
+  - name: path between two tracks
+    http: {method: POST, path: /api/recommendations/path, body: {start_track_id: 1, end_track_id: 4, length: 4}}
+  - name: path default length
+    http: {method: POST, path: /api/recommendations/path, body: {start_track_id: 2, end_track_id: 8}}
+  - name: path with genres
+    http: {method: POST, path: /api/recommendations/path, body: {start_track_id: 1, end_track_id: 3, length: 3, genres: [House, house]}}
+  - name: path from an unknown track
+    http: {method: POST, path: /api/recommendations/path, body: {start_track_id: 999, end_track_id: 3}}
+  - name: path needs both ends
+    expect_status: 422
+    http: {method: POST, path: /api/recommendations/path, body: {start_track_id: 1}}
+  - name: path length two
+    http: {method: POST, path: /api/recommendations/path, body: {start_track_id: 1, end_track_id: 3, length: 2}}
+  - name: wordplay list
+    expect_status: 200
+    http: {method: GET, path: /api/wordplay-pairs}
+  - name: wordplay list pending
+    expect_status: 200
+    http: {method: GET, path: /api/wordplay-pairs, query: {status: pending}}
+  - name: wordplay list from a track
+    expect_status: 200
+    http: {method: GET, path: /api/wordplay-pairs, query: {from_track_id: 1, status: approved}}
+  - name: wordplay list query
+    expect_status: 200
+    http: {method: GET, path: /api/wordplay-pairs, query: {query: NIGHT}}
+  - name: wordplay list paged
+    expect_status: 200
+    http: {method: GET, path: /api/wordplay-pairs, query: {limit: 2, offset: 1}}
+  - name: wordplay list bad status
+    expect_status: 422
+    http: {method: GET, path: /api/wordplay-pairs, query: {status: rejected}}
+  - name: wordplay list limit too big
+    expect_status: 422
+    http: {method: GET, path: /api/wordplay-pairs, query: {limit: 501}}
+  - name: approve an approvable pair
+    http: {method: POST, path: /api/wordplay-pairs/4/approve}
+  - name: approve an unapprovable pair
+    http: {method: POST, path: /api/wordplay-pairs/5/approve}
+  - name: approve an approved pair
+    http: {method: POST, path: /api/wordplay-pairs/2/approve}
+  - name: approve a missing pair
+    expect_status: 404
+    http: {method: POST, path: /api/wordplay-pairs/99/approve}
+  - name: approve with a bad id
+    expect_status: 422
+    http: {method: POST, path: /api/wordplay-pairs/x/approve}
+  - name: patch notes only
+    http: {method: PATCH, path: /api/wordplay-pairs/1, body: {transition_notes: "  retested  "}}
+  - name: patch a timestamp
+    http: {method: PATCH, path: /api/wordplay-pairs/2, body: {from_timestamp: 13}}
+  - name: patch verification only
+    http: {method: PATCH, path: /api/wordplay-pairs/3, body: {verification_status: tested}}
+  - name: patch an extra field
+    expect_status: 422
+    http: {method: PATCH, path: /api/wordplay-pairs/1, body: {status: approved}}
+  - name: patch a blank keyword
+    expect_status: 422
+    http: {method: PATCH, path: /api/wordplay-pairs/1, body: {keyword: "  "}}
+  - name: patch a bad url
+    expect_status: 422
+    http: {method: PATCH, path: /api/wordplay-pairs/1, body: {source_url: "ftp://x"}}
+  - name: patch nothing
+    http: {method: PATCH, path: /api/wordplay-pairs/1, body: {}}
+  - name: patch a duplicate
+    http: {method: PATCH, path: /api/wordplay-pairs/2, body: {keyword: Night}}
+  - name: patch an unknown track
+    http: {method: PATCH, path: /api/wordplay-pairs/2, body: {to_track_id: 999}}
+  - name: patch a missing pair
+    http: {method: PATCH, path: /api/wordplay-pairs/99, body: {keyword: x}}
+  - name: wordplay list after edits
+    expect_status: 200
+    http: {method: GET, path: /api/wordplay-pairs}
+  - name: delete a pair
+    expect_status: 200
+    http: {method: DELETE, path: /api/wordplay-pairs/6}
+  - name: delete it again
+    expect_status: 404
+    http: {method: DELETE, path: /api/wordplay-pairs/6}
+  - name: suggest genre for a track
+    http: {method: GET, path: /api/tracks/7/suggest-genre}
+  - name: suggest genre for a verified track
+    http: {method: GET, path: /api/tracks/1/suggest-genre}
+  - name: suggest genre without a vector
+    http: {method: GET, path: /api/tracks/9/suggest-genre}
+  - name: suggest genre for a missing track
+    http: {method: GET, path: /api/tracks/999/suggest-genre}
+  - name: suggest genre bad id
+    expect_status: 422
+    http: {method: GET, path: /api/tracks/x/suggest-genre}
+  - name: grouped suggestions
+    http: {method: GET, path: /api/genres/grouped-suggestions}
+  - name: grouped suggestions low threshold
+    http: {method: GET, path: /api/genres/grouped-suggestions, query: {threshold: 0.5, limit: 3}}
+  - name: grouped suggestions subgenre mode
+    http: {method: GET, path: /api/genres/grouped-suggestions, query: {threshold: 0.5, mode: subgenre}}
+  - name: grouped suggestions offset
+    http: {method: GET, path: /api/genres/grouped-suggestions, query: {threshold: 0.1, offset: 1, limit: 1}}
+  - name: grouped suggestions bad mode
+    expect_status: 422
+    http: {method: GET, path: /api/genres/grouped-suggestions, query: {mode: x}}
+  - name: suggestions for a track
+    http: {method: GET, path: /api/genres/grouped-suggestions/1, query: {threshold: 0.5}}
+  - name: suggestions for a track default threshold
+    http: {method: GET, path: /api/genres/grouped-suggestions/3}
+  - name: suggestions for a missing track
+    http: {method: GET, path: /api/genres/grouped-suggestions/999}

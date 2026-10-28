@@ -218,10 +218,14 @@ const bridgeText = read("src-tauri/src/junction_mcp_bridge.rs");
 const bridgeActions = Object.fromEntries([...bridgeText.matchAll(/"([a-z.]+)"\s*=>\s*(?:\{[^}]*?)?\(?\s*"(junction\.[a-z.]+|audio\.[a-z.]+)"/g)].map((m) => [m[1], m[2]]));
 for (const m of bridgeText.matchAll(/^\s*"([a-z.]+)" => (?:match|export_exchange|\{)/gm)) bridgeActions[m[1]] ??= null;
 
-const mcpText = read("backend/mcp_server/tools/junction.py");
-const mcpTools = Object.fromEntries([...mcpText.matchAll(/@mcp\.tool\(\)\s*\ndef (\w+)\(/g)].map((m, index, list) => {
-  const text = mcpText.slice(m.index, list[index + 1]?.index ?? mcpText.length);
-  return [m[1], { actions: sorted(all(/_call\(\s*"([a-z.]+)"/g, text)), retired: /raise ToolError\(_RETIRED_/.test(text) }];
+// The MCP Junction tools (routes/junction.rs `request`): each match arm names
+// its tools and the bridge action it posts; retired tools answer an error.
+const mcpText = body(read("src-tauri/crates/plumdeck-backend/src/routes/junction.rs"), "fn request(");
+const mcpArms = [...mcpText.matchAll(/^ {8}((?:"junction_\w+"\s*\|?\s*)+)=>/gm)];
+const mcpTools = Object.fromEntries(mcpArms.flatMap((m, index) => {
+  const text = mcpText.slice(m.index + m[0].length, mcpArms[index + 1]?.index ?? mcpText.length);
+  const entry = { actions: sorted(all(/\("([a-z.]+)",\s*(?:json!|o\()/g, text)), retired: /RETIRED_/.test(text) };
+  return all(/"(junction_\w+)"/g, m[1]).map((name) => [name, entry]);
 }));
 
 const commandNames = sorted([...opSites.map((m) => m[1]), ...previewOps]);

@@ -1,0 +1,140 @@
+# S11: the control and listing routes of library import, grid jobs and Play
+# imports on the sets fixture plus finished import batches. The analysis
+# results themselves differ by design (D-24/D-25) and are not run here:
+# nothing starts a worker. Covers ingest status / cancel while idle and its
+# validation, the grid-job plan and status and control of unknown jobs,
+# and Play import listing, detail, pause / cancel of finished batches,
+# idempotent re-creation by request id and the validation and refusal
+# paths. CURRENT_TIMESTAMP stamps of A compare by kind only (D-50).
+name: s11-ingest
+db: fixture
+fixture: sets
+freeze_now: "2026-05-01 12:34:56.789012"
+fixture_sql: |
+  INSERT INTO import_batches (id, request_id, target_kind, target_id, target_name_snapshot, origin, analysis_profile, effective_analysis_profile, state, paused, cancel_requested, created_at, updated_at) VALUES
+    ('import-done', 'req-done', 'collection', NULL, 'Collection', 'native_file_drop', 'auto', 'full', 'completed', false, false, '2026-04-01 10:00:00', '2026-04-01 10:05:00'),
+    ('import-errors', 'req-errors', 'local_playlist', 1, 'Warm-up', 'file_picker', 'light', 'light', 'completed_with_errors', false, false, '2026-04-02 10:00:00', '2026-04-02 10:05:00.5'),
+    ('import-canceled', 'req-canceled', 'collection', NULL, 'Collection', 'native_file_drop', 'full', NULL, 'canceled', false, true, '2026-04-03 10:00:00', '2026-04-03 10:01:00');
+  INSERT INTO import_items (id, batch_id, input_order, source_path, canonical_path, sha256, size_bytes, mtime_ns, track_id, state, load_ready, analysis_level, error_code, error_message, attempts) VALUES
+    ('item-1', 'import-done', 0, '{media}/id3v23.mp3', '{media}/id3v23.mp3', 'abc', 100, 1, 1, 'completed', true, 'full', NULL, NULL, 1),
+    ('item-2', 'import-done', 1, '{media}/vorbis.flac', '{media}/vorbis.flac', 'def', 200, 2, 3, 'existing', true, 'full', NULL, NULL, 1),
+    ('item-3', 'import-errors', 0, '{media}/noise.mp3', '{media}/noise.mp3', NULL, 300, 3, NULL, 'failed', false, 'failed', 'decode_failed', 'could not decode', 2),
+    ('item-4', 'import-errors', 1, '{media}/plain.wav', '{media}/plain.wav', NULL, 400, 4, 5, 'completed', true, 'light', NULL, NULL, 1),
+    ('item-5', 'import-errors', 2, '{media}/empty.mp3', '{media}/empty.mp3', NULL, 0, 5, NULL, 'skipped', false, NULL, 'empty', 'empty file', 0),
+    ('item-6', 'import-canceled', 0, '{media}/UPPER.MP3', '{media}/UPPER.MP3', NULL, 500, 6, NULL, 'queued', false, NULL, NULL, NULL, 0);
+  INSERT INTO import_target_intents (item_id, batch_id, target_kind, target_id, reserved_position, state, setlist_track_id) VALUES
+    ('item-1', 'import-done', 'collection', NULL, 0, 'applied', NULL),
+    ('item-2', 'import-done', 'collection', NULL, 1, 'applied', NULL),
+    ('item-3', 'import-errors', 'local_playlist', 1, 0, 'cancelled', NULL),
+    ('item-4', 'import-errors', 'local_playlist', 1, 1, 'applied', 5),
+    ('item-5', 'import-errors', 'local_playlist', 1, 2, 'cancelled', NULL),
+    ('item-6', 'import-canceled', 'collection', NULL, 0, 'cancelled', NULL);
+db_deviations:
+  - id: D-50
+    columns: [import_batches.updated_at]
+compare_overrides:
+  tolerances:
+    - {path: "$.updated_at", mode: generated}
+    - {path: "$[*].updated_at", mode: generated}
+    # D-24: B's results carry the Rust analyzers' component versions.
+    - {path: "$.versions.rhythm", mode: generated}
+steps:
+  # library import (ingest)
+  - name: idle status
+    expect_status: 200
+    http: {method: GET, path: /api/ingest/status}
+  - name: cancel while idle
+    expect_status: 200
+    http: {method: POST, path: /api/ingest/cancel}
+  - name: status after the cancel
+    expect_status: 200
+    http: {method: GET, path: /api/ingest/status}
+  - name: ingest needs targets
+    expect_status: 422
+    http: {method: POST, path: /api/ingest, body: {}}
+  - name: ingest needs a list
+    expect_status: 422
+    http: {method: POST, path: /api/ingest, body: {targets: "{media}"}}
+  - name: ingest with a bad profile
+    expect_status: 422
+    http: {method: POST, path: /api/ingest, body: {targets: ["{media}"], analysis_profile: turbo}}
+  - name: ingest without a body
+    expect_status: 422
+    http: {method: POST, path: /api/ingest}
+
+  # grid jobs
+  - name: grid job status with no jobs
+    expect_status: 200
+    http: {method: GET, path: /api/grid-jobs}
+  - name: grid job plan of every track
+    expect_status: 200
+    http: {method: POST, path: /api/grid-jobs/plan, body: {}}
+  - name: grid job plan of some tracks
+    expect_status: 200
+    http: {method: POST, path: /api/grid-jobs/plan, body: {track_ids: [1, 2, 999], only_outdated: false}}
+  - name: grid job plan of nothing
+    expect_status: 200
+    http: {method: POST, path: /api/grid-jobs/plan, body: {track_ids: []}}
+  - name: grid job plan with bad ids
+    expect_status: 422
+    http: {method: POST, path: /api/grid-jobs/plan, body: {track_ids: [x]}}
+  - name: pause an unknown grid job
+    http: {method: POST, path: /api/grid-jobs/job-none/pause}
+  - name: an unknown action on an unknown job
+    http: {method: POST, path: /api/grid-jobs/job-none/explode}
+
+  # Play imports
+  - name: list imports
+    expect_status: 200
+    http: {method: GET, path: /api/workflows/play/imports}
+  - name: list active imports
+    expect_status: 200
+    http: {method: GET, path: /api/workflows/play/imports, query: {active: true}}
+  - name: list with a bad flag
+    expect_status: 422
+    http: {method: GET, path: /api/workflows/play/imports, query: {active: maybe}}
+  - name: one import
+    expect_status: 200
+    http: {method: GET, path: /api/workflows/play/imports/import-errors}
+  - name: a missing import
+    expect_status: 404
+    http: {method: GET, path: /api/workflows/play/imports/import-none}
+  - name: the same request id returns the stored batch
+    expect_status: 202
+    http: {method: POST, path: /api/workflows/play/imports, body: {request_id: req-done, target: {kind: collection}, paths: ["{media}/id3v23.mp3"]}}
+  - name: a playlist that does not exist
+    expect_status: 409
+    http: {method: POST, path: /api/workflows/play/imports, body: {request_id: req-new-1, target: {kind: local_playlist, id: 99}, paths: ["{media}/id3v23.mp3"]}}
+  - name: nothing importable
+    expect_status: 409
+    http: {method: POST, path: /api/workflows/play/imports, body: {request_id: req-new-2, target: {kind: collection}, paths: ["{media}/nope.mp3"]}}
+  - name: a bad target kind
+    expect_status: 422
+    http: {method: POST, path: /api/workflows/play/imports, body: {request_id: req-new-3, target: {kind: usb}, paths: ["{media}/id3v23.mp3"]}}
+  - name: no paths
+    expect_status: 422
+    http: {method: POST, path: /api/workflows/play/imports, body: {request_id: req-new-4, target: {kind: collection}, paths: []}}
+  - name: an empty request id
+    expect_status: 422
+    http: {method: POST, path: /api/workflows/play/imports, body: {request_id: "", target: {kind: collection}, paths: ["{media}/id3v23.mp3"]}}
+  - name: a bad origin
+    expect_status: 422
+    http: {method: POST, path: /api/workflows/play/imports, body: {request_id: req-new-5, target: {kind: collection}, paths: ["{media}/id3v23.mp3"], origin: email}}
+  - name: pause a finished import
+    expect_status: 200
+    http: {method: POST, path: /api/workflows/play/imports/import-done/pause}
+  - name: cancel an import with errors
+    expect_status: 200
+    http: {method: POST, path: /api/workflows/play/imports/import-errors/cancel}
+  - name: control a missing import
+    expect_status: 409
+    http: {method: POST, path: /api/workflows/play/imports/import-none/cancel}
+  - name: an unknown action
+    expect_status: 422
+    http: {method: POST, path: /api/workflows/play/imports/import-done/explode}
+  - name: list after the changes
+    expect_status: 200
+    http: {method: GET, path: /api/workflows/play/imports}
+  - name: list active after the changes
+    expect_status: 200
+    http: {method: GET, path: /api/workflows/play/imports, query: {active: true}}

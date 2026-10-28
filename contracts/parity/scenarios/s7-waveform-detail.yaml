@@ -1,0 +1,67 @@
+# S7: the detailed playback waveform
+# (backend/api/routers/waveform_detail.py) over the synthetic media of the
+# sets fixture, decoded by FFmpeg on both sides: full density, reduced bins,
+# a second request answered from each side's own cache (D-20: the cache
+# format differs, not the answer), files that are missing, empty, a folder
+# or not audio, and the 404/422 paths.
+name: s7-waveform-detail
+db: fixture
+fixture: sets
+steps:
+  - name: mp3 at full density
+    expect_status: 200
+    http: {method: GET, path: /api/play/tracks/12/waveform-detail}
+  - name: mp3 again from the cache
+    expect_status: 200
+    http: {method: GET, path: /api/play/tracks/12/waveform-detail}
+  - name: mp3 reduced from the cache
+    expect_status: 200
+    http: {method: GET, path: /api/play/tracks/12/waveform-detail, query: {bins: 16}}
+  - name: mp3 more bins than values
+    expect_status: 200
+    http: {method: GET, path: /api/play/tracks/12/waveform-detail, query: {bins: 20000}}
+  - name: undecodable noise frames
+    expect_status: 422
+    http: {method: GET, path: /api/play/tracks/8/waveform-detail}
+  - name: wav
+    expect_status: 200
+    http: {method: GET, path: /api/play/tracks/5/waveform-detail, query: {bins: 100}}
+  - name: flac
+    expect_status: 422
+    http: {method: GET, path: /api/play/tracks/3/waveform-detail}
+  - name: m4a
+    expect_status: 422
+    http: {method: GET, path: /api/play/tracks/4/waveform-detail}
+  - name: id3v2 mp3
+    expect_status: 200
+    http: {method: GET, path: /api/play/tracks/1/waveform-detail, query: {bins: 32}}
+  - name: upper-case extension
+    expect_status: 200
+    http: {method: GET, path: /api/play/tracks/12/waveform-detail}
+  - name: untagged flac
+    expect_status: 422
+    http: {method: GET, path: /api/play/tracks/11/waveform-detail}
+  - name: empty file
+    expect_status: 422
+    http: {method: GET, path: /api/play/tracks/9/waveform-detail}
+  - name: missing file
+    expect_status: 404
+    http: {method: GET, path: /api/play/tracks/10/waveform-detail}
+  - name: a folder
+    expect_status: 404
+    http: {method: GET, path: /api/play/tracks/13/waveform-detail}
+  - name: unicode path
+    expect_status: 200
+    http: {method: GET, path: /api/play/tracks/2/waveform-detail}
+  - name: unknown track
+    expect_status: 404
+    http: {method: GET, path: /api/play/tracks/999/waveform-detail}
+  - name: too few bins
+    expect_status: 422
+    http: {method: GET, path: /api/play/tracks/8/waveform-detail, query: {bins: 15}}
+  - name: too many bins
+    expect_status: 422
+    http: {method: GET, path: /api/play/tracks/8/waveform-detail, query: {bins: 20001}}
+  - name: bad track id
+    expect_status: 422
+    http: {method: GET, path: /api/play/tracks/x/waveform-detail}

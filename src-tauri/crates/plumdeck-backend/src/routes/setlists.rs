@@ -617,7 +617,18 @@ pub async fn recommend_next_page(State(state): State<AppState>, uri: Uri) -> Res
                     PyValue::Int(id) => i64::try_from(*id).ok(),
                     _ => None,
                 });
-                let mut pairs: Vec<(PyValue, PyValue)> = row.into_iter().map(|(key, value)| (PyValue::Str(key), value)).collect();
+                // FastAPI's jsonable_encoder writes the row's timestamps with isoformat().
+                let mut pairs: Vec<(PyValue, PyValue)> = row
+                    .into_iter()
+                    .map(|(key, value)| {
+                        let value = match value {
+                            PyValue::DateTime(at) => datetime(&at),
+                            PyValue::Date(day) => text(day.format("%Y-%m-%d").to_string()),
+                            other => other,
+                        };
+                        (PyValue::Str(key), value)
+                    })
+                    .collect();
                 if let Some(pair) = id.and_then(|id| edges.get(&(target.id, id))) {
                     match wordplay_payload(pair) {
                         Ok(payload) => {

@@ -513,6 +513,69 @@ pub fn tracks_by_ids(conn: &Connection, track_ids: &[i64]) -> Result<Vec<TrackRo
     Ok(rows)
 }
 
+/// Why `similar_tracks` found nothing to rank.
+#[derive(Debug)]
+pub enum SimilarError {
+    /// No embedding row for the track (Python's ValueError, a 404).
+    NoEmbedding,
+    Db(DbError),
+}
+
+impl From<DbError> for SimilarError {
+    fn from(error: DbError) -> Self {
+        Self::Db(error)
+    }
+}
+
+impl From<duckdb::Error> for SimilarError {
+    fn from(error: duckdb::Error) -> Self {
+        Self::Db(error.into())
+    }
+}
+
+/// `TrackRepository.get_similar_tracks`: the tracks in the same embedding
+/// space, by DuckDB's `array_cosine_similarity` to the track's vector.
+pub fn similar_tracks(conn: &Connection, track_id: BigInt, limit: BigInt) -> Result<Vec<TrackHit>, SimilarError> {
+    use super::recommendations::EMBEDDING_DIM;
+    use plumdeck_domain::mixability::{embedding_space, LEGACY_MODELS};
+    let target: Option<(Option<String>, Option<String>)> = conn
+        .query_row(
+            "SELECT track_embeddings.model_name, track_embeddings.embedding_json FROM track_embeddings WHERE track_embeddings.track_id = ? LIMIT 1",
+            [track_id.value()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((model, vector)) = target else { return Err(SimilarError::NoEmbedding) };
+    let mut sql = Sql::default();
+    sql.push(&format!(
+        "SELECT {TRACK_COLUMNS}, lyrics.content, {COMPLETED_ANALYSIS_SQL} \
+         FROM tracks JOIN track_embeddings ON tracks.id = track_embeddings.track_id \
+         LEFT OUTER JOIN lyrics ON tracks.id = lyrics.track_id WHERE tracks.id != "
+    ));
+    sql.bind(track_id.value());
+    if embedding_space(model.as_deref()) == "musicnn" {
+        sql.push(" AND (track_embeddings.model_name IN ");
+        sql.placeholders(LEGACY_MODELS.iter().map(|name| Value::Text((*name).into())));
+        sql.push(" OR track_embeddings.model_name IS NULL)");
+    } else {
+        sql.push(" AND track_embeddings.model_name = ");
+        sql.bind(model.map_or(Value::Null, Value::Text));
+    }
+    sql.push(&format!(
+        " ORDER BY array_cosine_similarity(CAST(track_embeddings.embedding_json AS FLOAT[{EMBEDDING_DIM}]), CAST("
+    ));
+    sql.bind(vector.map_or(Value::Null, Value::Text));
+    sql.push(&format!(" AS FLOAT[{EMBEDDING_DIM}])) DESC LIMIT "));
+    sql.bind(limit.value());
+    let mut statement = conn.prepare(&sql.text)?;
+    let rows = statement
+        .query_map(params_from_iter(sql.params), |row| {
+            Ok(TrackHit { track: TrackRow::from_row(row, 0)?, lyrics: row.get(TRACK_COLUMN_COUNT)?, is_analyzed: row.get(TRACK_COLUMN_COUNT + 1)? })
+        })?
+        .collect::<Result<_, _>>()?;
+    Ok(rows)
+}
+
 /// The metadata fields `PATCH /api/tracks/{id}/info` may set.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TrackInfo {

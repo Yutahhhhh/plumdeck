@@ -1,5 +1,5 @@
 {
-  find . -type f \( -name "*.tsx" -o -name "*.ts" -o -name "*.py" \) \
+  find . -type f \( -name "*.tsx" -o -name "*.ts" \) \
   -not -path "*/node_modules/*" \
   -not -path "*/src/components/settings-view/*" \
   -not -path "*/src/components/prompt-manager/*" \

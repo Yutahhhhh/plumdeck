@@ -91,7 +91,9 @@ fn bounded_str(fields: &Fields<'_>, name: &str, value: Option<String>, min: usiz
     Some(value)
 }
 
-/// An `Optional[datetime]` from JSON (ISO text; the offset is dropped).
+/// An `Optional[datetime]` from JSON (ISO text or epoch seconds). An aware
+/// value is stored as local wall time, like DuckDB's TIMESTAMPTZ to
+/// TIMESTAMP cast of the datetime Python binds.
 fn opt_datetime(fields: &Fields<'_>, name: &str) -> Option<Option<NaiveDateTime>> {
     match fields.value(name) {
         None | Some(PyValue::None) => Some(None),
@@ -102,7 +104,11 @@ fn opt_datetime(fields: &Fields<'_>, name: &str) -> Option<Option<NaiveDateTime>
                 None
             }
         },
-        Some(PyValue::Int(n)) => chrono::DateTime::from_timestamp(*n as i64, 0).map(|at| Some(at.naive_utc())),
+        // pydantic makes an aware UTC datetime; DuckDB stores it as local wall time.
+        Some(PyValue::Int(n)) => i64::try_from(*n)
+            .ok()
+            .and_then(|n| chrono::DateTime::from_timestamp(n, 0))
+            .map(|at| Some(at.with_timezone(&chrono::Local).naive_local())),
         Some(_) => {
             fields.reject(name, "datetime_type", "Input should be a valid datetime");
             None
@@ -112,7 +118,7 @@ fn opt_datetime(fields: &Fields<'_>, name: &str) -> Option<Option<NaiveDateTime>
 
 fn parse_datetime(text: &str) -> Option<NaiveDateTime> {
     if let Ok(at) = chrono::DateTime::parse_from_rfc3339(text) {
-        return Some(at.naive_local());
+        return Some(at.with_timezone(&chrono::Local).naive_local());
     }
     for format in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M"] {
         if let Ok(at) = NaiveDateTime::parse_from_str(text, format) {
@@ -320,8 +326,9 @@ pub async fn add_local_playlist_track(State(state): State<AppState>, UrlPath(id)
                     plumdeck_db::duckdb::params_from_iter([Value::HugeInt(id), Value::HugeInt(target)]),
                 )?;
                 let entry: i64 = conn.query_row(
-                    "INSERT INTO setlist_tracks (setlist_id,track_id,position) VALUES (?,?,?) RETURNING id",
-                    plumdeck_db::duckdb::params_from_iter([Value::HugeInt(id), Value::HugeInt(payload.track_id), Value::HugeInt(target)]),
+                    // created_at from the clock, not the column default (D-21).
+                    "INSERT INTO setlist_tracks (setlist_id,track_id,position,created_at) VALUES (?,?,?,?) RETURNING id",
+                    plumdeck_db::duckdb::params_from_iter([Value::HugeInt(id), Value::HugeInt(payload.track_id), Value::HugeInt(target), ts(now)]),
                     |row| row.get(0),
                 )?;
                 conn.execute("UPDATE setlists SET updated_at=? WHERE id=?", plumdeck_db::duckdb::params_from_iter([ts(now), Value::HugeInt(id)]))?;
@@ -777,10 +784,11 @@ pub async fn copy_mirror_playlist(
                     key.clone(),
                 )?
                 .unwrap_or(0);
-                let mut params = vec![Value::BigInt(created.id)];
+                let mut params = vec![Value::BigInt(created.id), ts(now)];
                 params.extend(key);
                 conn.execute(
-                    "INSERT INTO setlist_tracks (setlist_id,track_id,position) SELECT ?,m.local_track_id,row_number() OVER (ORDER BY m.position)-1 \
+                    // created_at from the clock, not the column default (D-21).
+                    "INSERT INTO setlist_tracks (setlist_id,track_id,position,created_at) SELECT ?,m.local_track_id,row_number() OVER (ORDER BY m.position)-1,? \
                      FROM rekordbox_playlist_tracks m JOIN tracks t ON t.id=m.local_track_id WHERE m.source_id=? AND m.playlist_external_id=? ORDER BY m.position",
                     plumdeck_db::duckdb::params_from_iter(params),
                 )?;
@@ -1155,6 +1163,11 @@ fn recording_file(conn: &Connection, id: i128) -> Result<Result<(PyValue, PathBu
 /// `utils.executables.find_ffmpeg`.
 pub fn find_ffmpeg() -> Option<PathBuf> {
     let name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+    // The desktop bundle ships FFmpeg next to the app executable (a Tauri
+    // externalBin); a packaged copy wins over developer installations.
+    if let Some(bundled) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|dir| dir.join(name))).filter(|path| path.is_file()) {
+        return Some(bundled);
+    }
     if let Some(paths) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&paths) {
             let candidate = dir.join(name);
