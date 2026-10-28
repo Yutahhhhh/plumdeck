@@ -91,7 +91,7 @@ Windows の音声は WASAPI 共有モードのみ（ASIO は使わない）。
 
 | ID | 内容 | 受け入れ基準の要点 |
 |---|---|---|
-| W2-01 | エンジン契約 v1 の機械可読化（`contracts/dj-engine/v1/`：op、イベント、capability、エラーコード、定数、JSON Schema、バイナリ形式、例）とドリフト検査（host.cpp などからリテラルを抽出して照合） | 未分類の op 0、op を 1 つ足すと検出 |
+| W2-01 | エンジン契約 v1 の機械可読化（`contracts/dj-engine/v1/`：op、イベント、capability、エラーコード、定数、JSON Schema、バイナリ形式、例）とドリフト検査（host.cpp などからリテラルを抽出して照合） | 未分類の op 0、op を 1 つ足すと検出。**一部済**：`contracts/dj-engine/v1/contract.json`（op 115、イベント 10、capability 50、エラー 15、定数、分類と実装側）と `tools/engine-contract/contract.mjs`（CI でドリフト検査）。op ごとの params の JSON Schema、バイナリ形式、例は W2-09 で追加 |
 | W2-02 | BlackHole の CI スパイク（macOS ランナーで BlackHole を入れ、既存のタイミングテストを 1 本） | 成否を記録。失敗ならゴールデン採取をオーナーの実機に回す |
 | W2-03 | 両エンジン共通のコンフォーマンス・スイートの整理（既存の音声テストと §1 のスイートを `requires(capability)` でまとめ、capability ごとの集計） | シミュレータで fail 0、assert と閾値が移行前と同じ |
 | W2-04 | ゴールデン採取の基盤（G01〜G22 のシナリオ：transport、varispeed、keylock、EQ、filter、カーブ、PFL、パッド FX、Color FX、Beat FX、loop、hotcue、slip、sync、scratch、MIDI、sampler、マイク、録音、波形、デコーダ時刻、テレメトリ）。合成音源だけを公開し、私的なゴールデンはオーナーの Mac の中だけ | manifest の sha が確定 |
