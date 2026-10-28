@@ -23,7 +23,7 @@ import { performanceMetadataService } from "@/services/performance-metadata";
 import { workflowsService } from "@/services/workflows";
 import { cuePositions, persistCue, persistLoop } from "@/services/performance-cue-metadata";
 import type { Track } from "@/types";
-import { DECK_IDS, DJ_ENGINE_CAPABILITIES, type DeckId, type MicrophoneSettings, type RecordingState, type TrackDescriptor } from "@/types/dj-engine";
+import { DECK_IDS, DJ_ENGINE_CAPABILITIES, type DeckId, type DeckState, type MicrophoneSettings, type RecordingState, type TrackDescriptor } from "@/types/dj-engine";
 import { savedMicrophoneSettings, saveMicrophoneSettings } from "@/services/dj-engine/audio-settings";
 import { usePlayerStore } from "@/stores/playerStore";
 import { cn } from "@/lib/utils";
@@ -33,6 +33,7 @@ import { DeckWaveform, type WaveformLayout } from "./DeckWaveform";
 import { Fader, SoftwareDeck, formatTime } from "./SoftwareDeck";
 import { MixerPanel } from "./MixerPanel";
 import { chooseSyncLeader } from "./sync-leader";
+import { manualLoopOut, snapToBeat } from "./loop-math";
 import { setPlayPreference, usePlayPreferences } from "./play-preferences";
 import { readKeyNotation } from "@/services/dj-engine/musical-key";
 import { PanelToolbar, PANEL_DEFAULTS, type PanelId, type PanelVisibility } from "./PanelToolbar";
@@ -122,6 +123,11 @@ export function PlayWorkspace() {
   // 曲頭より前から始めたいとき用の無音の助走。Mixxx は負の再生位置を持てないので、
   // 助走ぶんだけ UI 側で待ってから 0 秒地点を再生する。
   const manualLoopIn = useRef<Record<DeckId, number | null>>({ A: null, B: null, C: null, D: null });
+  const [pendingLoopIn, setPendingLoopIn] = useState<Record<DeckId, number | null>>({ A: null, B: null, C: null, D: null });
+  const setLoopIn = useCallback((deck: DeckId, value: number | null) => {
+    manualLoopIn.current[deck] = value;
+    setPendingLoopIn((old) => old[deck] === value ? old : { ...old, [deck]: value });
+  }, []);
   const [panels, setPanels] = useState<PanelVisibility>(() => {
     try { return { ...PANEL_DEFAULTS, ...JSON.parse(localStorage.getItem("plumdeck.panels") ?? "{}") as Partial<PanelVisibility> }; }
     catch { return PANEL_DEFAULTS; }
@@ -265,7 +271,7 @@ export function PlayWorkspace() {
     const loadRequest = ++deckLoadRequests.current[deck];
     if (track.key) setTrackKeys(old => old[track.id] === track.key ? old : { ...old, [track.id]: track.key });
     cuePoints.current[deck] = 0;
-    manualLoopIn.current[deck] = null;
+    setLoopIn(deck, null);
     const descriptor: TrackDescriptor = { musicalKey: track.key || undefined, localTrackId: track.id, trackId: String(track.id), path: track.filepath, durationMs: track.duration * 1000, title: track.title || undefined, artist: track.artist || undefined, bpm: track.bpm || undefined };
     void run(() => deckLoadOperations.current.run(DECK_IDS.indexOf(deck), () => gridOperations.current.run(track.id, async () => {
       if (loadRequest !== deckLoadRequests.current[deck]) return;
@@ -318,7 +324,7 @@ export function PlayWorkspace() {
       await persist(() => playService.upsertHistory({ event_key: key, session_id: playSession.current, deck, track_id: track.id, loaded_at: loadedAt }));
       setActiveDeck(deck);
     })));
-  }, [client, connect, finalizeHistory, outputDevice, persist, run, saveRuntime, start, status?.running]);
+  }, [client, connect, finalizeHistory, outputDevice, persist, run, saveRuntime, setLoopIn, start, status?.running]);
 
   const editHotCue = (deck: DeckId, slot: number, clear: boolean) => run(async () => {
     const trackId = client.getState().snapshot?.decks[deck].track?.trackId;
@@ -691,7 +697,7 @@ export function PlayWorkspace() {
       beatTimesMs={deck?.track?.beatTimesMs} beatNumbers={deck?.track?.beatNumbers}
       gridAvailable={Boolean(deck?.track?.beatgridOffsetMs !== undefined || deck?.track?.beatTimesMs?.length)}
       onGridShift={gridEdit?.deck === id && !gridSaving.current ? (deltaMs) => setGridShift(old => ({ sequence: (old?.sequence ?? 0) + 1, deltaMs })) : undefined}
-      hotCues={deck?.hotCues} scratching={deck?.scratching} loopRegion={deck?.loopRegion}
+      hotCues={deck?.hotCues} scratching={deck?.scratching} loopRegion={deck?.loopRegion} pendingLoopInMs={pendingLoopIn[id]}
       onSeek={connected && !tailLock(id) ? (ms) => seekAbsolute(id, ms) : undefined}
       onScratch={connected && !tailLock(id) ? (command) => scratch(id, command) : undefined}
       onBackspin={connected && !tailLock(id) ? (release) => client.backspin(id, release.gestureId, release.positionMs, release.velocity, jogWeight(id),
@@ -732,6 +738,45 @@ export function PlayWorkspace() {
       await client.setFx(unit.channel, unit.effect, unit.enabled, unit.mix);
     });
   };
+
+  // Manual loop and loop resize. With Q on, IN and OUT land on the nearest beat.
+  const gridOf = (track: { bpm: number | null; beatgridOffsetMs?: number; beatTimesMs?: number[] }) => ({ bpm: track.bpm, beatgridOffsetMs: track.beatgridOffsetMs, beatTimesMs: track.beatTimesMs });
+  const placed = (deck: DeckState) => deck.track && deck.quantize ? snapToBeat(deck.positionMs, gridOf(deck.track)) : deck.positionMs;
+  const loopIn = (id: DeckId) => {
+    const deck = client.getState().snapshot?.decks[id];
+    if (deck?.track) setLoopIn(id, Math.max(0, Math.min(deck.track.durationMs, placed(deck))));
+  };
+  const loopOut = (id: DeckId) => run(async () => {
+    const deck = client.getState().snapshot?.decks[id];
+    if (!deck?.track) return;
+    if (manualLoopIn.current[id] === null) throw new Error("先に IN を押してループの開始点を決めてください");
+    const loop = manualLoopOut(manualLoopIn.current[id], Math.min(deck.track.durationMs, placed(deck)));
+    if (!loop) throw new Error("OUT は IN より後ろの位置で押してください");
+    setLoopIn(id, null);
+    await client.setLoop(id, loop.startMs, loop.endMs);
+    await client.enableLoop(id, true);
+  });
+  const reloop = (id: DeckId) => run(async () => {
+    const deck = client.getState().snapshot?.decks[id];
+    const region = deck?.loopRegion;
+    if (!deck?.track || !region) return;
+    if (region.enabled) { await client.enableLoop(id, false); return; }
+    const generation = client.getDeckGeneration(id);
+    await client.seek(id, region.startMs, deck.track.durationMs);
+    if (generation === client.getDeckGeneration(id)) await client.enableLoop(id, true);
+  });
+  const setActiveLoop = (id: DeckId, startMs: number, endMs: number) => run(async () => {
+    const generation = client.getDeckGeneration(id);
+    await client.setLoop(id, startMs, endMs);
+    if (generation !== client.getDeckGeneration(id)) return;
+    await client.enableLoop(id, true);
+    // A shorter loop can leave the playhead past OUT; wrap it back inside.
+    const deck = client.getState().snapshot?.decks[id];
+    const length = endMs - startMs;
+    if (deck?.track && (deck.positionMs > endMs || deck.positionMs < startMs) && length > 0) {
+      await client.seek(id, startMs + (((deck.positionMs - startMs) % length) + length) % length, deck.track.durationMs);
+    }
+  });
 
   // The host mirrors the leader only onto the leading deck itself.
   const syncLeader = DECK_IDS.find((deck) => snapshot?.decks[deck]?.syncLeader === deck) ?? null;
@@ -784,7 +829,7 @@ export function PlayWorkspace() {
     onSync={(enabled) => void run(() => client.setSync(id, enabled, enabled ? chooseSyncLeader(id, snapshot?.engine.decks ?? [], snapshot?.decks ?? {}) : undefined))}
     syncLeader={syncLeader}
     onMaster={() => void makeMaster(id)}
-    onUnload={() => void run(async () => { ++deckLoadRequests.current[id]; cuePoints.current[id] = 0; manualLoopIn.current[id] = null; await client.unload(id); await finalizeHistory(id, "ejected"); })}
+    onUnload={() => void run(async () => { ++deckLoadRequests.current[id]; cuePoints.current[id] = 0; setLoopIn(id, null); await client.unload(id); await finalizeHistory(id, "ejected"); })}
     onHotCue={(index, clear) => void editHotCue(id, index, clear)}
     onMemory={(action) => void run(() => memoryAction(id, action))}
     onKeyShift={(semitones) => void run(() => client.keyShift(id, semitones))}
@@ -797,18 +842,11 @@ export function PlayWorkspace() {
       // A called memory cue becomes the CUE point, like CALL on a player.
       if (cue) cuePoints.current[id] = cue.positionMs;
     })}
-    onLoopIn={() => void run(async () => {
-      const deck = client.getState().snapshot?.decks[id];
-      if (deck?.track) manualLoopIn.current[id] = deck.positionMs;
-    })}
-    onLoopOut={() => void run(async () => {
-      const deck = client.getState().snapshot?.decks[id];
-      const start = manualLoopIn.current[id];
-      if (!deck?.track || start === null || deck.positionMs <= start) return;
-      manualLoopIn.current[id] = null;
-      await client.setLoop(id, start, deck.positionMs);
-      await client.enableLoop(id, true);
-    })}
+    pendingLoopIn={pendingLoopIn[id]}
+    onLoopIn={() => loopIn(id)}
+    onLoopOut={() => void loopOut(id)}
+    onReloop={() => void reloop(id)}
+    onLoopSet={(startMs, endMs) => void setActiveLoop(id, startMs, endMs)}
     onLoop={(beats) => void run(() => client.getState().snapshot?.decks[id]?.loopRegion?.enabled ? client.enableLoop(id, false) : client.beatLoop(id, beats))} />;
 
   const midi = useDdj1000({

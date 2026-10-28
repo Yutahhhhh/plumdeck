@@ -18,6 +18,7 @@ import { barNumbers, lowerBeat } from "./beat-grid-math";
 import { PerformancePads, UNBACKED_PAD_MODES, type FxEffect, type PadMode } from "./PerformancePads";
 import { PadModeSelect } from "./PadModeSelect";
 import { AutoBeatLoop, type LoopMode } from "./AutoBeatLoop";
+import { beatLoopPress, clampBeats, loopBeats, LOOP_BEATS_RANGE, LOOP_BEATS_RANGE_EXTENDED, resizeLoop, stepBeats } from "./loop-math";
 import { TempoPlatter, TEMPO_RANGES, type TempoRange } from "./TempoPlatter";
 import { RotaryKnob } from "./RotaryKnob";
 import { JOG_WEIGHT_DEFAULT, jogWeight, jogWeightLabel, setJogWeight, subscribeJogWeight } from "@/services/dj-engine/jog-weight";
@@ -45,7 +46,11 @@ type Props = {
   onHotCue: (index: number, clear: boolean) => void; onLoop: (beats: number) => void;
   onBeatJump?: (beats: number) => void; onBeatLoop?: (beats: number) => void; onLoopEnable?: (enabled: boolean) => void;
   onQuantize?: (enabled: boolean) => void; onFx?: (effect: FxEffect, enabled: boolean, mix: number, depth: number) => void; onSaveLoop?: () => void;
-  onLoopIn?: () => void; onLoopOut?: () => void;
+  onLoopIn?: () => void; onLoopOut?: () => void; onReloop?: () => void;
+  /** Set and enable a loop (resize keeping IN). */
+  onLoopSet?: (startMs: number, endMs: number) => void;
+  /** Manual loop IN waiting for OUT. */
+  pendingLoopIn?: number | null;
   onMemory?: (action: "save" | "delete" | "previous" | "next") => void; onMemoryCall?: (index: number) => void;
   onKeyShift?: (semitones: number) => void; onKeySync?: () => void; onKeyReset?: () => void;
   onSlip?: (enabled: boolean) => void; onReverse?: (enabled: boolean) => void;
@@ -56,10 +61,10 @@ type Props = {
   onGridEdit: () => void; onGridClose?: () => void; gridEditor?: ReactNode;
 };
 
-export function SoftwareDeck({ id, deck, channel, active, connected, capability, capabilities, tailLock, onActivate, onToggle, onCue, onSeekAbsolute, onTempo, onKeylock, onSync, onMaster, onUnload, syncLeader, onHotCue, onLoop, onBeatJump, onBeatLoop, onLoopEnable, onQuantize, onFx, onSaveLoop, onLoopIn, onLoopOut, onMemory, onMemoryCall, onKeyShift, onKeySync, onKeyReset, onSlip, onReverse, savedLoops, onRecallLoop, trackKey, cueColors, onGridEdit, onGridClose, gridEditor }: Props) {
+export function SoftwareDeck({ id, deck, channel, active, connected, capability, capabilities, tailLock, onActivate, onToggle, onCue, onSeekAbsolute, onTempo, onKeylock, onSync, onMaster, onUnload, syncLeader, onHotCue, onLoop, onBeatJump, onBeatLoop, onLoopEnable, onQuantize, onFx, onSaveLoop, onLoopIn, onLoopOut, onReloop, onLoopSet, pendingLoopIn, onMemory, onMemoryCall, onKeyShift, onKeySync, onKeyReset, onSlip, onReverse, savedLoops, onRecallLoop, trackKey, cueColors, onGridEdit, onGridClose, gridEditor }: Props) {
   const deckDrop = usePlayDeckDrop(`play-deck-controls-${id}`, id);
   const left = id === "A" || id === "C";
-  const [loopBeats, setLoopBeats] = useState(4);
+  const [autoBeats, setAutoBeats] = useState(4);
   const selection = useSyncExternalStore(subscribePads, () => getPadSelection(id));
   const samplerState = useSyncExternalStore(sampler.subscribe,sampler.getSnapshot);
   const weight = useSyncExternalStore(subscribeJogWeight, () => jogWeight(id));
@@ -137,10 +142,26 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
     : !parseKey(trackKey) ? "KEY SYNC：この曲のキーが不明です" : !onKeySync ? "KEY SYNC コントローラー未接続" : undefined);
   const slipReason = unavailable("deck.slip", "SLIP", Boolean(onSlip));
   const reverseReason = unavailable("deck.reverse", "REVERSE", Boolean(onReverse));
-  const selectLoopBeats = (beats: number) => {
-    const next = Math.max(.125, Math.min(32, beats));
-    setLoopBeats(next);
-    if (deck?.loopRegion?.enabled) onBeatLoop?.(next);
+  const loopRange = capabilities.includes(DJ_ENGINE_CAPABILITIES.deckLoopExtended) ? LOOP_BEATS_RANGE_EXTENDED : LOOP_BEATS_RANGE;
+  const loopGrid = { bpm: trackBpm, beatgridOffsetMs: deck?.track?.beatgridOffsetMs, beatTimesMs: deck?.track?.beatTimesMs };
+  const activeLoop = deck?.loopRegion?.enabled ? deck.loopRegion : null;
+  const activeBeats = activeLoop ? loopBeats(activeLoop, loopGrid) : null;
+  const createLoop = onBeatLoop ?? onLoop;
+  // BEAT LOOP pad: same size exits, another size keeps IN, idle starts a new loop.
+  const pressBeatLoop = (beats: number) => {
+    setAutoBeats(beats);
+    const press = beatLoopPress(activeLoop, beats, loopGrid, duration, loopRange);
+    if (press.kind === "create") createLoop(beats);
+    else if (press.kind === "exit") onLoopEnable?.(false);
+    else onLoopSet?.(press.loop.startMs, press.loop.endMs);
+  };
+  const resized = (direction: -1 | 1) => activeLoop ? resizeLoop(activeLoop, direction < 0 ? 0.5 : 2, duration, loopGrid, loopRange) : null;
+  const stepLoop = (direction: -1 | 1) => {
+    if (!activeLoop) { setAutoBeats(stepBeats(autoBeats, direction, loopRange)); return; }
+    const next = resized(direction);
+    if (!next) return;
+    if (activeBeats) setAutoBeats(clampBeats(activeBeats * (direction < 0 ? 0.5 : 2), loopRange));
+    onLoopSet?.(next.startMs, next.endMs);
   };
 
   // Bar/beat come from the same grid the scrolling waveform draws, so the
@@ -209,7 +230,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
       </div>
     </div>
     <div className="dj-overview">
-      <DeckWaveform assetId={deck?.track?.assetId} remoteWaveform={deck?.track?.waveform} trackId={trackId} positionMs={position} durationMs={duration} layout="horizontal" side={left ? "left" : "right"} color={left ? "cyan" : "fuchsia"} hotCues={deck?.hotCues} playing={deck?.status === "playing"} rate={deck?.rate ?? 1} bpm={deck?.track?.bpm} loopRegion={deck?.loopRegion} onSeek={disabled ? undefined : onSeekAbsolute} />
+      <DeckWaveform assetId={deck?.track?.assetId} remoteWaveform={deck?.track?.waveform} trackId={trackId} positionMs={position} durationMs={duration} layout="horizontal" side={left ? "left" : "right"} color={left ? "cyan" : "fuchsia"} hotCues={deck?.hotCues} playing={deck?.status === "playing"} rate={deck?.rate ?? 1} bpm={deck?.track?.bpm} loopRegion={deck?.loopRegion} pendingLoopInMs={pendingLoopIn} onSeek={disabled ? undefined : onSeekAbsolute} />
     </div>
     <div className="dj-deck-controls">
       <div className="dj-perf">
@@ -230,9 +251,9 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
               void (async () => { await djEngineClient.keyShift(id, semitones);
                 if (keyboard && generation === djEngineClient.getDeckGeneration(id)) { const cue = deck?.hotCues[keyboardCue]; if (cue == null) throw new Error("KEYBOARDにはホットキューを設定してください"); await djEngineClient.seek(id,cue); if(generation === djEngineClient.getDeckGeneration(id)) await djEngineClient.play(id); }
               })().catch(e=>setPadError(String(e)));
-            }} mode={padMode} hotCues={deck?.hotCues} formatTime={formatTime} describeCue={describeCue} selectedLoopBeats={loopBeats} fxMix={fxMix} activeFx={channel?.fx?.enabled ? channel.fx.effect : undefined}
+            }} mode={padMode} hotCues={deck?.hotCues} formatTime={formatTime} describeCue={describeCue} selectedLoopBeats={activeBeats ?? undefined} fxMix={fxMix} activeFx={channel?.fx?.enabled ? channel.fx.effect : undefined}
               hotCueDisabledReason={hotCueReason} beatLoopDisabledReason={loopReason} beatJumpDisabledReason={jumpReason} padFxDisabledReason={fxReason}
-              onHotCue={onHotCue} onBeatLoop={(beats) => { setLoopBeats(beats); (onBeatLoop ?? onLoop)(beats); }} onBeatJump={onBeatJump} onFx={onFx}
+              onHotCue={onHotCue} onBeatLoop={pressBeatLoop} onBeatJump={onBeatJump} onFx={onFx}
               memoryCues={memoryPoints} selectedMemory={memorySelected} memoryDisabledReason={memoryReason} onMemoryCall={onMemoryCall} />}
             {padMode === "memorycue" && <div className="dj-memory-actions" role="group" aria-label={`Deck ${id} MEMORY CUE`}>
               <button type="button" disabled={Boolean(memoryReason) || !memoryPoints.length} title={memoryReason ?? "前のメモリーキューへ"} aria-label="前のメモリーキュー" onClick={() => onMemory?.("previous")}>◀</button>
@@ -262,14 +283,17 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
         </div>
       </div>
       <div className="dj-loop-controls">
-        <AutoBeatLoop deckId={id} beats={loopBeats} mode={loopMode} loopActive={Boolean(deck?.loopRegion?.enabled)} hasLoop={Boolean(deck?.loopRegion)}
+        <AutoBeatLoop deckId={id} beats={activeBeats ?? autoBeats} mode={loopMode} loopActive={Boolean(activeLoop)} hasLoop={Boolean(deck?.loopRegion)}
+          pendingIn={pendingLoopIn !== null && pendingLoopIn !== undefined}
           disabledReason={loopReason}
+          canHalve={activeLoop ? Boolean(resized(-1)) : autoBeats > loopRange.min}
+          canDouble={activeLoop ? Boolean(resized(1)) : autoBeats < loopRange.max}
           onMode={setLoopMode}
-          onBeats={selectLoopBeats}
-          onSetLoop={(beats) => (onBeatLoop ?? onLoop)(beats)}
-          onLoopToggle={() => deck?.loopRegion && (onLoopEnable ? onLoopEnable(!deck.loopRegion.enabled) : onLoop(loopBeats))}
+          onStep={stepLoop}
+          onAuto={() => activeLoop ? onLoopEnable?.(false) : createLoop(autoBeats)}
           onLoopIn={() => onLoopIn?.()}
-          onLoopOut={() => onLoopOut?.()} />
+          onLoopOut={() => onLoopOut?.()}
+          onReloop={() => onReloop?.()} />
         <div className="dj-loop-extra">
           <button disabled={!onSaveLoop || Boolean(loopReason) || !deck?.loopRegion} title={!onSaveLoop ? "保存コントローラー未接続" : !deck?.loopRegion ? "保存するループがありません" : "現在のループを保存"} onClick={onSaveLoop}>保存</button>
           {!!savedLoops?.length && <select className="dj-saved-loops" aria-label={`Deck ${id} 保存済みループ`} defaultValue="" disabled={!onRecallLoop || Boolean(loopReason)} onChange={(event) => { if (event.target.value) onRecallLoop?.(event.target.value); event.currentTarget.value = ""; }}><option value="">保存済み…</option>{savedLoops.map((loop) => <option key={loop.id} value={loop.id}>{loop.label}</option>)}</select>}

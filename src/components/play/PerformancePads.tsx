@@ -3,6 +3,7 @@ import { padColor } from "@/services/midi/pad-colors";
 export { CUE_COLORS } from "@/services/midi/pad-colors";
 import { useEffect, useRef, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { formatBeats, sameBeats } from "./loop-math";
 import type { PadEffect } from "@/types/dj-engine";
 import type { MemoryCue } from "@/services/dj-engine/memory-cues";
 
@@ -55,7 +56,7 @@ const SLICER_SLOTS = [1, 2, 3, 4, 5, 6, 7, 8] as const;
 const STEM_PADS = ["VOCAL", "INST", "BASS", "DRUMS", "FX VOCAL", "FX INST", "FX BASS", "FX DRUMS"] as const;
 const CENSR_PADS = ["REV ROLL", "TRANS", "ECHO", "V.BRAKE", "IN", "OUT", "CLEAR", "ON/OFF"] as const;
 
-const fraction = (beats: number) => beats >= 1 ? String(beats) : `1/${Math.round(1 / beats)}`;
+const fraction = formatBeats;
 
 type Props = {
   mode: PadMode;
@@ -66,7 +67,8 @@ type Props = {
   formatTime: (ms: number) => string;
   /** キューが乗っている小節・拍。量子化されたか目で確かめられるようにする。 */
   describeCue?: (ms: number) => string | undefined;
-  selectedLoopBeats: number;
+  /** Length of the active loop in beats; highlights the matching pad. */
+  selectedLoopBeats?: number;
   fxMix: number;
   activeFx?: FxEffect;
   hotCueDisabledReason?: string;
@@ -160,8 +162,9 @@ export function PerformancePads(props: Props) {
   })}</PadGrid>;
 
   if (props.mode === "beatloop") return <PadGrid label="Beat loops">{BEAT_LOOP_PAGES[props.page ?? 0].map((beats) => <button key={beats}
-    className={cn("dj-performance-pad", "dj-performance-pad--value", beats === props.selectedLoopBeats && "is-selected")} disabled={Boolean(props.beatLoopDisabledReason)}
-    title={props.beatLoopDisabledReason ?? `${fraction(beats)}拍ループを設定`} onClick={() => props.onBeatLoop?.(beats)}><b>{fraction(beats)}</b></button>)}</PadGrid>;
+    className={cn("dj-performance-pad", "dj-performance-pad--value", sameBeats(props.selectedLoopBeats, beats) && "is-selected")} disabled={Boolean(props.beatLoopDisabledReason)}
+    aria-pressed={sameBeats(props.selectedLoopBeats, beats)}
+    title={props.beatLoopDisabledReason ?? (sameBeats(props.selectedLoopBeats, beats) ? "ループを抜けます" : props.selectedLoopBeats ? `開始点を保ったまま ${fraction(beats)} 拍に変更` : `${fraction(beats)} 拍のループを現在位置から張ります`)} onClick={() => props.onBeatLoop?.(beats)}><b>{fraction(beats)}</b></button>)}</PadGrid>;
 
   if (props.mode === "beatjump") return <PadGrid label="Beat jumps">{BEAT_JUMP_PAGES[props.page??0].map((beats,index)=><button key={index}
     className="dj-performance-pad dj-performance-pad--value" disabled={Boolean(props.beatJumpDisabledReason)}

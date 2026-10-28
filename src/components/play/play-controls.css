@@ -161,7 +161,10 @@
 .dj-abl-value { height: 24px; border: 1px solid #34383f; border-radius: 2px; background: #17191c; color: #e7eaee; font-size: 12px; font-weight: 700; }
 .dj-abl-value.is-on { border-color: var(--deck-accent); background: color-mix(in srgb, var(--deck-accent) 26%, #17191c); color: #fff; }
 .dj-abl-value:disabled, .dj-abl-step button:disabled, .dj-abl-mode button:disabled, .dj-abl-manual button:disabled { opacity: .32; }
-.dj-abl-manual { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; height: 24px; }
+.dj-abl-manual { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 22px 18px; gap: 1px; }
+.dj-abl-manual .dj-abl-reloop { grid-column: 1 / -1; }
+.dj-abl-manual button.is-armed { border-color: #ff6b6b; color: #ffb3b3; }
+.dj-abl-manual button.is-on { border-color: var(--deck-accent); background: color-mix(in srgb, var(--deck-accent) 26%, #17191c); color: #fff; }
 .dj-abl-manual button { border: 1px solid #34383f; border-radius: 2px; background: #17191c; color: #c7ccd3; font-size: 8px; font-weight: 700; }
 .dj-abl-step { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; height: 18px; }
 .dj-abl-step button { border: 1px solid #30343a; border-radius: 2px; background: #202327; color: #c3c8cf; font-size: 11px; line-height: 1; }
