@@ -81,6 +81,7 @@ rust-version = "1.91"
 plumdeck-core = { path = "crates/plumdeck-core" }
 plumdeck-db = { path = "crates/plumdeck-db" }
 plumdeck-backend = { path = "crates/plumdeck-backend" }
+plumdeck-rekordbox = { path = "crates/plumdeck-rekordbox" }
 
 anyhow = "=1.0.100"
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "query", "tokio", "tower-log"] }
@@ -90,6 +91,8 @@ clap = { version = "=4.5.57", features = ["derive", "env"] }
 # DuckDB 1.5.5, the engine the Python backend writes the existing files with.
 duckdb = { version = "=1.10505.0", features = ["bundled", "json", "chrono"] }
 hex = "=0.4.3"
+# zlib inflate for the rekordbox key blob (already locked through flate2).
+miniz_oxide = "=0.8.9"
 regex = "=1.12.2"
 # SQLite with SQLCipher: the analysis-job queue now, rekordbox's encrypted
 # master.db later (one libsqlite3-sys may link per build). macOS uses
