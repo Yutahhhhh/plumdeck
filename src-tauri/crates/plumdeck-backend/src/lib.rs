@@ -85,12 +85,14 @@ pub struct AppState {
     pub clock: Arc<dyn Clock>,
     /// The release-date / lyrics job (S8).
     pub metadata: routes::metadata_jobs::MetadataJobs,
+    /// The Assist window and agent bridge (S6).
+    pub assist: routes::assist::AssistBridge,
 }
 
 impl AppState {
     pub fn new(db: DbHandle, cors: CorsPolicy) -> Self {
         let library_dir = db.path().parent().map(std::path::Path::to_path_buf).unwrap_or_default();
-        Self { db, cors: Arc::new(cors), clock: Arc::new(SystemClock), metadata: routes::metadata_jobs::MetadataJobs::new(library_dir) }
+        Self { db, cors: Arc::new(cors), clock: Arc::new(SystemClock), metadata: routes::metadata_jobs::MetadataJobs::new(library_dir), assist: Default::default() }
     }
 
     /// Run blocking work (DuckDB) off the async workers; a panic in it is a

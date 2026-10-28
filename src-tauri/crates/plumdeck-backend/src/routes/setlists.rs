@@ -269,7 +269,7 @@ pub async fn post_setlist_tracks(State(state): State<AppState>, Path(setlist_id)
 }
 
 /// `filename*=UTF-8''...`: `urllib.parse.quote` (unreserved and `/` kept).
-fn quote(text: &str) -> String {
+pub fn quote_path(text: &str) -> String {
     let mut out = String::new();
     for byte in text.bytes() {
         if byte.is_ascii_alphanumeric() || b"_.-~/".contains(&byte) {
@@ -338,7 +338,7 @@ pub async fn export_m3u8(State(state): State<AppState>, Path(setlist_id): Path<S
     }
     let name = setlist.name.as_deref().unwrap_or("None");
     let filename: String = format!("{name}.m3u8").chars().filter(|c| !"\\/*?:\"<>|".contains(*c)).collect();
-    let disposition = format!("attachment; filename*=UTF-8''{}", quote(&filename));
+    let disposition = format!("attachment; filename*=UTF-8''{}", quote_path(&filename));
     let mut response = lines.join("\n").into_response();
     let headers = response.headers_mut();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/x-mpegurl"));
@@ -391,7 +391,7 @@ pub async fn validate_export(State(state): State<AppState>, Path(setlist_id): Pa
 // ------------------------------------------------------------------ recommendations
 
 /// A pool `Track(...)` as `model_dump()` writes it.
-fn pool_track(row: &PoolRow, now: NaiveDateTime) -> Vec<(&'static str, PyValue)> {
+pub(crate) fn pool_track(row: &PoolRow, now: NaiveDateTime) -> Vec<(&'static str, PyValue)> {
     let s = |value: &Option<String>| opt(value.clone(), text);
     let f = |value: Option<f64>| opt(value, float);
     vec![

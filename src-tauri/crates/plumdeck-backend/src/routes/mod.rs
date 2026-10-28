@@ -2,6 +2,7 @@
 //! the recommendation routes; suggestions.py is the recommendation service's
 //! genre suggestions).
 
+pub mod assist;
 pub mod csv_io;
 pub mod dashboard;
 pub mod file_tags;
@@ -16,7 +17,7 @@ pub mod suggestions;
 pub mod tracks;
 pub mod wordplay;
 
-use axum::routing::{get, patch, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 
 use crate::AppState;
@@ -57,6 +58,15 @@ pub fn api() -> Router<AppState> {
         .route("/api/settings/metadata/import/analyze", post(csv_io::analyze_metadata))
         .route("/api/settings/metadata/import/execute", post(csv_io::execute_metadata))
         .route("/api/metadata", get(media::track_metadata))
+        .route("/api/assist/library-status", get(assist::library_status))
+        .route("/api/assist/decks/resolve", post(assist::resolve_decks))
+        .route("/api/assist/recommendations", post(assist::recommendations))
+        .route("/api/assist/routes", post(assist::routes))
+        .route("/api/assist/artists", get(assist::artists))
+        .route("/api/assist/search", post(assist::search))
+        .route("/api/assist/window", put(assist::report_window))
+        .route("/api/assist/agent", get(assist::agent_updates))
+        .route("/api/assist/agent/list", delete(assist::dismiss_agent_list))
         .route("/api/setlists", get(setlists::get_setlists).post(setlists::post_setlist))
         .route("/api/setlists/{setlist_id}", put(setlists::put_setlist).delete(setlists::remove_setlist))
         .route("/api/setlists/{setlist_id}/tracks", get(setlists::get_setlist_tracks).post(setlists::post_setlist_tracks))

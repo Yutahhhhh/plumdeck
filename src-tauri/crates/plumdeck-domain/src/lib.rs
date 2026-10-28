@@ -1,6 +1,7 @@
 //! Pure domain rules shared by the repositories and services (plan §1.2:
 //! core → domain → db). Nothing here does I/O.
 //!
+//! - [`assist`]: Assist scoring, filters and play history (S6).
 //! - [`audio_math`]: the library's key filter and sort
 //!   (backend/infra/repositories/track_repository.py) over plumdeck-key's
 //!   `normalize_key`.
@@ -14,6 +15,7 @@
 //! - [`performance`]: performance metadata models, playback grid fit and
 //!   rekordbox grid shift (S5).
 
+pub mod assist;
 pub mod audio_math;
 pub mod genre_rules;
 pub mod lrc;
