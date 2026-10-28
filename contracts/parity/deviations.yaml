@@ -166,3 +166,15 @@ deviations:
       setlists.updated_at on entry add/remove) bind the app clock's local
       time instead, like every other stored timestamp in B (plan R3).
     current: values differ only by clock source; scenarios freeze the clock.
+  - id: D-22
+    status: proposed
+    source: backend/mcp_server (FastMCP StreamableHTTP), mcp_server/tools/analysis.py, mcp_server/tools/junction.py, mcp_server/tools/setlists.py
+    summary: >
+      The MCP server is a small JSON-RPC handler over Streamable HTTP
+      (stateless sessions; SSE when the client accepts it) instead of the
+      SDK session manager. Until S11/S12, the analysis and Junction tools
+      answer a tool error. generate_auto_setlist ignores target_* (the HTTP
+      route it shares has none); recommend_next_track with target_* reads
+      the paged ranking. Argument validation errors are reported briefly
+      instead of pydantic's full text.
+    current: temporary for the analysis/Junction tools; the rest is proposed.

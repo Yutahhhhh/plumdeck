@@ -583,6 +583,44 @@ impl AssistBridge {
         json!({"revision": inner.revision, "settings": inner.settings, "list": inner.list})
     }
 
+    /// `window()`: whether the window reported in the last 30 seconds.
+    pub fn window(&self, now: f64) -> Value {
+        let inner = self.inner.lock().expect("bridge");
+        let seen = inner.window_seen_at;
+        json!({
+            "open": seen.is_some_and(|seen| now - seen <= 30.0),
+            "reported_seconds_ago": seen.map(|seen| plumdeck_core::compat::pyfmt::round_ndigits(now - seen, 1)),
+            "state": inner.window.clone(),
+            "agent_list": inner.list.clone(),
+        })
+    }
+
+    pub fn apply_settings(&self, settings: Map<String, Value>, agent_name: Option<String>, now: f64) -> Value {
+        let mut inner = self.inner.lock().expect("bridge");
+        inner.revision += 1;
+        let mut applied: Map<String, Value> = settings.into_iter().filter(|(_, v)| !v.is_null()).collect();
+        applied.insert("revision".into(), json!(inner.revision));
+        applied.insert("agent_name".into(), json!(agent_name));
+        applied.insert("created_at".into(), json!(now));
+        inner.settings = Some(Value::Object(applied.clone()));
+        Value::Object(applied)
+    }
+
+    pub fn show_list(&self, title: &str, tracks: Vec<Value>, rejected: Vec<Value>, note: Option<&str>, agent_name: Option<String>, now: f64) -> Value {
+        let mut inner = self.inner.lock().expect("bridge");
+        inner.revision += 1;
+        let cut = |text: &str, max: usize| plumdeck_core::compat::text::py_strip(text).chars().take(max).collect::<String>();
+        let title = cut(title, 120);
+        let note = note.map(|n| cut(n, 1000)).filter(|n| !n.is_empty());
+        let list = json!({
+            "revision": inner.revision,
+            "title": if title.is_empty() { "エージェントの提案".to_owned() } else { title },
+            "note": note, "tracks": tracks, "rejected": rejected, "agent_name": agent_name, "created_at": now,
+        });
+        inner.list = Some(list.clone());
+        list
+    }
+
     pub fn dismiss_list(&self) {
         let mut inner = self.inner.lock().expect("bridge");
         if inner.list.is_some() {
@@ -1543,4 +1581,147 @@ fn search_payload(payload: &Payload) -> Value {
     value.insert("reasons".into(), json!([{"kind": "match", "tone": "neutral", "text": parts.join(" · ")}]));
     value.insert("wordplay".into(), Value::Null);
     Value::Object(value)
+}
+
+// ------------------------------------------------------------------ agent picks
+
+/// `describe_tracks`: check tracks an agent picked and explain them against
+/// the source deck.
+pub fn describe_tracks(conn: &Connection, ids: &[i64], source_id: Option<i64>, intent: &str, now: chrono::NaiveDateTime) -> Result<Value, DbError> {
+    let intent = assist::resolve_intent(intent).unwrap_or("keep");
+    let mut wanted: Vec<i64> = Vec::new();
+    for id in ids {
+        if !wanted.contains(id) {
+            wanted.push(*id);
+        }
+    }
+    let library = Rekordbox::open();
+    let registered = match library.registered() {
+        Ok(registered) => registered,
+        Err(error) => {
+            return Ok(json!({"tracks": [], "rejected": wanted.iter().map(|id| json!({"track_id": id, "reason": error})).collect::<Vec<_>>()}));
+        }
+    };
+    let source = match source_id {
+        Some(id) => get_track(conn, BigInt(id.into()))?,
+        None => None,
+    };
+    let context = match &source {
+        Some(source) => {
+            let mut payload = Payload::of_track(source, lyrics_row_exists(conn, source.id)?);
+            if let Some((_, end, _)) = assist::parse_transition(source.title.as_deref()) {
+                payload = payload.with_bpm(end);
+            }
+            let stored = embedding(conn, source.id)?;
+            let (history, _) = history_from(&library, conn, now)?;
+            Some(Context {
+                source: payload.facts,
+                model: stored.as_ref().and_then(|(m, _)| m.clone()),
+                vector: stored.as_ref().and_then(|(_, j)| parse_embedding(j.as_deref())),
+                pairs: approved_pairs(conn, source.id)?,
+                transition: false,
+                history,
+                history_source: identity(source.title.as_deref(), source.artist.as_deref()),
+                tolerance: None,
+            })
+        }
+        None => None,
+    };
+    let pool = if wanted.is_empty() {
+        Vec::new()
+    } else {
+        candidates(
+            candidate_pool(conn, &PoolQuery { targets: Targets::default(), genres: None, subgenres: None, limit: wanted.len() as i64, exclude_ids: &[], candidate_ids: Some(&wanted) })?,
+            now,
+        )
+    };
+    let (mut offered, mut rejected) = (Vec::new(), Vec::new());
+    for id in &wanted {
+        let Some(candidate) = pool.iter().find(|c| c.row.id == *id) else {
+            rejected.push(json!({"track_id": id, "reason": "ライブラリに存在しない曲 ID です"}));
+            continue;
+        };
+        if source.as_ref().is_some_and(|s| s.id == *id) {
+            rejected.push(json!({"track_id": id, "reason": "基準デッキの曲そのものです"}));
+            continue;
+        }
+        if !available(&candidate.row.filepath, &registered) {
+            rejected.push(json!({"track_id": id, "reason": "rekordbox 未登録、またはファイルが見つからないためデッキに載せられません"}));
+            continue;
+        }
+        let track = get_track(conn, BigInt((*id).into()))?;
+        let payload = match &track {
+            Some(track) => Payload::of_track(track, candidate.row.has_lyrics),
+            None => candidate.payload.clone(),
+        };
+        let Some(context) = &context else {
+            offered.push(search_payload(&payload));
+            continue;
+        };
+        let scored = Candidate { row: candidate.row.clone(), payload: payload.clone() };
+        let result = evaluate_candidate(context, &scored, intent, None, true);
+        let evidence = context.history.as_ref().and_then(|history| {
+            history.evidence(context.history_source.as_ref(), identity(payload.facts.title.as_deref(), payload.facts.artist.as_deref()).as_ref())
+        });
+        let fits = evidence.is_some() && history_fits(&context.source, &payload.facts, false);
+        offered.push(entry_payload(&Entry { payload, result, history: evidence, history_fits: fits }, &context.pairs));
+    }
+    Ok(json!({"tracks": offered, "rejected": rejected}))
+}
+
+/// The recommendation, route and search services for MCP (same rules as the routes).
+pub fn mcp_recommend(conn: &Connection, body: &Value, now: chrono::NaiveDateTime) -> Result<Value, String> {
+    let text = body.to_string();
+    let parsed = plumdeck_core::compat::pyjson_loads::loads(&text).map_err(|_| "invalid request".to_owned())?;
+    let PyValue::Dict(pairs) = parsed else { return Err("invalid request".into()) };
+    let b = Body(&pairs);
+    let request = (|| -> Result<RecommendRequest, ()> {
+        Ok(RecommendRequest {
+            source: b.int("source_track_id", None, i64::MIN.into(), i64::MAX.into())?.ok_or(())? as i64,
+            intent: match get(&pairs, "intent") { Some(PyValue::Str(s)) => s.clone(), _ => "keep".into() },
+            transition: b.boolean("transition")?,
+            limit: b.int("limit", Some(12), 1, 50)?.unwrap_or(12) as usize,
+            exclude: b.ints("exclude_track_ids", 10_000)?,
+            scope: b.choice("genre_scope", "any", &SCOPES)?,
+            genres: None,
+            filters: b.filters()?,
+            tolerance: b.float("tempo_tolerance", 0.0, 12.0)?,
+        })
+    })()
+    .map_err(|_| "invalid assist arguments".to_owned())?;
+    recommend(conn, request, now).map_err(|_| "recommendation failed".to_owned())
+}
+
+pub fn mcp_route(conn: &Connection, body: &Value, now: chrono::NaiveDateTime) -> Result<Value, String> {
+    let parsed = plumdeck_core::compat::pyjson_loads::loads(&body.to_string()).map_err(|_| "invalid request".to_owned())?;
+    let PyValue::Dict(pairs) = parsed else { return Err("invalid request".into()) };
+    let b = Body(&pairs);
+    let request = (|| -> Result<RouteRequest, ()> {
+        Ok(RouteRequest {
+            source: b.int("source_track_id", None, i64::MIN.into(), i64::MAX.into())?.ok_or(())? as i64,
+            target: b.int("target_track_id", None, i64::MIN.into(), i64::MAX.into())?.ok_or(())? as i64,
+            intent: match get(&pairs, "intent") { Some(PyValue::Str(s)) => s.clone(), _ => "keep".into() },
+            transition: b.boolean("transition")?,
+            max_intermediate: b.int("max_intermediate", Some(2), 0, 4)?.unwrap_or(2) as i64,
+            limit: b.int("limit", Some(3), 1, 5)?.unwrap_or(3) as usize,
+            exclude: b.ints("exclude_track_ids", 10_000)?,
+            scope: b.choice("genre_scope", "any", &SCOPES)?,
+            filters: b.filters()?,
+            tolerance: b.float("tempo_tolerance", 0.0, 12.0)?,
+        })
+    })()
+    .map_err(|_| "invalid assist arguments".to_owned())?;
+    route(conn, request, now).map_err(|_| "route failed".to_owned())
+}
+
+/// Validate and normalize filters as `AssistFilters.from_dict(...).to_dict()`.
+pub fn normalized_filters(filters: &Value) -> Result<Value, String> {
+    let parsed = plumdeck_core::compat::pyjson_loads::loads(&json!({"filters": filters}).to_string()).map_err(|_| "invalid filters".to_owned())?;
+    let PyValue::Dict(pairs) = parsed else { return Err("invalid filters".into()) };
+    let raw = Body(&pairs).filters().map_err(|_| "invalid filters".to_owned())?;
+    let f = Filters::from_raw(&raw)?;
+    Ok(json!({
+        "bpm_min": f.bpm_min, "bpm_max": f.bpm_max, "genres": f.genres, "subgenres": f.subgenres, "artists": f.artists,
+        "keys": f.keys, "year_min": f.year_min, "year_max": f.year_max, "query": f.query,
+    }))
 }

@@ -4335,6 +4335,7 @@ dependencies = [
  "plumdeck-core",
  "plumdeck-db",
  "plumdeck-domain",
+ "plumdeck-key",
  "plumdeck-media",
  "plumdeck-rekordbox",
  "regex",

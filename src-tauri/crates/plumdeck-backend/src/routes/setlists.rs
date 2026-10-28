@@ -446,7 +446,7 @@ fn node(row: &PoolRow, only_from: Option<BTreeSet<i64>>) -> Node {
 }
 
 /// `_wordplay_payload` as `json.dumps(..., ensure_ascii=False)`.
-fn wordplay_payload(pair: &PairRow) -> Result<String, Response> {
+pub(crate) fn wordplay_payload(pair: &PairRow) -> Result<String, Response> {
     let f = |value: Option<f64>| opt(value, float);
     let payload = dict([
         ("pair_id", int(pair.id)),
@@ -471,7 +471,7 @@ fn wordplay_payload(pair: &PairRow) -> Result<String, Response> {
 }
 
 /// Approved edges by `(from, to)`.
-fn edge_map(pairs: Vec<PairRow>) -> BTreeMap<(i64, i64), PairRow> {
+pub(crate) fn edge_map(pairs: Vec<PairRow>) -> BTreeMap<(i64, i64), PairRow> {
     pairs.into_iter().map(|pair| ((pair.from_track_id, pair.to_track_id), pair)).collect()
 }
 

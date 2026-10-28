@@ -8,10 +8,12 @@ pub mod dashboard;
 pub mod file_tags;
 pub mod genres;
 pub mod lyrics;
+pub mod mcp;
 pub mod media;
 pub mod metadata_jobs;
 pub mod performance;
 pub mod play;
+pub mod set_planner;
 pub mod settings;
 pub mod setlists;
 pub mod suggestions;
@@ -79,6 +81,8 @@ pub fn api() -> Router<AppState> {
         .route("/api/play/recordings/{recording_id}", patch(play::name_recording).delete(play::discard_recording))
         .route("/api/play/recordings/{recording_id}/audio", get(play::recording_audio))
         .route("/api/play/tracks/{track_id}/waveform-detail", get(waveform_detail::get_waveform_detail))
+        .route("/api/mcp/info", get(mcp::info))
+        .route("/mcp", post(mcp::post).get(mcp::get_stream).delete(mcp::delete_session))
         .route("/api/assist/library-status", get(assist::library_status))
         .route("/api/assist/decks/resolve", post(assist::resolve_decks))
         .route("/api/assist/recommendations", post(assist::recommendations))
