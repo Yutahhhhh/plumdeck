@@ -89,6 +89,10 @@ pub struct Decoder {
     remaining: Option<u64>,
     raw_frames: u64,
     emitted: u64,
+    /// Vorbis: symphonia emits the first packet's lapped half, which a
+    /// conforming decoder discards (the packet's `trim_start`); drop it on
+    /// every basis.
+    drop_lapped: bool,
     eof: bool,
     consecutive_errors: u32,
     decode_errors: u64,
@@ -177,6 +181,7 @@ impl Decoder {
             remaining,
             raw_frames: 0,
             emitted: 0,
+            drop_lapped: params.codec == symphonia::core::codecs::audio::well_known::CODEC_ID_VORBIS,
             eof: false,
             consecutive_errors: 0,
             decode_errors: 0,
@@ -279,12 +284,15 @@ impl Decoder {
                 }
                 Err(e) => return Err(map_sym(e)),
             };
-            self.raw_frames += frames as u64;
             let mut start = 0usize;
+            if self.drop_lapped {
+                start = packet.trim_start.get().min(frames as u64) as usize;
+            }
+            self.raw_frames += (frames - start) as u64;
             if self.skip > 0 {
-                let drop = self.skip.min(frames as u64) as usize;
+                let drop = self.skip.min((frames - start) as u64) as usize;
                 self.skip -= drop as u64;
-                start = drop;
+                start += drop;
             }
             let mut end = frames;
             if let Some(rem) = self.remaining {

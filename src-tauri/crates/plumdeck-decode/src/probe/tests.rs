@@ -155,7 +155,7 @@ impl BitWriter {
     }
     fn put(&mut self, v: u32, bits: u32) -> &mut Self {
         for i in (0..bits).rev() {
-            if self.n % 8 == 0 {
+            if self.n.is_multiple_of(8) {
                 self.bytes.push(0);
             }
             if (v >> i) & 1 == 1 {
@@ -221,7 +221,8 @@ fn full(typ: &[u8; 4], version: u8, body: &[u8]) -> Vec<u8> {
 
 /// A minimal AAC-LC M4A header (no samples needed for probing).
 fn m4a(elst: Option<(u32, i32)>, itunsmpb: Option<&str>, asc: &[u8], entry_rate: u32) -> Vec<u8> {
-    let mut esds = vec![3u8, 0x80 | 0, 25, 0, 1, 0];
+    // ES_Descriptor with a two-byte size (0x80 0x19 = 25).
+    let mut esds = vec![3u8, 0x80, 25, 0, 1, 0];
     esds.extend_from_slice(&[4, 17, 0x40, 0x15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     esds.extend_from_slice(&[5, asc.len() as u8]);
     esds.extend_from_slice(asc);

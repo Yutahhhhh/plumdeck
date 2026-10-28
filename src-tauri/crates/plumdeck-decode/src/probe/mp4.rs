@@ -107,7 +107,7 @@ fn full_box_times(b: &[u8]) -> Option<(u32, u64)> {
     }
 }
 
-fn walk<R: Read + Seek>(src: &mut Src<'_, R>, w: &mut Walk, start: u64, end: u64, depth: u32) -> Result<()> {
+fn walk<R: Read + Seek>(src: &mut Src<'_, R>, w: &mut Walk, parent: &[u8; 4], start: u64, end: u64, depth: u32) -> Result<()> {
     if depth > MAX_DEPTH {
         return Ok(());
     }
@@ -118,11 +118,11 @@ fn walk<R: Read + Seek>(src: &mut Src<'_, R>, w: &mut Walk, start: u64, end: u64
         }
         match &b.typ {
             b"moov" | b"mdia" | b"minf" | b"stbl" | b"edts" | b"udta" | b"ilst" => {
-                walk(src, w, b.body, b.end, depth + 1)?;
+                walk(src, w, &b.typ, b.body, b.end, depth + 1)?;
             }
-            b"trak" => {
+            b"trak" if parent == b"moov" => {
                 w.traks.push(Trak::default());
-                walk(src, w, b.body, b.end, depth + 1)?;
+                walk(src, w, &b.typ, b.body, b.end, depth + 1)?;
             }
             b"meta" => {
                 // ISO meta is a full box; QuickTime's is not (spec 4.1).
@@ -130,41 +130,43 @@ fn walk<R: Read + Seek>(src: &mut Src<'_, R>, w: &mut Walk, start: u64, end: u64
                 let n = src.read_at_most(b.body, &mut peek)?;
                 let qt = n == 8 && be_u32(&peek, 0).unwrap_or(0) >= 8 && peek[4..8].iter().all(u8::is_ascii_alphanumeric);
                 let body = if qt { b.body } else { b.body + 4 };
-                walk(src, w, body.min(b.end), b.end, depth + 1)?;
+                walk(src, w, &b.typ, body.min(b.end), b.end, depth + 1)?;
             }
-            b"mvhd" => {
+            b"mvhd" if parent == b"moov" => {
                 let data = src.read_vec(b.body, b.end - b.body, 64)?;
                 if let Some((ts, _)) = full_box_times(&data) {
                     w.mvhd_timescale = ts;
                 }
             }
-            b"mdhd" => {
+            b"mdhd" if parent == b"mdia" => {
                 let data = src.read_vec(b.body, b.end - b.body, 64)?;
                 if let (Some(t), Some((ts, dur))) = (w.traks.last_mut(), full_box_times(&data)) {
                     t.mdhd_timescale = ts;
                     t.mdhd_duration = dur;
                 }
             }
-            b"hdlr" => {
+            // `meta` and `minf` also hold an `hdlr`; only the media one
+            // names the track type.
+            b"hdlr" if parent == b"mdia" => {
                 let data = src.read_vec(b.body, b.end - b.body, 64)?;
                 if let (Some(t), Some(h)) = (w.traks.last_mut(), data.get(8..12)) {
                     t.handler.copy_from_slice(h);
                 }
             }
-            b"elst" => {
+            b"elst" if parent == b"edts" => {
                 let data = src.read_vec(b.body, b.end - b.body, SMALL_BOX)?;
                 if let Some(t) = w.traks.last_mut() {
                     parse_elst(&data, t);
                 }
             }
-            b"stsd" => {
+            b"stsd" if parent == b"stbl" => {
                 if let Some(t) = w.traks.last_mut() {
                     if t.stsd.is_none() {
                         t.stsd = Some(src.read_vec(b.body, b.end - b.body, SMALL_BOX)?);
                     }
                 }
             }
-            b"----" => {
+            b"----" if parent == b"ilst" => {
                 if b.end - b.body <= SMALL_BOX as u64 {
                     let data = src.read_vec(b.body, b.end - b.body, SMALL_BOX)?;
                     if let Some(v) = parse_freeform_itunsmpb(&data) {
@@ -313,13 +315,11 @@ pub(crate) fn parse_asc(data: &[u8]) -> Option<Asc> {
     if parse_ga(&mut b).is_none() {
         return Some(asc);
     }
-    if b.remaining() >= 16 && b.read(11) == Some(0x2b7) {
-        if read_aot(&mut b) == Some(5) && b.read(1) == Some(1) {
-            asc.sbr = true;
-            asc.ext_sample_rate = read_rate(&mut b);
-            if b.remaining() >= 12 && b.read(11) == Some(0x548) {
-                asc.ps = b.read(1) == Some(1);
-            }
+    if b.remaining() >= 16 && b.read(11) == Some(0x2b7) && read_aot(&mut b) == Some(5) && b.read(1) == Some(1) {
+        asc.sbr = true;
+        asc.ext_sample_rate = read_rate(&mut b);
+        if b.remaining() >= 12 && b.read(11) == Some(0x548) {
+            asc.ps = b.read(1) == Some(1);
         }
     }
     Some(asc)
@@ -448,7 +448,7 @@ pub(crate) fn probe<R: Read + Seek>(src: &mut Src<'_, R>) -> Result<ProbeInfo> {
 
     let mut w = Walk::default();
     let len = src.len;
-    walk(src, &mut w, 0, len, 0)?;
+    walk(src, &mut w, b"root", 0, len, 0)?;
     d.mvhd_timescale = w.mvhd_timescale;
     d.itunsmpb = w.itunsmpb;
     d.audio_tracks = w.traks.iter().filter(|t| &t.handler == b"soun").count() as u32;
