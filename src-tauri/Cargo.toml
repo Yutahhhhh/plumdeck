@@ -80,10 +80,13 @@ rust-version = "1.91"
 [workspace.dependencies]
 plumdeck-core = { path = "crates/plumdeck-core" }
 plumdeck-db = { path = "crates/plumdeck-db" }
+plumdeck-domain = { path = "crates/plumdeck-domain" }
+plumdeck-media = { path = "crates/plumdeck-media" }
 plumdeck-backend = { path = "crates/plumdeck-backend" }
 plumdeck-rekordbox = { path = "crates/plumdeck-rekordbox" }
 
 anyhow = "=1.0.100"
+base64 = "=0.22.1"
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "query", "tokio", "tower-log"] }
 chrono = { version = "=0.4.42", default-features = false, features = ["clock", "std"] }
 # clap 4.6 needs newer proc-macro2/quote than the app has locked.
@@ -91,6 +94,10 @@ clap = { version = "=4.5.57", features = ["derive", "env"] }
 # DuckDB 1.5.5, the engine the Python backend writes the existing files with.
 duckdb = { version = "=1.10505.0", features = ["bundled", "json", "chrono"] }
 hex = "=0.4.3"
+# Tag reading (MIT OR Apache-2.0); replaces TinyTag/mutagen.
+lofty = "=0.25.5"
+# The ETag Starlette's FileResponse derives from mtime and size.
+md-5 = "=0.10.6"
 # zlib inflate for the rekordbox key blob (already locked through flate2).
 miniz_oxide = "=0.8.9"
 regex = "=1.12.2"
@@ -106,7 +113,8 @@ serde_json = { version = "=1.0.145", features = ["preserve_order", "float_roundt
 serde_yaml = "=0.9.34"
 sha2 = "=0.10.9"
 thiserror = "=2.0.20"
-tokio = { version = "=1.48.0", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time", "io-util", "process"] }
+tokio = { version = "=1.48.0", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time", "io-util", "process", "fs"] }
+tokio-util = { version = "=0.7.17", default-features = false, features = ["io"] }
 tower = { version = "=0.5.2", default-features = false, features = ["util"] }
 tower-http = { version = "=0.6.7", default-features = false }
 tracing = "=0.1.43"

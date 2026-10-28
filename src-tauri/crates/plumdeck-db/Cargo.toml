@@ -10,6 +10,7 @@ publish = false
 chrono.workspace = true
 duckdb.workspace = true
 plumdeck-core.workspace = true
+plumdeck-domain.workspace = true
 rusqlite.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

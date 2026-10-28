@@ -1,0 +1,11 @@
+[package]
+name = "plumdeck-domain"
+version = "0.1.0"
+description = "Pure domain rules of the plumdeck backend (no I/O)"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+plumdeck-core.workspace = true
+regex.workspace = true

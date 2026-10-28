@@ -1,0 +1,13 @@
+[package]
+name = "plumdeck-media"
+version = "0.1.0"
+description = "Audio file access for the plumdeck backend: tags, content types, path resolution"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# No DuckDB here.
+[dependencies]
+base64.workspace = true
+lofty.workspace = true
+plumdeck-core.workspace = true

@@ -2,8 +2,9 @@
 //! binary) and, from S13, for running inside the Tauri process.
 //!
 //! Routes so far: `GET /` (S0), `GET/POST /api/settings` and
-//! `GET /api/dashboard` (S2); everything else gets the Python backend's
-//! plain-text 404 ([`middleware::unmatched`]). Every route sits behind the
+//! `GET /api/dashboard` (S2), the library core (S3: tracks, lyrics, genres,
+//! `/api/stream`, `/api/metadata`, see [`routes`]); everything else gets the
+//! Python backend's plain-text 404 ([`middleware::unmatched`]). Every route sits behind the
 //! layers in [`middleware`] (panic → 500, loopback Host/Origin, CORS, HEAD).
 //! S1 opens the library before serving and closes it after ([`startup`]).
 //! Startup progress lines (`PLUMDECK_STARTUP:{...}`) and the managed-sidecar
@@ -12,8 +13,11 @@
 //! ([`logging`]).
 
 pub mod body;
+pub mod lax;
 pub mod logging;
 pub mod middleware;
+pub mod models;
+pub mod query;
 pub mod response;
 pub mod routes;
 pub mod sandbox;
@@ -31,6 +35,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use plumdeck_core::compat::pyjson::{dumps, DumpOptions, PyValue};
 use plumdeck_core::error::ApiError;
+use plumdeck_core::time::{Clock, SystemClock};
 use plumdeck_db::handle::DbHandle;
 use plumdeck_db::DbError;
 use tokio::net::TcpListener;
@@ -70,16 +75,18 @@ pub fn server_error(error: &dyn std::fmt::Display) -> Response {
     internal_server_error()
 }
 
-/// What every handler shares: the library and the CORS policy.
+/// What every handler shares: the library, the CORS policy and the clock
+/// for stored timestamps (local naive time, plan R3).
 #[derive(Clone)]
 pub struct AppState {
     pub db: DbHandle,
     pub cors: Arc<CorsPolicy>,
+    pub clock: Arc<dyn Clock>,
 }
 
 impl AppState {
     pub fn new(db: DbHandle, cors: CorsPolicy) -> Self {
-        Self { db, cors: Arc::new(cors) }
+        Self { db, cors: Arc::new(cors), clock: Arc::new(SystemClock) }
     }
 
     /// Run blocking work (DuckDB) off the async workers; a panic in it is a

@@ -153,22 +153,180 @@ pub trait BodyModel: Sized {
 pub struct Fields<'a> {
     whole: &'a PyValue,
     pairs: &'a [(PyValue, PyValue)],
+    /// `loc` of this object (`["body"]`, or `["body", "analyses", 0]`).
+    prefix: Vec<Loc>,
     errors: std::cell::RefCell<Vec<ValidationError>>,
 }
 
 impl<'a> Fields<'a> {
     fn get(&self, name: &str) -> Option<&'a PyValue> {
-        self.pairs.iter().find(|(key, _)| matches!(key, PyValue::Str(k) if k == name)).map(|(_, value)| value)
+        // json.loads keeps the last of duplicate keys.
+        self.pairs.iter().rev().find(|(key, _)| matches!(key, PyValue::Str(k) if k == name)).map(|(_, value)| value)
     }
 
     fn push(&self, error: ValidationError) {
         self.errors.borrow_mut().push(error);
     }
 
+    fn loc(&self, name: &str) -> Vec<Loc> {
+        let mut loc = self.prefix.clone();
+        loc.push(Loc::from(name));
+        loc
+    }
+
+    fn missing(&self, name: &str) {
+        self.push(ValidationError::new("missing", self.loc(name), "Field required", self.whole.clone()));
+    }
+
+    /// `Optional[str] = None`: absent or `null` is `None`.
+    pub fn optional_str(&self, name: &str) -> Option<String> {
+        match self.get(name) {
+            None | Some(PyValue::None) => None,
+            Some(PyValue::Str(text)) => Some(text.clone()),
+            Some(other) => {
+                self.push(ValidationError::new("string_type", self.loc(name), "Input should be a valid string", other.clone()));
+                None
+            }
+        }
+    }
+
+    /// `str = default`: absent is the default, `null` is an error.
+    pub fn str_or(&self, name: &str, default: &str) -> String {
+        match self.get(name) {
+            None => default.to_owned(),
+            Some(_) => self.required_str(name).unwrap_or_default(),
+        }
+    }
+
+    fn lax_int(&self, value: &PyValue, loc: Vec<Loc>) -> Option<i128> {
+        let parsed = crate::lax::to_int(value);
+        if parsed.is_none() {
+            let (kind, msg) = match value {
+                PyValue::Str(_) => ("int_parsing", "Input should be a valid integer, unable to parse string as an integer"),
+                PyValue::Float(_) => ("int_from_float", "Input should be a valid integer, got a number with a fractional part"),
+                _ => ("int_type", "Input should be a valid integer"),
+            };
+            self.push(ValidationError::new(kind, loc, msg, value.clone()));
+        }
+        parsed
+    }
+
+    /// `Optional[int] = None`.
+    pub fn optional_int(&self, name: &str) -> Option<i128> {
+        match self.get(name) {
+            None | Some(PyValue::None) => None,
+            Some(value) => self.lax_int(value, self.loc(name)),
+        }
+    }
+
+    /// A required `int`.
+    pub fn required_int(&self, name: &str) -> Option<i128> {
+        match self.get(name) {
+            None => {
+                self.missing(name);
+                None
+            }
+            Some(value) => self.lax_int(value, self.loc(name)),
+        }
+    }
+
+    /// A required `List[int]` (JSON arrays only).
+    pub fn int_list(&self, name: &str) -> Option<Vec<i128>> {
+        match self.get(name) {
+            None => {
+                self.missing(name);
+                None
+            }
+            Some(PyValue::List(items)) => {
+                let values: Vec<Option<i128>> = items
+                    .iter()
+                    .enumerate()
+                    .map(|(index, item)| {
+                        let mut loc = self.loc(name);
+                        loc.push(Loc::Index(index as i128));
+                        self.lax_int(item, loc)
+                    })
+                    .collect();
+                values.into_iter().collect()
+            }
+            Some(other) => {
+                self.push(ValidationError::new("list_type", self.loc(name), "Input should be a valid list", other.clone()));
+                None
+            }
+        }
+    }
+
+    /// `bool = default`.
+    pub fn bool_or(&self, name: &str, default: bool) -> bool {
+        match self.get(name) {
+            None => default,
+            Some(value) => crate::lax::to_bool(value).unwrap_or_else(|| {
+                self.push(ValidationError::new("bool_parsing", self.loc(name), "Input should be a valid boolean", value.clone()));
+                default
+            }),
+        }
+    }
+
+    /// A `str` Enum field with a default: the value must be one of `choices`.
+    pub fn choice_or(&self, name: &str, default: &str, choices: &[&str]) -> String {
+        match self.get(name) {
+            None => default.to_owned(),
+            Some(PyValue::Str(text)) if choices.contains(&text.as_str()) => text.clone(),
+            Some(other) => {
+                self.push(ValidationError::new("enum", self.loc(name), "Input should be one of the allowed values", other.clone()));
+                default.to_owned()
+            }
+        }
+    }
+
+    /// A required `List[Model]`.
+    pub fn model_list<T>(&self, name: &str, item: impl Fn(&Fields<'_>) -> Option<T>) -> Option<Vec<T>> {
+        let items = match self.get(name) {
+            None => {
+                self.missing(name);
+                return None;
+            }
+            Some(PyValue::List(items)) => items,
+            Some(other) => {
+                self.push(ValidationError::new("list_type", self.loc(name), "Input should be a valid list", other.clone()));
+                return None;
+            }
+        };
+        let mut out = Vec::new();
+        let mut failed = false;
+        for (index, value) in items.iter().enumerate() {
+            let mut prefix = self.loc(name);
+            prefix.push(Loc::Index(index as i128));
+            match value {
+                PyValue::Dict(pairs) => {
+                    let fields = Fields { whole: value, pairs, prefix, errors: std::cell::RefCell::new(Vec::new()) };
+                    let parsed = item(&fields);
+                    let errors = fields.errors.take();
+                    if errors.is_empty() {
+                        out.extend(parsed);
+                    } else {
+                        failed = true;
+                        self.errors.borrow_mut().extend(errors);
+                    }
+                }
+                other => {
+                    failed = true;
+                    self.push(ValidationError::new(
+                        "model_attributes_type",
+                        prefix,
+                        "Input should be a valid dictionary or object to extract fields from",
+                        other.clone(),
+                    ));
+                }
+            }
+        }
+        (!failed).then_some(out)
+    }
+
     /// A required `str` field: pydantic lax mode accepts only strings from
     /// JSON input.
     pub fn required_str(&self, name: &str) -> Option<String> {
-        let loc = vec![Loc::from("body"), Loc::from(name)];
+        let loc = self.loc(name);
         match self.get(name) {
             None => {
                 self.push(ValidationError::new("missing", loc, "Field required", self.whole.clone()));
@@ -198,7 +356,7 @@ pub fn validate<T: BodyModel>(body: Option<&PyValue>) -> Result<T, Vec<Validatio
     match body {
         None => Err(vec![ValidationError::new("missing", body_loc(), "Field required", PyValue::None)]),
         Some(whole @ PyValue::Dict(pairs)) => {
-            T::from_fields(&Fields { whole, pairs, errors: std::cell::RefCell::new(Vec::new()) })
+            T::from_fields(&Fields { whole, pairs, prefix: body_loc(), errors: std::cell::RefCell::new(Vec::new()) })
         }
         Some(other) => Err(vec![ValidationError::new(
             "model_attributes_type",
@@ -213,6 +371,14 @@ pub fn validate<T: BodyModel>(body: Option<&PyValue>) -> Result<T, Vec<Validatio
 pub fn parse_body<T: BodyModel>(headers: &HeaderMap, bytes: &[u8]) -> Result<T, Response> {
     let body = read_body(headers, bytes)?;
     validate(body.as_ref()).map_err(|errors| validation_response(&errors))
+}
+
+/// [`parse_body`] for routes that also validate parameters: a body that
+/// cannot be decoded answers at once (FastAPI parses it before validating
+/// anything), validation errors are returned to join the parameters' ones.
+pub fn parse_body_for<T: BodyModel>(headers: &HeaderMap, bytes: &[u8]) -> Result<Result<T, Vec<ValidationError>>, Response> {
+    let body = read_body(headers, bytes)?;
+    Ok(validate(body.as_ref()))
 }
 
 #[cfg(test)]

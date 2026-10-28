@@ -5,8 +5,9 @@
 //! Python ("Out of range float values are not JSON compliant").
 //!
 //! Use it for routes whose contract serializer is `json.dumps`
-//! (contracts/http/routes.v5.json); response-model routes (pydantic-core)
-//! arrive in later slices.
+//! (contracts/http/routes.v5.json). Response-model routes go through
+//! [`pydantic`]: FastAPI writes them with pydantic-core's `dump_json`, which
+//! turns NaN and Infinity into `null` instead of failing.
 
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
@@ -45,6 +46,30 @@ pub fn int(value: i64) -> PyValue {
 /// `None` → `null`.
 pub fn opt<T>(value: Option<T>, convert: impl FnOnce(T) -> PyValue) -> PyValue {
     value.map_or(PyValue::None, convert)
+}
+
+/// A response-model answer: non-finite floats become `null`
+/// (`ser_json_inf_nan="null"`), then the JSON is written like [`PyJson`]
+/// (only the float spelling differs from pydantic-core, and the parity
+/// runner compares values).
+pub fn pydantic(value: PyValue) -> PyJson {
+    fn finite(value: PyValue) -> PyValue {
+        match value {
+            PyValue::Float(number) if !number.is_finite() => PyValue::None,
+            PyValue::List(items) => PyValue::List(items.into_iter().map(finite).collect()),
+            PyValue::Dict(pairs) => PyValue::Dict(pairs.into_iter().map(|(key, item)| (key, finite(item))).collect()),
+            other => other,
+        }
+    }
+    PyJson(finite(value))
+}
+
+pub fn float(value: f64) -> PyValue {
+    PyValue::Float(value)
+}
+
+pub fn boolean(value: bool) -> PyValue {
+    PyValue::Bool(value)
 }
 
 /// A naive datetime as `jsonable_encoder` writes it (`isoformat()`).
