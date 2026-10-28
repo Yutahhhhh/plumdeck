@@ -23,7 +23,7 @@ class IngestionRepository:
         filepath = result["filepath"]
         extras = result.get("features_extra", {})
         sources: Dict[str, str] = {}
-        own_bpm = None
+        own: Dict[str, Any] = {}
         # PRAGMA foreign_keys は DuckDB で未サポートのため削除
         # 代わりに no_autoflush で ORM レベルの整合性チェックタイミングを調整
         with session.no_autoflush:
@@ -38,7 +38,7 @@ class IngestionRepository:
             audio_changed = self._audio_changed(existing_track, result)
             # Only analysis results resolve BPM/key; tag and lyrics updates keep them.
             if isinstance(extras, dict) and "analysis_components" in extras and not preserve_full_analysis:
-                result, sources, own_bpm = self._settle_values(session, result, existing_track, existing_fx)
+                result, sources, own = self._settle_values(session, result, existing_track, existing_fx)
 
         track_update_data = {
             "title": result.get("title"), "artist": result.get("artist"),
@@ -116,10 +116,12 @@ class IngestionRepository:
                     fx = value_sources.with_sources(fx, recorded)
                 if existing_track and not audio_changed:
                     fx = self._keep_same_audio_components(fx, existing_fx, extras)
-                if own_bpm is not None:
-                    fx["analysis_bpm"] = own_bpm
-                elif recorded.get("bpm") not in (None, value_sources.OWN) and "analysis_bpm" in existing_fx:
-                    fx["analysis_bpm"] = existing_fx["analysis_bpm"]
+                for field in value_sources.FIELDS:
+                    kept = f"analysis_{field}"
+                    if own.get(field) is not None:
+                        fx[kept] = own[field]
+                    elif recorded.get(field) not in (None, value_sources.OWN) and kept in existing_fx:
+                        fx[kept] = existing_fx[kept]
                 new_fx = json.dumps(fx)
                 if new_fx != (analysis.features_extra_json or "{}"):
                     analysis.features_extra_json = new_fx
@@ -220,18 +222,20 @@ class IngestionRepository:
     def _settle_values(session: Session, result: Dict[str, Any], existing_track, existing_fx):
         """Apply manual > rekordbox > own to bpm/key on a copy of ``result``.
 
-        Returns the copy, the chosen source per field and the analyzer's own
-        BPM when another source won (kept as features_extra.analysis_bpm).
+        Returns the copy, the chosen source per field and the own value per
+        field that another source replaced (kept as features_extra.analysis_bpm
+        / analysis_key): this result's own value, or the row's own key when
+        detection was skipped because rekordbox has one.
         """
         fields = [field for field in value_sources.FIELDS if field in result]
         if not fields:
-            return result, {}, None
+            return result, {}, {}
         components = result["features_extra"].get("analysis_components") or {}
         incoming_sources = components.get("sources") if isinstance(components.get("sources"), dict) else {}
         stored = value_sources.stored_sources(existing_fx)
         rekordbox = value_sources.lookup(
             result["filepath"], keys=value_sources.key_source_enabled(session))
-        settled, sources, own_bpm = dict(result), {}, None
+        settled, sources, own = dict(result), {}, {}
         for field in fields:
             incoming_source = incoming_sources.get(field, value_sources.OWN)
             value, source = value_sources.choose(
@@ -243,10 +247,15 @@ class IngestionRepository:
             settled[field] = value
             if field == "key":
                 settled["scale"] = value_sources.scale_of(value) or result.get("scale", "")
-            elif (source != value_sources.OWN and incoming_source == value_sources.OWN
-                  and value_sources.valid("bpm", result.get("bpm"))):
-                own_bpm = result["bpm"]
-        return settled, sources, own_bpm
+            if source == value_sources.OWN:
+                continue
+            if incoming_source == value_sources.OWN and value_sources.valid(field, result.get(field)):
+                own[field] = result[field]
+            elif (field == "key" and stored.get(field) in (None, value_sources.OWN)
+                  and value_sources.valid(field, getattr(existing_track, field, None))
+                  and existing_track.key != value):
+                own[field] = existing_track.key
+        return settled, sources, own
 
     def save_track(self, result: Dict[str, Any], update_metadata: bool = True):
         # Callers use success to advance the progress counter. Propagate a DB

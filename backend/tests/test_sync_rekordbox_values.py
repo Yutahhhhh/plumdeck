@@ -69,6 +69,7 @@ def test_sync_script_plans_then_applies_collection_values(mocker, tmp_path):
     assert extra["analysis_components"] == {"rhythm": "rhythm-attacks-v4",
                                             "sources": {"bpm": "rekordbox", "key": "rekordbox"}}
     assert extra["analysis_bpm"] == 64.0
+    assert extra["analysis_key"] == "A minor"  # the replaced own key stays restorable
     assert rows["/lib/manual.mp3"][:2] == ["125.0", "G minor"]
     assert len(list(tmp_path.glob("library.duckdb.before-rekordbox-sync-*"))) == 1
     # A plan whose old values no longer match is refused as a whole.

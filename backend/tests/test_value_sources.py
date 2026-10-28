@@ -155,6 +155,26 @@ def test_save_takes_key_from_rekordbox_only_when_enabled(session, mocker, case, 
     session.commit()
     track, extra = saved(session, track_id)
     assert (track.key, track.scale, extra["analysis_components"]["sources"]["key"]) == (key, scale, source)
+    # The replaced own key is kept, like analysis_bpm.
+    assert extra.get("analysis_key") == ("A minor" if source == "rekordbox" else None)
+
+
+def test_import_without_key_detection_keeps_the_rows_own_key(session, mocker):
+    use_rekordbox_keys(session)
+    use_rekordbox(mocker, "bpm")
+    session.add(Track(filepath=PATH, title="Song", artist="Artist", bpm=120.0, key="E minor", duration=180.0))
+    session.commit()
+    # Registered track: the import skipped key detection and filled rekordbox's key.
+    result = analysis_result(key="F minor")
+    result["features_extra"]["analysis_components"]["sources"] = {"key": "rekordbox"}
+    track_id = IngestionRepository()._prepare_track_models(session, result)
+    session.commit()
+    track, extra = saved(session, track_id)
+    assert (track.key, extra["analysis_key"]) == ("F minor", "E minor")
+    # A later save keeps it while rekordbox's key still wins.
+    IngestionRepository()._prepare_track_models(session, result)
+    session.commit()
+    assert saved(session, track_id)[1]["analysis_key"] == "E minor"
 
 
 def test_rekordbox_bpm_survives_an_offline_save_and_follows_rekordbox_later(session, mocker):
@@ -245,7 +265,7 @@ def test_analysis_job_save_applies_the_same_rule(session, mocker, tmp_path):
     track, extra = _job_save(session, tmp_path, ["rhythm", "key"], result)
     assert (track.bpm, track.key, track.scale) == (128.0, "F minor", "minor")
     assert extra["analysis_components"]["sources"] == {"bpm": "rekordbox", "key": "rekordbox"}
-    assert extra["analysis_bpm"] == 64.0
+    assert (extra["analysis_bpm"], extra["analysis_key"]) == (64.0, "A minor")
 
     use_rekordbox(mocker, "unregistered")
     track, extra = _job_save(session, tmp_path, ["rhythm"], result)

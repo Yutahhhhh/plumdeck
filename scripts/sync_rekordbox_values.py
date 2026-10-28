@@ -217,9 +217,10 @@ def _updated_extra(raw_extra, change):
         raise RuntimeError(f"Track {change['track_id']} became manual since planning")
     updated = value_sources.with_sources(extra, {field: value_sources.REKORDBOX for field in ("bpm", "key")
                                                  if field in change})
-    old_bpm = change.get("bpm", [None])[0]
-    if "bpm" in change and previous.get("bpm") in (None, value_sources.OWN) and value_sources.valid("bpm", old_bpm):
-        updated["analysis_bpm"] = old_bpm  # the replaced own estimate, as a save keeps it
+    for field in ("bpm", "key"):
+        old = change.get(field, [None])[0]
+        if field in change and previous.get(field) in (None, value_sources.OWN) and value_sources.valid(field, old):
+            updated[f"analysis_{field}"] = old  # the replaced own value, as a save keeps it
     return json.dumps(updated)
 
 

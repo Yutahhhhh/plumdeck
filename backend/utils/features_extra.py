@@ -10,9 +10,11 @@ PERSISTED_KEYS = (
     "analysis_components",
     "playback_grid",
     "playback_grid_version",
-    # The analyzer's own BPM kept beside a manual or rekordbox one. The old
+    # plumdeck's own BPM and key kept beside a manual or rekordbox one, so
+    # turning the rekordbox key source off can restore own keys. The old
     # bpm_authority marker is rewritten to analysis_components.sources.bpm.
     "analysis_bpm",
+    "analysis_key",
 )
 
 

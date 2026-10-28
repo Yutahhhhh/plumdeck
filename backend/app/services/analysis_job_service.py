@@ -467,11 +467,11 @@ class AnalysisJobService:
                     setattr(track, name, chosen)
                     if name == "key":
                         track.scale = value_sources.scale_of(chosen) or result.get("scale", track.scale)
-                    elif source == value_sources.OWN:
-                        extra.pop("analysis_bpm", None)
+                    if source == value_sources.OWN:
+                        extra.pop(f"analysis_{name}", None)
                     else:
-                        # Keep the analyzer's estimate beside the winning value.
-                        update["analysis_bpm"] = value
+                        # Keep the analyzer's own value beside the winning one.
+                        update[f"analysis_{name}"] = value
             components = {**extra.get("analysis_components", {}), **update.pop("analysis_components", {})}
             if "rhythm" in features:
                 analysis.beat_positions = update.pop("beat_positions")
