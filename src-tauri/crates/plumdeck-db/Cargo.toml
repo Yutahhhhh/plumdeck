@@ -7,8 +7,14 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+chrono.workspace = true
 duckdb.workspace = true
-thiserror.workspace = true
-
-[dev-dependencies]
+plumdeck-core.workspace = true
+rusqlite.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# No system OpenSSL on Windows: build SQLCipher's crypto from source.
+rusqlite = { workspace = true, features = ["bundled-sqlcipher-vendored-openssl"] }

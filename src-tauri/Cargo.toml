@@ -91,6 +91,10 @@ clap = { version = "=4.5.57", features = ["derive", "env"] }
 duckdb = { version = "=1.10505.0", features = ["bundled", "json", "chrono"] }
 hex = "=0.4.3"
 regex = "=1.12.2"
+# SQLite with SQLCipher: the analysis-job queue now, rekordbox's encrypted
+# master.db later (one libsqlite3-sys may link per build). macOS uses
+# CommonCrypto; Windows adds bundled-sqlcipher-vendored-openssl per crate.
+rusqlite = { version = "=0.41.0", default-features = false, features = ["bundled-sqlcipher", "backup"] }
 reqwest = { version = "=0.12.24", default-features = false, features = ["json"] }
 serde = { version = "=1.0.228", features = ["derive"] }
 # float_roundtrip: parse float text to the same double as json.loads and

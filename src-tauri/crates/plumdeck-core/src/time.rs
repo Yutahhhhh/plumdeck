@@ -56,9 +56,65 @@ pub fn py_date_isoformat(value: &NaiveDate) -> String {
     format!("{:04}-{:02}-{:02}", value.year(), value.month(), value.day())
 }
 
+/// The wall clock, injectable so parity runs and tests can freeze it.
+///
+/// Rows get their timestamps from here, bound as parameters: the bundled
+/// DuckDB has no ICU, so `now()`/`CURRENT_TIMESTAMP` in SQL would be UTC
+/// where the Python backend stores local time (plan R3).
+pub trait Clock: Send + Sync {
+    /// `datetime.now()`: local naive time at microsecond precision.
+    fn now_naive(&self) -> NaiveDateTime;
+    /// `time.time()`: seconds since the Unix epoch.
+    fn epoch_seconds(&self) -> f64;
+}
+
+/// The real clock.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now_naive(&self) -> NaiveDateTime {
+        local_now_naive()
+    }
+
+    fn epoch_seconds(&self) -> f64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0.0, |elapsed| elapsed.as_secs_f64())
+    }
+}
+
+/// A clock that always answers the same instant (tests, `freeze_now`).
+#[derive(Clone, Copy, Debug)]
+pub struct FixedClock {
+    pub naive: NaiveDateTime,
+    pub epoch: f64,
+}
+
+impl Clock for FixedClock {
+    fn now_naive(&self) -> NaiveDateTime {
+        self.naive
+    }
+
+    fn epoch_seconds(&self) -> f64 {
+        self.epoch
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_clock_reads_local_time_and_epoch_seconds() {
+        let clock = SystemClock;
+        let before = local_now_naive();
+        let now = clock.now_naive();
+        assert!(now >= before && now.nanosecond() % 1_000 == 0);
+        assert!(clock.epoch_seconds() > 1.7e9);
+        let fixed = FixedClock { naive: before, epoch: 1.5 };
+        assert_eq!((fixed.now_naive(), fixed.epoch_seconds()), (before, 1.5));
+    }
 
     #[test]
     fn microseconds_only_when_present() {
