@@ -85,6 +85,23 @@ fn main() -> ExitCode {
         println!("Starting plumdeck Backend Server on port {port}...");
         println!("User Data Directory: {}", config.user_data_dir.display());
 
+        // Listen for a stop request from here on; startup itself runs to the
+        // end (uvicorn finishes the lifespan startup, then exits).
+        let managed = config.managed_sidecar;
+        let signal = shutdown_signal();
+        let (request_stop, mut stop_requested) = tokio::sync::watch::channel(false);
+        tokio::spawn(async move {
+            if managed {
+                tokio::select! {
+                    _ = signal => {}
+                    _ = stdin_shutdown_line() => {}
+                }
+            } else {
+                signal.await;
+            }
+            let _ = request_stop.send(true);
+        });
+
         // main.py lifespan, before the socket is bound (uvicorn's order).
         let db_path = config.db_path.clone();
         let opened = tokio::task::spawn_blocking(move || {
@@ -103,6 +120,10 @@ fn main() -> ExitCode {
             }
         };
         println!("{}", StartupStage::Ready.line());
+        if *stop_requested.borrow() {
+            close(library).await;
+            return ExitCode::SUCCESS;
+        }
 
         let listener = match TcpListener::bind(("127.0.0.1", port)).await {
             Ok(listener) => listener,
@@ -119,16 +140,8 @@ fn main() -> ExitCode {
         }));
         tracing::info!(port, "listening on 127.0.0.1");
 
-        let managed = config.managed_sidecar;
         let requested = async move {
-            if managed {
-                tokio::select! {
-                    _ = shutdown_signal() => {}
-                    _ = stdin_shutdown_line() => {}
-                }
-            } else {
-                shutdown_signal().await;
-            }
+            let _ = stop_requested.wait_for(|stop| *stop).await;
         };
         let code = tokio::select! {
             result = &mut server => {

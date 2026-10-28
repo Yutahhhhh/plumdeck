@@ -130,26 +130,34 @@ impl StartupStage {
     }
 }
 
-/// Resolves on SIGINT, or SIGTERM on Unix.
-pub async fn shutdown_signal() {
-    let ctrl_c = async {
-        let _ = tokio::signal::ctrl_c().await;
-    };
+/// Resolves on SIGINT, or SIGTERM on Unix. On Unix the handlers are
+/// installed when this is called, not when the future is first polled, so a
+/// signal that arrives during startup is not lost (it then stops the server
+/// right after startup, as uvicorn does). Call inside the runtime.
+pub fn shutdown_signal() -> impl Future<Output = ()> + Send + 'static {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{signal, SignalKind};
-        match signal(SignalKind::terminate()) {
-            Ok(mut term) => {
-                tokio::select! {
-                    _ = ctrl_c => {}
-                    _ = term.recv() => {}
+        let interrupt = signal(SignalKind::interrupt());
+        let terminate = signal(SignalKind::terminate());
+        async move {
+            match (interrupt, terminate) {
+                (Ok(mut interrupt), Ok(mut terminate)) => {
+                    tokio::select! {
+                        _ = interrupt.recv() => {}
+                        _ = terminate.recv() => {}
+                    }
+                }
+                _ => {
+                    let _ = tokio::signal::ctrl_c().await;
                 }
             }
-            Err(_) => ctrl_c.await,
         }
     }
     #[cfg(not(unix))]
-    ctrl_c.await;
+    async {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 /// For a managed sidecar: resolves when the desktop writes
