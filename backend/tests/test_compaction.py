@@ -353,10 +353,109 @@ def test_failed_rebuild_leaves_original_file(tmp_path, monkeypatch):
         raise RuntimeError("disk full")
 
     monkeypatch.setattr(compaction, "_copy_track_analyses", boom)
-    with pytest.raises(RuntimeError, match="disk full"):
-        ensure_healthy_db(db)
+    ensure_healthy_db(db)  # the allow-list cleanup is an optimization: startup goes on
 
-    assert _snapshot(db) == before
+    assert _snapshot(db) == before  # no marker either, so the next start retries
     assert glob.glob(db + ".bak-v5-*") == []
     assert not os.path.exists(db + ".rebuild")
     assert not os.path.exists(db + ".rebuild.wal")
+
+    monkeypatch.undo()
+    ensure_healthy_db(db)
+    assert json.loads(_snapshot(db)["fx"][1]) == _KEPT_FX
+
+
+def test_failed_schema_migration_stops_startup(tmp_path, monkeypatch):
+    db = str(tmp_path / "legacy-fail.duckdb")
+    _make_legacy_v3_db(db, n_tracks=2)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(compaction, "_copy_track_analyses", boom)
+    with pytest.raises(RuntimeError, match="disk full"):
+        ensure_healthy_db(db)
+    assert os.path.exists(db) and glob.glob(db + ".bak-v5-*") == []
+    assert not os.path.exists(db + ".rebuild")
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_failed_final_rename_keeps_the_live_file(tmp_path, monkeypatch, legacy):
+    db = str(tmp_path / "plumdeck.duckdb")
+    if legacy:
+        _make_legacy_v3_db(db, n_tracks=2)
+    else:
+        _make_v5_db(db, [json.dumps(_LEGACY_FX)])
+    with open(db, "rb") as f:
+        original = f.read()
+    real = os.replace
+
+    def locked(source, target):
+        if str(source).endswith(".rebuild"):
+            raise PermissionError("[WinError 32] file in use")
+        return real(source, target)
+
+    monkeypatch.setattr(compaction.os, "replace", locked)
+    monkeypatch.setattr(compaction.time, "sleep", lambda seconds: None)
+    if legacy:  # a schema migration still stops startup, with the DB in place
+        with pytest.raises(PermissionError):
+            ensure_healthy_db(db)
+    else:
+        ensure_healthy_db(db)
+    with open(db, "rb") as f:
+        assert f.read() == original
+    assert glob.glob(db + ".bak-v5-*") == []
+    assert not os.path.exists(db + ".rebuild")
+
+    monkeypatch.undo()
+    ensure_healthy_db(db)  # the next launch rebuilds normally
+    assert len(glob.glob(db + ".bak-v5-*")) == 1
+
+
+def test_swap_interrupted_by_an_older_release_is_undone(tmp_path):
+    # Older releases renamed the live file away first; a crash before the
+    # second rename left only the backup and the rebuild file.
+    db = str(tmp_path / "plumdeck.duckdb")
+    _make_v5_db(db, [json.dumps(_LEGACY_FX), "{}"])
+    before = _snapshot(db)
+    os.replace(db, db + ".bak-v5-20260101-000000")
+    with open(db + ".rebuild", "wb") as f:
+        f.write(b"unknown state")
+
+    ensure_healthy_db(db)
+
+    after = _snapshot(db)
+    assert after["tracks"] == before["tracks"] and after["blobs"] == before["blobs"]
+    assert json.loads(after["fx"][1]) == _KEPT_FX
+    assert not os.path.exists(db + ".rebuild")
+
+
+def test_missing_db_without_rebuild_file_stays_a_new_install(tmp_path):
+    db = str(tmp_path / "plumdeck.duckdb")
+    with open(db + ".bak-v5-20260101-000000", "wb") as f:
+        f.write(b"old")
+    ensure_healthy_db(db)
+    assert not os.path.exists(db)
+
+
+def test_old_backups_are_pruned_on_a_healthy_start(tmp_path):
+    db = str(tmp_path / "plumdeck.duckdb")
+    _make_v5_db(db, ["{}"])
+    old = db + ".bak-v5-20200101-000000"
+    recent = db + ".bak-v5-" + compaction.time.strftime("%Y%m%d-%H%M%S")
+    for path in (old, old + ".wal", recent, db + ".bak-v5-unknown"):
+        with open(path, "wb") as f:
+            f.write(b"x")
+
+    ensure_healthy_db(db)
+
+    assert not os.path.exists(old) and not os.path.exists(old + ".wal")
+    assert os.path.exists(recent) and os.path.exists(db + ".bak-v5-unknown")
+
+
+def test_restore_staging_rebuild_keeps_no_backup(tmp_path):
+    db = str(tmp_path / "plumdeck.duckdb")
+    _make_v5_db(db, [json.dumps(_LEGACY_FX)])
+    ensure_healthy_db(db, keep_backup=False)
+    assert json.loads(_snapshot(db)["fx"][1]) == _KEPT_FX
+    assert glob.glob(db + ".bak-v5-*") == []

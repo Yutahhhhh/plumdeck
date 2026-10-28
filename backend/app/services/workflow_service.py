@@ -1011,7 +1011,7 @@ def restore_backup(path: str, confirmed: bool) -> dict[str, Any]:
         staged_db = restore_root / "plumdeck.duckdb"
         # Validate/migrate the staging copy without mutating the archive.
         from infra.database.compaction import ensure_healthy_db
-        ensure_healthy_db(str(staged_db))
+        ensure_healthy_db(str(staged_db), keep_backup=False)
         # Restore included files under a content-addressed managed root and
         # rewrite only the matching archived references in the staging DB.
         managed_root = db_path.parent / "restored-assets" / manifest["snapshot_id"]

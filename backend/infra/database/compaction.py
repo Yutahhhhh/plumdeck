@@ -18,10 +18,18 @@
 DuckDB はファイルを大きくするため、再構築の中でだけ行う。
 
 再構築は新ファイルに書き出してから rename で差し替えるため、成功するまで元ファイルは無傷。
-元ファイルは `<db>.bak-v<N>-<timestamp>` として残す (自動削除しない)。
+差し替えは「元ファイルをハードリンク(またはコピー)で `<db>.bak-v<N>-<timestamp>` に残す ->
+新ファイルを os.replace で上書き」の順で行い、どの時点で落ちても db_path は必ず存在する。
+旧版の差し替え (先に元ファイルを rename) の途中で落ちた場合は、起動時に .bak から戻す。
+バックアップは BACKUP_KEEP_DAYS を過ぎたら、正常に開けた起動時に削除する。
+
+許可リストの適用 (2) と肥大のコンパクション (3) は最適化なので、失敗しても元ファイルの
+まま起動を続け、次回の起動で再試行する。起動を止めるのはスキーマ移行 (1) の失敗だけ。
 """
+import glob
 import json
 import os
+import shutil
 import time
 from typing import List, Optional
 
@@ -55,9 +63,17 @@ FX_CLEAN_KEY = "features_extra_clean"
 FX_CLEAN_VERSION = 1
 _PERSISTED = frozenset(PERSISTED_KEYS)
 
+BACKUP_KEEP_DAYS = 30
+_REPLACE_ATTEMPTS = 5  # Windows: Defender or an indexer may hold the new file briefly
 
-def ensure_healthy_db(db_path: str) -> None:
-    if not db_path or not os.path.exists(db_path):
+
+def ensure_healthy_db(db_path: str, keep_backup: bool = True) -> None:
+    """Rebuild the file when needed. ``keep_backup=False`` skips the .bak copy
+    (restore staging, whose archive is the backup)."""
+    if not db_path:
+        return
+    _recover_interrupted_swap(db_path)
+    if not os.path.exists(db_path):
         return  # 新規インストール: init_raw_db が新スキーマで作成する
 
     try:
@@ -68,6 +84,7 @@ def ensure_healthy_db(db_path: str) -> None:
 
     new_path = db_path + ".rebuild"
     built = False
+    needs_migrate = False
     try:
         version = _read_version(con)
         legacy = _has_legacy_analysis_columns(con)
@@ -76,6 +93,7 @@ def ensure_healthy_db(db_path: str) -> None:
         needs_compact = (not needs_migrate) and (not needs_fx) and _is_bloated(con, db_path)
 
         if not needs_migrate and not needs_fx and not needs_compact:
+            _prune_backups(db_path)
             return
 
         size_mb = os.path.getsize(db_path) / 1e6
@@ -88,7 +106,15 @@ def ensure_healthy_db(db_path: str) -> None:
         logger.warning(f"DuckDB ファイルを再構築します ({reason}, 現在 {size_mb:.0f}MB)")
 
         _remove_partial(new_path)
-        _build_new_file(con, new_path, convert=legacy)
+        try:
+            _build_new_file(con, new_path, convert=legacy)
+        except Exception as e:
+            if needs_migrate:
+                raise
+            # Optimization only: keep the original file and retry on next start.
+            logger.warning(f"DuckDB の再構築をスキップしました (次回の起動で再試行します): {e}")
+            return
+        con.execute("CHECKPOINT")  # leave no WAL that belongs to the old file
         built = True
     finally:
         con.close()
@@ -98,7 +124,19 @@ def ensure_healthy_db(db_path: str) -> None:
             except OSError:
                 pass
 
-    _swap(db_path, new_path)
+    try:
+        _swap(db_path, new_path, keep_backup)
+    except Exception as e:
+        try:
+            _remove_partial(new_path)
+        except OSError:
+            pass
+        if needs_migrate:
+            raise
+        logger.warning(f"DuckDB の差し替えをスキップしました (次回の起動で再試行します): {e}")
+        return
+    if keep_backup:
+        _prune_backups(db_path)
 
 
 # --------------------------------------------------------------------------- #
@@ -351,18 +389,105 @@ def _build_new_file(src, new_path: str, convert: bool) -> None:
             pass  # the caller's con.close() releases the file as well
 
 
-def _swap(db_path: str, new_path: str) -> None:
-    ts = time.strftime("%Y%m%d-%H%M%S")
-    backup = f"{db_path}.bak-v{CURRENT_SCHEMA_VERSION}-{ts}"
-    os.replace(db_path, backup)
-    src_wal = db_path + ".wal"
-    if os.path.exists(src_wal):
+def _backup_path(db_path: str) -> str:
+    return f"{db_path}.bak-v{CURRENT_SCHEMA_VERSION}-{time.strftime('%Y%m%d-%H%M%S')}"
+
+
+def _keep_copy(source: str, target: str) -> None:
+    """Hard link (no extra space while both names exist), else a full copy."""
+    try:
+        os.link(source, target)
+    except OSError:
+        shutil.copy2(source, target)
+
+
+def _replace(source: str, target: str) -> None:
+    # os.replace overwrites atomically on POSIX and on Windows (MoveFileEx
+    # REPLACE_EXISTING), so the target name never disappears.
+    for attempt in range(_REPLACE_ATTEMPTS):
         try:
-            os.replace(src_wal, backup + ".wal")
-        except OSError:
-            pass
-    os.replace(new_path, db_path)
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if attempt == _REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(0.2 * (attempt + 1))
+
+
+def _swap(db_path: str, new_path: str, keep_backup: bool = True) -> None:
+    backup = _backup_path(db_path) if keep_backup else None
+    if backup:
+        _keep_copy(db_path, backup)
+    src_wal = db_path + ".wal"
+    wal_aside = (backup or db_path + ".stale") + ".wal"
+    try:
+        if os.path.exists(src_wal):
+            # The checkpoint before close normally leaves none; a stale WAL must
+            # never be replayed onto the new file.
+            os.replace(src_wal, wal_aside)
+        _replace(new_path, db_path)
+    except Exception:
+        if os.path.exists(wal_aside) and not os.path.exists(src_wal):
+            os.replace(wal_aside, src_wal)
+        if backup and os.path.exists(backup):
+            os.remove(backup)
+        raise
+    if not backup and os.path.exists(wal_aside):
+        os.remove(wal_aside)
     new_size_mb = os.path.getsize(db_path) / 1e6
-    logger.warning(
-        f"DuckDB 再構築完了: 新ファイル {new_size_mb:.0f}MB。旧ファイルは {backup} に保存しました。"
-    )
+    if backup:
+        logger.warning(
+            f"DuckDB 再構築完了: 新ファイル {new_size_mb:.0f}MB。旧ファイルは {backup} に保存しました"
+            f" (動作を確認したら削除できます。{BACKUP_KEEP_DAYS} 日後の起動時に自動で削除します)。"
+        )
+    else:
+        logger.info(f"DuckDB 再構築完了: 新ファイル {new_size_mb:.0f}MB")
+
+
+def _backup_time(path: str) -> Optional[float]:
+    """Creation time from the '.bak-v<N>-<YYYYmmdd-HHMMSS>' suffix (not mtime,
+    which a hard link shares with the original)."""
+    try:
+        return time.mktime(time.strptime(path.rsplit("-", 2)[-2] + path.rsplit("-", 1)[-1], "%Y%m%d%H%M%S"))
+    except (ValueError, IndexError):
+        return None
+
+
+def _backups(db_path: str) -> List[str]:
+    return sorted(path for path in glob.glob(glob.escape(db_path) + ".bak-v*")
+                  if not path.endswith(".wal"))
+
+
+def _recover_interrupted_swap(db_path: str) -> None:
+    """Undo a swap that died after moving the live file away (older releases).
+
+    Only when the rebuild file is still there: a missing DB alone may be a
+    deliberate reset, and the newest backup is the untouched original.
+    """
+    new_path = db_path + ".rebuild"
+    if os.path.exists(db_path) or not os.path.exists(new_path):
+        return
+    backups = _backups(db_path)
+    if not backups:
+        return
+    backup = max(backups, key=lambda path: (_backup_time(path) or 0, path))
+    logger.warning(f"中断した DuckDB の差し替えを戻します: {backup} -> {db_path}")
+    if os.path.exists(backup + ".wal"):
+        os.replace(backup + ".wal", db_path + ".wal")
+    os.replace(backup, db_path)
+    _remove_partial(new_path)
+
+
+def _prune_backups(db_path: str) -> None:
+    cutoff = time.time() - BACKUP_KEEP_DAYS * 86400
+    for backup in _backups(db_path):
+        created = _backup_time(backup)
+        if created is None or created >= cutoff:
+            continue
+        try:
+            for path in (backup, backup + ".wal"):
+                if os.path.exists(path):
+                    os.remove(path)
+            logger.info(f"古い DuckDB バックアップを削除しました: {backup}")
+        except OSError as e:
+            logger.warning(f"DuckDB バックアップを削除できませんでした: {backup}: {e}")
