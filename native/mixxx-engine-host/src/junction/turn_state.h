@@ -177,7 +177,7 @@ struct TailLock {
     /// Empty when allowed; otherwise the DJ-facing reason.
     static QString check(const QString& op,const QJsonObject& params,const QSet<int>& tailDecks) {
         // Program-wide controls shape the tail's post-fader level.
-        if(op=="mixer.crossfader"||op=="mixer.master.gain"||op=="mixer.beatfx.set")
+        if(op=="mixer.crossfader"||op=="mixer.crossfader.curve"||op=="mixer.master.gain"||op=="mixer.beatfx.set")
             return QStringLiteral("残りの曲を送出中はマスター系を操作できません");
         if(op=="deck.sync.set"&&params["leader"].isString()&&tailDecks.contains(deckIndex(params["leader"].toString())))
             return QStringLiteral("残りの曲をSYNCのリーダーにはできません");

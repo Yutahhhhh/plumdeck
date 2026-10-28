@@ -265,9 +265,9 @@ test("sync leader: MASTER first, then a playing deck, never an empty deck", () =
 });
 
 test("crossfader curve and dropout counting", () => {
-  assert.equal(readCrossfaderCurve(null), "standard");
+  assert.equal(readCrossfaderCurve(null), "sharp");
   assert.equal(readCrossfaderCurve("sharp"), "sharp");
-  assert.equal(readCrossfaderCurve("steep"), "standard");
+  assert.equal(readCrossfaderCurve("steep"), "sharp");
   let state = nextDropouts(null, "s1", 7, 1000);
   assert.deepEqual(state, { session: "s1", baseline: 7, count: 0, lastAt: null }, "counts start at the first reading");
   state = nextDropouts(state, "s1", 7, 2000);

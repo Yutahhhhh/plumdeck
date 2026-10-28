@@ -149,7 +149,11 @@ export const DJ_ENGINE_CAPABILITIES = {
    * LEVEL spans -1..+1 octave; echo/reverb OFF keeps a tail (`beatFx.tail`).
    */
   mixerBeatFxRange: "mixer.beatfx.range.v2",
-  /** H-12: `mixer.crossfader.curve` sets smooth / standard / sharp; channels report `crossfaderGain`. */
+  /**
+   * H-12: `mixer.crossfader.curve` sets smooth / standard / sharp; channels
+   * report `crossfaderGain`. The host starts at "sharp", which is what hosts
+   * before H-12 played (Mixxx's unconfigured mixer profile).
+   */
   mixerCrossfaderCurve: "mixer.crossfader.curve",
   mixerCrossfader: "mixer.crossfader",
   mixerPfl: "mixer.pfl",

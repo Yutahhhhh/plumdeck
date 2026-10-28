@@ -76,15 +76,18 @@ export function formatColorAmount(effect: ColorFxEffect, amount: number): string
 }
 
 /** Crossfader curves the host maps onto its mixer profile (H-12). */
+// Gains follow Mixxx's getXfadeGains: smooth is constant power (both −3 dB at
+// the centre); standard and sharp keep both sides at full level at the centre.
 export const CROSSFADER_CURVE_OPTIONS = [
-  { curve: "smooth", label: "なめらか", title: "ロングミックス向け：中央でも両方が大きく残ります" },
-  { curve: "standard", label: "標準", title: "中央で両方が少し下がる標準のカーブ" },
-  { curve: "sharp", label: "カット", title: "スクラッチ向け：端を少し動かしただけで立ち上がります" },
+  { curve: "smooth", label: "なめらか", title: "ロングミックス向け：中央で両方が約 −3 dB になり、音量感を保ったまま入れ替わります" },
+  { curve: "standard", label: "標準", title: "中央では両方とも最大で、片側へ動かすと反対側がなだらかに下がります" },
+  { curve: "sharp", label: "カット", title: "スクラッチ向け（初期設定）：端のわずかな範囲だけで切り替わり、それ以外は両方とも最大です" },
 ] as const;
 export type CrossfaderCurveOption = (typeof CROSSFADER_CURVE_OPTIONS)[number]["curve"];
 export const CROSSFADER_CURVE_STORAGE = "plumdeck.crossfaderCurve";
 export function readCrossfaderCurve(value: string | null | undefined): CrossfaderCurveOption {
-  return CROSSFADER_CURVE_OPTIONS.some((entry) => entry.curve === value) ? value as CrossfaderCurveOption : "standard";
+  // "sharp" is what hosts before H-12 always played (Mixxx's unconfigured profile).
+  return CROSSFADER_CURVE_OPTIONS.some((entry) => entry.curve === value) ? value as CrossfaderCurveOption : "sharp";
 }
 
 /** Audio dropouts: xruns counted since the first reading of this session. */

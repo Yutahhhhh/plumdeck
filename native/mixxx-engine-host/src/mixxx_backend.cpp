@@ -103,6 +103,10 @@ public:
         ControlObject::set(ConfigKey(kMixerProfile, kLowEqFrequency), 250);
         ControlObject::set(ConfigKey(kMixerProfile, kHighEqFrequency), 2500);
         mixer_ = std::make_unique<EngineMixer>(settings_, "[Master]", effects_.get(), handles_, true);
+        // Hosts before H-12 never set the mixer profile, so Mixxx ran its
+        // unconfigured ControlPotmeter defaults: additive, transform ~500, a
+        // sharp cut. Keep that as the default and apply what we report.
+        crossfaderCurve("sharp");
         const QString defaultRecordingDir = QDir(QStandardPaths::writableLocation(QStandardPaths::MusicLocation)).filePath("plumdeck Recordings");
         const QString recordingDir = qEnvironmentVariable("PLUMDECK_MIXXX_RECORDING_DIR", defaultRecordingDir);
         settings_->set(ConfigKey(RECORDING_PREF_KEY, "Directory"), recordingDir);
@@ -1276,7 +1280,7 @@ private:
     bool recordingActive_ = false, recordingPending_ = false, recordingStopping_ = false;
     bool available_ = false, started_ = false, pflAvailable_ = false;
     QString problem_ = "Mixxx audio initialization has not completed", output_;
-    QString crossfaderCurve_ = "standard";
+    QString crossfaderCurve_ = "sharp";
 };
 }
 std::unique_ptr<PlaybackBackend> makeBackend() { return std::make_unique<MixxxBackend>(); }

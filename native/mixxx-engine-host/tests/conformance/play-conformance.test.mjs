@@ -437,8 +437,13 @@ test('Play engine conformance on BlackHole 2ch', { timeout: 900000, skip: !binar
     await h.ok('mixer.channel.orientation', { deck: 'A', orientation: 0 });
     const positions = [-1, -0.5, 0, 0.5, 0.9, 1];
     const table = {};
-    for (const curve of ['smooth', 'standard', 'sharp']) {
-      const applied = await h.try('mixer.crossfader.curve', { curve });
+    // The startup curve must keep what hosts before H-12 played: Mixxx's
+    // unconfigured profile, i.e. both sides full at the centre (c78cb94).
+    const reported = (await h.snapshot()).mixer.crossfaderCurve ?? null;
+    metric('startupCurve', reported);
+    expect('host reports sharp at startup', reported === 'sharp', reported);
+    for (const curve of ['startup', 'smooth', 'standard', 'sharp']) {
+      const applied = curve === 'startup' ? { ok: true } : await h.try('mixer.crossfader.curve', { curve });
       if (!applied.ok && curve !== 'standard') { table[curve] = rejected(applied); expect(`${curve} curve accepted`, false, rejected(applied)); continue; }
       const telemetry = [];
       await h.ok('deck.pause', { deck: 'A' });
@@ -459,9 +464,11 @@ test('Play engine conformance on BlackHole 2ch', { timeout: 900000, skip: !binar
       if (applied.ok) expect(`${curve}: audio matches reported gain +/- 0.5 dB`, rows.every(r => r.telemetryDb !== null) && mismatch.length === 0, mismatch);
       if (curve === 'smooth' && applied.ok) expect('smooth: centre -3 +/- 0.5 dB', Math.abs(rows[2].db + 3.01) <= 0.5, rows[2].db);
       if (curve === 'sharp' && applied.ok) expect('sharp: +0.5 still within 0.5 dB of full', rows[3].db >= -0.5, rows[3].db);
+      if (curve === 'standard' && applied.ok) expect('standard: centre at full level +/- 0.5 dB', Math.abs(rows[2].db) <= 0.5, rows[2].db);
+      if (curve === 'startup') expect('startup: like c78cb94, centre and +0.5 full, +0.9 within 0.5 dB, +1 cut', Math.abs(rows[2].db) <= 0.5 && rows[3].db >= -0.5 && rows[4].db >= -0.5 && rows[5].db <= -60, rows.map(r => r.db));
     }
     metric('curves', table);
-    await h.try('mixer.crossfader.curve', { curve: 'standard' });
+    await h.try('mixer.crossfader.curve', { curve: 'sharp' });
   });
 
   // ---------------------------------------------------------------- FX timing
