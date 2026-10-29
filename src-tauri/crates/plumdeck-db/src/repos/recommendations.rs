@@ -1,6 +1,6 @@
 //! The recommenders' queries (backend/infra/repositories/recommendation_repository.py, S4):
-//! the candidate pool, the globally ranked next-track page and the
-//! embedding reads behind the genre suggestions.
+//! the candidate pool, the globally ranked next-track page and a
+//! track's stored embedding.
 //!
 //! The SQL is Python's text with its named parameters bound in order of
 //! appearance, so DuckDB evaluates the same expressions (tempo distance,
@@ -465,81 +465,6 @@ pub fn ranked_page(
     Ok(RankedPage { items, total })
 }
 
-/// The model condition of `_model_condition` for a target's space.
-fn model_condition(sql: &mut Sql, model: Option<&str>) {
-    if embedding_space(model) == "musicnn" {
-        sql.push(" AND (track_embeddings.model_name IN ");
-        list(sql, &LEGACY_MODELS.iter().map(|name| name.to_string()).collect::<Vec<_>>());
-        sql.push(" OR track_embeddings.model_name IS NULL)");
-    } else {
-        sql.push(" AND track_embeddings.model_name = ");
-        sql.bind(model.map_or(Value::Null, |name| Value::Text(name.into())));
-    }
-}
-
-/// `get_verified_tracks_with_embeddings`: `(genre, vector)` of verified
-/// tracks with a non-empty genre and a parseable embedding in the space of
-/// `model` (when given), except `exclude` (when non-zero).
-pub fn verified_genre_vectors(conn: &Connection, exclude: i64, model: Option<Option<&str>>) -> Result<Vec<(String, Vec<f64>)>, DbError> {
-    let mut sql = Sql::default();
-    sql.push(
-        "SELECT tracks.genre, track_embeddings.embedding_json FROM tracks JOIN track_embeddings \
-         ON tracks.id = track_embeddings.track_id WHERE tracks.is_genre_verified = true",
-    );
-    if let Some(model) = model {
-        model_condition(&mut sql, model);
-    }
-    if exclude != 0 {
-        sql.push(" AND tracks.id != ");
-        sql.bind(Value::BigInt(exclude));
-    }
-    let mut statement = conn.prepare(&sql.text)?;
-    let rows: Vec<(Option<String>, Option<String>)> =
-        statement.query_map(params_from_iter(sql.params), |row| Ok((row.get(0)?, row.get(1)?)))?.collect::<Result<_, _>>()?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|(genre, json)| {
-            let genre = genre.filter(|genre| !genre.is_empty())?;
-            Some((genre, parse_embedding(json.as_deref())?))
-        })
-        .collect())
-}
-
-/// `get_parent_vectors`: `(id, vector, space)` of verified tracks.
-pub fn parent_vectors(conn: &Connection) -> Result<Vec<(i64, Vec<f64>, String)>, DbError> {
-    let mut statement = conn.prepare(
-        "SELECT tracks.id, track_embeddings.embedding_json, track_embeddings.model_name FROM tracks JOIN track_embeddings \
-         ON tracks.id = track_embeddings.track_id WHERE tracks.is_genre_verified = true",
-    )?;
-    let rows: Vec<(i64, Option<String>, Option<String>)> =
-        statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?.collect::<Result<_, _>>()?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|(id, json, model)| Some((id, parse_embedding(json.as_deref())?, embedding_space(model.as_deref()).to_owned())))
-        .collect())
-}
-
-/// `get_candidates_with_ids` (and, without the ids, `get_candidate_vectors`):
-/// tracks still to classify (`mode == "subgenre"`: no subgenre; otherwise
-/// unverified) with a parseable embedding in `model`'s space.
-pub fn candidate_vectors(conn: &Connection, mode: &str, model: Option<&str>) -> Result<Vec<(i64, Vec<f64>)>, DbError> {
-    let mut sql = Sql::default();
-    sql.push(
-        "SELECT tracks.id, track_embeddings.embedding_json FROM tracks JOIN track_embeddings \
-         ON tracks.id = track_embeddings.track_id WHERE 1=1",
-    );
-    model_condition(&mut sql, model);
-    if mode == "subgenre" {
-        sql.push(" AND (tracks.subgenre IS NULL OR tracks.subgenre = '')");
-    } else {
-        sql.push(" AND tracks.is_genre_verified = false");
-    }
-    let mut statement = conn.prepare(&sql.text)?;
-    let rows: Vec<(i64, Option<String>)> =
-        statement.query_map(params_from_iter(sql.params), |row| Ok((row.get(0)?, row.get(1)?)))?.collect::<Result<_, _>>()?;
-    Ok(rows.into_iter().filter_map(|(id, json)| Some((id, parse_embedding(json.as_deref())?))).collect())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -586,15 +511,5 @@ mod tests {
         let keys: Vec<&str> = page.items[0].iter().map(|(key, _)| key.as_str()).collect();
         assert_eq!(keys.first(), Some(&"id"));
         assert_eq!(&keys[keys.len() - 3..], &["lyrics", "has_lyrics", "recommendation_score"]);
-    }
-
-    #[test]
-    fn embedding_reads_by_space() {
-        let conn = library();
-        assert_eq!(verified_genre_vectors(&conn, 0, Some(None)).unwrap(), vec![("House".into(), vec![1.0, 0.0])]);
-        assert!(verified_genre_vectors(&conn, 1, None).unwrap().is_empty());
-        assert_eq!(candidate_vectors(&conn, "genre", None).unwrap(), vec![(2, vec![1.0, 1.0])]);
-        assert_eq!(candidate_vectors(&conn, "genre", Some("other")).unwrap(), vec![(3, vec![0.0, 1.0])]);
-        assert_eq!(parent_vectors(&conn).unwrap(), vec![(1, vec![1.0, 0.0], "musicnn".into())]);
     }
 }

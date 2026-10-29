@@ -20,6 +20,7 @@ export function GenreCell({ track, onUpdate }: GenreCellProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [value, setValue] = useState(track.genre || "");
   const [suggestedGenre, setSuggestedGenre] = useState<string | null>(null);
+  const [suggestedConfidence, setSuggestedConfidence] = useState<number | null>(null);
   const [suggestionReason, setSuggestionReason] = useState<string | null>(null);
   const [isLoadingSuggestion, setIsLoadingSuggestion] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -34,6 +35,7 @@ export function GenreCell({ track, onUpdate }: GenreCellProps) {
           .then((res) => {
             if (res.suggested_genre) {
               setSuggestedGenre(res.suggested_genre);
+              setSuggestedConfidence(res.confidence ?? null);
             } else if (res.reason) {
                 setSuggestionReason(res.reason);
             }
@@ -67,10 +69,9 @@ export function GenreCell({ track, onUpdate }: GenreCellProps) {
 
   const getReasonMessage = (reason: string) => {
     switch (reason) {
-        case "no_embedding": return "Timbre comparison pending (embedding not computed yet)";
-        case "no_verified_tracks": return "No verified tracks to compare";
-        case "no_valid_candidates": return "No similar tracks found";
-        default: return "No suggestions found";
+        case "no_embedding": return "解析が終わると候補を出せます";
+        case "classifier_not_trained": return "ジャンル管理の「学習」で候補を出せるようになります";
+        default: return "候補はありません";
     }
   };
 
@@ -86,7 +87,7 @@ export function GenreCell({ track, onUpdate }: GenreCellProps) {
                     {track.genre}
                 </Badge>
             ) : (
-                <span className="text-muted-foreground italic text-xs px-1">No Genre</span>
+                <span className="text-muted-foreground italic text-xs px-1">未判定</span>
             )}
             {track.is_genre_verified && (
                 <Check className="h-3 w-3 text-green-500 shrink-0" />
@@ -108,11 +109,11 @@ export function GenreCell({ track, onUpdate }: GenreCellProps) {
             </Button>
         </div>
         <div className="p-1">
-            <div className="text-xs font-medium text-muted-foreground px-2 py-1.5">Suggestions</div>
+            <div className="text-xs font-medium text-muted-foreground px-2 py-1.5">分類器の候補</div>
             {isLoadingSuggestion ? (
                 <div className="flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground">
                     <Loader2 className="h-3 w-3 animate-spin" />
-                    Loading...
+                    読み込み中…
                 </div>
             ) : suggestedGenre ? (
                 <div 
@@ -122,11 +123,14 @@ export function GenreCell({ track, onUpdate }: GenreCellProps) {
                     }}
                 >
                     <Sparkles className="h-3 w-3 text-yellow-500" />
-                    <span>{suggestedGenre}</span>
+                    <span className="flex-1 truncate">{suggestedGenre}</span>
+                    {suggestedConfidence != null && (
+                        <span className="text-xs text-muted-foreground tabular-nums">{Math.round(suggestedConfidence * 100)}%</span>
+                    )}
                 </div>
             ) : (
                 <div className="px-2 py-1.5 text-xs text-muted-foreground italic">
-                    {suggestionReason ? getReasonMessage(suggestionReason) : "No suggestions found"}
+                    {suggestionReason ? getReasonMessage(suggestionReason) : "候補はありません"}
                 </div>
             )}
         </div>

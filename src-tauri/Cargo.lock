@@ -4645,6 +4645,7 @@ dependencies = [
  "clap",
  "encoding_rs",
  "flacenc",
+ "keyring",
  "md-5",
  "plumdeck-analysis",
  "plumdeck-core",
@@ -4652,6 +4653,7 @@ dependencies = [
  "plumdeck-decode",
  "plumdeck-domain",
  "plumdeck-dsp",
+ "plumdeck-genre",
  "plumdeck-key",
  "plumdeck-media",
  "plumdeck-rekordbox",
@@ -4723,6 +4725,14 @@ name = "plumdeck-dsp"
 version = "0.1.0"
 dependencies = [
  "rustfft",
+]
+
+[[package]]
+name = "plumdeck-genre"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

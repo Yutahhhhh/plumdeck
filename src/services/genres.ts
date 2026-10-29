@@ -10,16 +10,6 @@ export interface TrackSuggestion {
   current_genre?: string;
 }
 
-export interface GroupedSuggestion {
-  parent_track: Track;
-  suggestions: TrackSuggestion[];
-}
-
-export interface GroupedSuggestionSummary {
-  parent_track: Track;
-  suggestion_count: number;
-}
-
 export interface GenreBatchUpdateRequest {
   parent_track_id: number;
   target_track_ids: number[];
@@ -40,6 +30,81 @@ export interface GenreUpdateResult {
   artist: string;
   old_genre: string;
   new_genre: string;
+}
+
+export type ConfidenceLevel = "high" | "medium" | "low";
+
+export interface GenreMetric {
+  genre: string;
+  support: number;
+  recall: number;
+}
+
+export interface ClassifierMetrics {
+  samples: number;
+  train_samples: number;
+  holdout_samples: number;
+  genre_accuracy: number;
+  genre_top3_accuracy: number;
+  subgenre_accuracy: number;
+  high_confidence_coverage: number;
+  high_confidence_accuracy: number;
+  low_confidence_share: number;
+  calibration_error: number;
+  per_genre: GenreMetric[];
+}
+
+export interface ClassifierStatus {
+  state: "untrained" | "training" | "ready";
+  progress: number | null;
+  training_labels: number | null;
+  error: string | null;
+  auto_started: boolean;
+  trained_at: string | null;
+  genres: string[];
+  subgenre_count: number;
+  metrics: ClassifierMetrics | null;
+  new_labels: number | null;
+  usable_labels: number | null;
+  min_labels: number;
+  auto_retrain_after: number;
+  low_confidence: number;
+  high_confidence: number;
+}
+
+export interface GenreCandidate {
+  genre: string;
+  subgenre?: string | null;
+  probability: number;
+}
+
+export interface GenrePrediction {
+  genre: string;
+  confidence: number;
+  level: ConfidenceLevel;
+  subgenre: string | null;
+  subgenre_confidence: number;
+  candidates: GenreCandidate[];
+  pair_candidates: GenreCandidate[];
+}
+
+export interface PredictedTrack {
+  track: { id: number; title: string; artist: string; bpm: number; filepath: string };
+  prediction: GenrePrediction;
+}
+
+export interface PredictionPage {
+  trained: boolean;
+  total: number;
+  counts: Record<ConfidenceLevel, number>;
+  without_features: number;
+  items: PredictedTrack[];
+}
+
+export interface AcceptedGenre {
+  track_id: number;
+  genre: string;
+  subgenre?: string | null;
 }
 
 export interface GenreCleanupGroup {
@@ -68,35 +133,6 @@ export const genreService = {
 
   getAllUnknownTrackIds: async (mode: AnalysisMode = "genre"): Promise<number[]> => {
     return apiClient.get<number[]>("/genres/unknown-ids", { mode });
-  },
-
-  getGroupedSuggestions: async (
-    offset: number = 0,
-    limit: number = 10,
-    threshold: number = 0.85,
-    mode: AnalysisMode = "genre"
-  ): Promise<GroupedSuggestionSummary[]> => {
-    return apiClient.get<GroupedSuggestionSummary[]>(
-      "/genres/grouped-suggestions",
-      {
-        offset,
-        limit,
-        threshold,
-        mode,
-      }
-    );
-  },
-
-  getSuggestionsForTrack: async (
-    trackId: number,
-    threshold: number = 0.85
-  ): Promise<TrackSuggestion[]> => {
-    return apiClient.get<TrackSuggestion[]>(
-      `/genres/grouped-suggestions/${trackId}`,
-      {
-        threshold,
-      }
-    );
   },
 
   batchUpdateGenres: async (
@@ -129,6 +165,28 @@ export const genreService = {
         mode,
       }
     );
+  },
+
+  getClassifierStatus: async (): Promise<ClassifierStatus> => {
+    return apiClient.get<ClassifierStatus>("/genres/classifier");
+  },
+
+  trainClassifier: async (): Promise<ClassifierStatus> => {
+    return apiClient.post<ClassifierStatus>("/genres/classifier/train", {});
+  },
+
+  getPredictions: async (
+    level: ConfidenceLevel | "all" = "all",
+    offset = 0,
+    limit = 200
+  ): Promise<PredictionPage> => {
+    return apiClient.get<PredictionPage>("/genres/classifier/predictions", { level, offset, limit });
+  },
+
+  acceptPredictions: async (
+    items: AcceptedGenre[]
+  ): Promise<{ updated: number; new_labels: number; retraining: boolean }> => {
+    return apiClient.post("/genres/classifier/accept", { items });
   },
 
   applyGenresToFiles: async (

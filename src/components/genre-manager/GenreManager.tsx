@@ -1,6 +1,6 @@
 import React from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { AnalyzeMissingTab } from "./AnalyzeMissingTab";
+import { ClassifierTab } from "./ClassifierTab";
 import { McpAnalysisTab } from "./McpAnalysisTab";
 import { CleanupTab } from "./CleanupTab";
 import { Track } from "@/types";
@@ -21,15 +21,15 @@ export const GenreManager: React.FC<GenreManagerProps> = ({ onPlay, mode }) => {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
           <p className="text-muted-foreground">
-            Manage labels with deterministic similarity tools or your connected MCP client's model.
+            Confirm genres suggested by the on-device classifier, clean up spellings, or use your MCP client's model.
           </p>
         </div>
       </div>
 
-      <Tabs defaultValue="cleanup" className="flex-1 flex flex-col min-h-0">
+      <Tabs defaultValue="classifier" className="flex-1 flex flex-col min-h-0">
         <TabsList>
+          <TabsTrigger value="classifier">自動分類</TabsTrigger>
           <TabsTrigger value="cleanup">Cleanup</TabsTrigger>
-          <TabsTrigger value="missing">Analyze Missing</TabsTrigger>
           <TabsTrigger value="mcp-analysis">MCP Analysis</TabsTrigger>
         </TabsList>
 
@@ -41,10 +41,10 @@ export const GenreManager: React.FC<GenreManagerProps> = ({ onPlay, mode }) => {
             <CleanupTab onPlay={onPlay} mode={mode} />
           </TabsContent>
           <TabsContent
-            value="missing"
+            value="classifier"
             className="flex-1 p-0 m-0 min-h-0 data-[state=inactive]:hidden"
           >
-            <AnalyzeMissingTab onPlay={onPlay} mode={mode} />
+            <ClassifierTab mode={mode} />
           </TabsContent>
           <TabsContent
             value="mcp-analysis"

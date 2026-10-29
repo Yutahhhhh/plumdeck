@@ -94,13 +94,28 @@ pub struct AppState {
     pub junction: Arc<dyn routes::junction::JunctionPort>,
     /// Import, analysis jobs and Play imports (S11).
     pub analysis: routes::ingest::AnalysisState,
+    /// The on-device genre classifier (plan §2.4).
+    pub genre_classifier: routes::genre_classifier::GenreClassifier,
+    /// Where the optional AI provider keys live (the OS keychain).
+    pub secrets: Arc<dyn routes::ai::SecretStore>,
 }
 
 impl AppState {
     pub fn new(db: DbHandle, cors: CorsPolicy) -> Self {
         let analysis = routes::ingest::AnalysisState::new(db.clone(), Arc::new(SystemClock));
         let library_dir = db.path().parent().map(std::path::Path::to_path_buf).unwrap_or_default();
-        Self { db, cors: Arc::new(cors), clock: Arc::new(SystemClock), metadata: routes::metadata_jobs::MetadataJobs::new(library_dir), assist: Default::default(), junction: routes::junction::default_port(), analysis }
+        let genre_classifier = routes::genre_classifier::GenreClassifier::new(&library_dir);
+        Self {
+            db,
+            cors: Arc::new(cors),
+            clock: Arc::new(SystemClock),
+            metadata: routes::metadata_jobs::MetadataJobs::new(library_dir),
+            assist: Default::default(),
+            junction: routes::junction::default_port(),
+            analysis,
+            genre_classifier,
+            secrets: routes::ai::default_secret_store(),
+        }
     }
 
     /// Run blocking work (DuckDB) off the async workers; a panic in it is a
@@ -283,6 +298,10 @@ pub(crate) mod test_support {
 
         pub fn state(&self) -> AppState {
             AppState::new(self.db.clone(), CorsPolicy::for_ports(8001, 1420))
+        }
+
+        pub fn dir(&self) -> &std::path::Path {
+            &self.dir
         }
 
         pub fn execute(&self, sql: &str) {

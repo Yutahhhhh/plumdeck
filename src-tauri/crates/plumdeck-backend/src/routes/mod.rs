@@ -1,11 +1,13 @@
 //! HTTP routes, one module per Python router (setlists.py also carries
-//! the recommendation routes; suggestions.py is the recommendation service's
-//! genre suggestions).
+//! the recommendation routes), plus the genre classifier and the optional
+//! AI provider settings (plan §2.4), which have no Python counterpart.
 
+pub mod ai;
 pub mod assist;
 pub mod csv_io;
 pub mod dashboard;
 pub mod file_tags;
+pub mod genre_classifier;
 pub mod genres;
 pub mod ingest;
 pub mod junction;
@@ -20,7 +22,6 @@ pub mod rekordbox_view;
 pub mod set_planner;
 pub mod settings;
 pub mod setlists;
-pub mod suggestions;
 pub mod tracks;
 pub mod waveform_detail;
 pub mod wordplay;
@@ -161,7 +162,13 @@ pub fn api() -> Router<AppState> {
         .route("/api/tracks/{track_id}/rekordbox", get(rekordbox_view::analysis))
         .route("/api/tracks/{track_id}/memory-cues", get(rekordbox_view::get_memory_cues).put(rekordbox_view::put_memory_cues))
         .route("/api/tracks/{track_id}/memory-cues/rekordbox", post(rekordbox_view::import_memory_cues_route))
-        .route("/api/tracks/{track_id}/suggest-genre", get(suggestions::suggest_genre))
-        .route("/api/genres/grouped-suggestions", get(suggestions::grouped_suggestions))
-        .route("/api/genres/grouped-suggestions/{track_id}", get(suggestions::suggestions_for_track))
+        .route("/api/tracks/{track_id}/suggest-genre", get(genre_classifier::suggest_genre))
+        .route("/api/genres/classifier", get(genre_classifier::status))
+        .route("/api/genres/classifier/train", post(genre_classifier::start_train))
+        .route("/api/genres/classifier/predictions", get(genre_classifier::predictions))
+        .route("/api/genres/classifier/accept", post(genre_classifier::accept))
+        .route("/api/genres/classifier/similar/{track_id}", get(genre_classifier::similar))
+        .route("/api/ai/settings", get(ai::get_settings).put(ai::put_settings))
+        .route("/api/ai/keys/{provider}", put(ai::put_key).delete(ai::delete_key))
+        .route("/api/ai/genre-suggestions", post(ai::genre_suggestions))
 }

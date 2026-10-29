@@ -21,6 +21,12 @@ export const tracksService = {
     return apiClient.patch<Track>(`/tracks/${trackId}/info`, info);
   },
   suggestGenre: async (trackId: number) => {
-    return apiClient.get<{ suggested_genre: string | null, reason?: string }>(`/tracks/${trackId}/suggest-genre`);
+    return apiClient.get<{
+      suggested_genre: string | null;
+      suggested_subgenre?: string | null;
+      confidence?: number | null;
+      level?: "high" | "medium" | "low" | null;
+      reason?: string | null;
+    }>(`/tracks/${trackId}/suggest-genre`);
   },
 };

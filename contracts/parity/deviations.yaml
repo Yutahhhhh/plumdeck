@@ -233,6 +233,24 @@ deviations:
       ±1 / relative keys, same first and unknown last. The tool schemas in
       contracts/mcp do not list `camelot` yet (Python had no such argument).
     current: proposed; scores are unchanged, only order and membership.
+  - id: D-27
+    status: proposed
+    source: plan §2.4 (genre and AI); backend/app/services/recommendation_app_service.py (suggest_genre, grouped suggestions), ingestion save_track
+    summary: >
+      Genres come from people and an on-device classifier trained on the
+      user's verified genres with audio features only (plumdeck-genre).
+      GET /api/tracks/{id}/suggest-genre answers the classifier's
+      prediction (suggested_genre, suggested_subgenre, confidence, level,
+      candidates, reason "classifier_not_trained" / "no_embedding") instead
+      of the embedding vote; GET /api/genres/grouped-suggestions(/{id}) are
+      removed (404). The MCP tools suggest_track_genre and
+      get_similar_genre_suggestions use the classifier, three tools are
+      added (get_genre_classifier_status, train_genre_classifier,
+      get_genre_predictions) and get_genre_analysis_context withholds the
+      genre of unverified tracks and adds the classifier's candidates.
+      Imports no longer copy the file-tag genre into tracks.genre (new
+      tracks stay empty, re-analysis keeps the stored genre).
+    current: proposed; owner decision in plan §2.4.
   - id: D-50
     status: proposed
     source: backend/app/services/workflow_service.py (uuid.uuid4 ids, SQL now()), backend/api/routers/workflows.py (datetime.now(timezone.utc))

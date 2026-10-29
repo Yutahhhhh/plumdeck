@@ -87,6 +87,7 @@ plumdeck-decode = { path = "crates/plumdeck-decode" }
 plumdeck-db = { path = "crates/plumdeck-db" }
 plumdeck-domain = { path = "crates/plumdeck-domain" }
 plumdeck-dsp = { path = "crates/plumdeck-dsp" }
+plumdeck-genre = { path = "crates/plumdeck-genre" }
 plumdeck-key = { path = "crates/plumdeck-key" }
 plumdeck-media = { path = "crates/plumdeck-media" }
 plumdeck-backend = { path = "crates/plumdeck-backend" }
@@ -143,4 +144,7 @@ panic = "unwind"
 [profile.dev.package.tract-linalg]
 opt-level = 3
 [profile.dev.package.tract-core]
+opt-level = 3
+# The genre classifier trains in the app; unoptimized it is ~20x slower.
+[profile.dev.package.plumdeck-genre]
 opt-level = 3
