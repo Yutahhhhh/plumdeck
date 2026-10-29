@@ -11,7 +11,11 @@ qt_prefix="$(brew --prefix qtbase)"
 cmake -E make_directory "$bundle/Contents/MacOS" "$bundle/Contents/Resources" "$bundle/Contents/PlugIns/platforms"
 cmake -E copy_if_different "$host_root/build-upstream/plumdeck-mixxx-engine-host" "$bundle/Contents/MacOS/plumdeck-mixxx-engine-host"
 cmake -E copy_if_different "$host_root/packaging/Info.plist" "$bundle/Contents/Info.plist"
-cmake -E copy_directory "$host_root/upstream/res" "$bundle/Contents/Resources"
+# The host creates no window, skin, library or controller subsystem. Effects and
+# the settings schema are the only upstream runtime resources it uses (same set
+# as build-windows.mjs); skins, translations and controllers are ~100 MiB.
+cmake -E copy_directory "$host_root/upstream/res/effects" "$bundle/Contents/Resources/effects"
+cmake -E copy_if_different "$host_root/upstream/res/schema.xml" "$bundle/Contents/Resources/schema.xml"
 cmake -E copy_if_different "$qt_prefix/share/qt/plugins/platforms/libqoffscreen.dylib" "$bundle/Contents/PlugIns/platforms/libqoffscreen.dylib"
 # Static WebRTC components need notices even though no separate dylib is staged.
 licenses="$bundle/Contents/Resources/licenses/junction"
@@ -28,6 +32,7 @@ cmake -E copy_if_different "$ldc/deps/plog/LICENSE" "$licenses/plog.txt"
 cmake -E copy_if_different "$ldc/deps/json/LICENSE.MIT" "$licenses/nlohmann-json.txt"
 cmake -E copy_if_different "$(brew --prefix opus)/COPYING" "$licenses/opus.txt"
 cmake -E copy_if_different "$host_root/dependency-versions.json" "$licenses/dependency-versions.json"
+cmake -E copy_if_different "$host_root/upstream/LICENSE" "$bundle/Contents/Resources/licenses/LICENSE-Mixxx"
 # This host never uses SQL/UI plugins. Only offscreen is needed; explicitly
 # pass it so its complete dependency graph is rewritten and copied as well.
 macdeployqt "$bundle" -no-plugins -always-overwrite -verbose=1 \
