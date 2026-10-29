@@ -137,6 +137,16 @@ export function PlayWorkspace() {
   const [trackMetadata, setTrackMetadata] = useState<Record<number, PerformanceMetadata>>({});
   /** Loads in flight per deck (title), shown on the deck until the engine reports the track. */
   const [pendingLoads, setPendingLoads] = useState<Partial<Record<DeckId, string>>>({});
+  /** Tracks that started playing in this Play session (browser colouring). */
+  const [playedIds, setPlayedIds] = useState<ReadonlySet<number>>(() => {
+    try { const value = JSON.parse(sessionStorage.getItem("plumdeck.playedInSession") ?? "[]"); return new Set(Array.isArray(value) ? value.filter(Number.isSafeInteger) : []); } catch { return new Set(); }
+  });
+  const markPlayed = useCallback((trackId: number) => setPlayedIds(old => {
+    if (old.has(trackId)) return old;
+    const next = new Set(old); next.add(trackId);
+    try { sessionStorage.setItem("plumdeck.playedInSession", JSON.stringify([...next])); } catch { /* memory only */ }
+    return next;
+  }), []);
   // エンジンはキーを持たないので、ロード時のライブラリ値をヘッダ表示用に控えておく。
   const [trackKeys, setTrackKeys] = useState<Record<number, string>>({});
   const [gridPreview, setGridPreview] = useState<PerformanceBeatGrid | null>(null);
@@ -279,6 +289,7 @@ export function PlayWorkspace() {
     exiting.current = true;
     if (junctionState.active()) return;
     sessionStorage.removeItem("plumdeck.playSession");
+    sessionStorage.removeItem("plumdeck.playedInSession");
     sessionStorage.removeItem("plumdeck.playHistoryRuntime");
     sessionStorage.removeItem("plumdeck.recordingKey");
     void (async () => {
@@ -541,6 +552,7 @@ export function PlayWorkspace() {
         continue;
       }
       if (deckState.status === "playing" && !item.startedAt) {
+        markPlayed(item.trackId);
         item.startedAt = new Date().toISOString();
         item.playingSince = Date.now();
         saveRuntime();
@@ -1176,7 +1188,9 @@ export function PlayWorkspace() {
       </div>}
       <span className={cn("dj-master-note", snapshot?.recording?.active && "is-recording")}>{snapshot?.recording?.active ? `● REC ${formatTime(snapshot.recording.elapsedMs)}` : `DECK ${activeDeck} SELECTED`}</span>
     </div>
-    <PlayLibrary masterKey={(() => { const decks = snapshot?.decks; const master = decks ? masterDeck(DECK_IDS, decks) : undefined; return master && decks ? deckKey(decks[master]) : null; })()} activeDeck={activeDeck} seedTrackId={Number.isFinite(seed) && seed > 0 ? seed : null} onLoad={loadTrack} cueOverrides={listCueOverrides} cueRevision={cueRevision} cueImportControl={<RekordboxCueImportButton onImport={importRekordboxCues} />} />
+    <PlayLibrary masterKey={(() => { const decks = snapshot?.decks; const master = decks ? masterDeck(DECK_IDS, decks) : undefined; return master && decks ? deckKey(decks[master]) : null; })()}
+      masterBpm={(() => { const decks = snapshot?.decks; const master = decks ? masterDeck(DECK_IDS, decks) : undefined; const deck = master ? decks?.[master] : undefined; const bpm = deck?.track?.bpm ? deck.track.bpm * (deck.rate ?? 1) : deck?.effectiveBpm ?? null; return bpm && bpm > 0 ? Math.round(bpm * 10) / 10 : null; })()}
+      playedIds={playedIds} activeDeck={activeDeck} seedTrackId={Number.isFinite(seed) && seed > 0 ? seed : null} onLoad={loadTrack} cueOverrides={listCueOverrides} cueRevision={cueRevision} cueImportControl={<RekordboxCueImportButton onImport={importRekordboxCues} />} />
     {audioSettingsOpen && <AudioSettings onClose={() => setAudioSettingsOpen(false)} onApply={applyAudioOutput} />}
     <RecordingSaveDialog recording={savingRecording} onClose={() => setSavingRecording(null)}
       onBeforePreview={prepareRecordingPreview}
