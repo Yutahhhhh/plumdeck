@@ -12,6 +12,8 @@
     "native/mixxx-engine-host/src/junction/ids.h": "da23f580b791d207",
     "native/mixxx-engine-host/src/junction/junction_input.cpp": "fcee30d901aec7d2",
     "native/mixxx-engine-host/src/junction/junction_input.h": "601fc39f0d47c8fa",
+    "native/mixxx-engine-host/src/junction/link.cpp": "7af4c40e6e9d2a61",
+    "native/mixxx-engine-host/src/junction/link.h": "04d6d355e07fe90c",
     "native/mixxx-engine-host/src/junction/manual_exchange.cpp": "c243aef73c2fdc73",
     "native/mixxx-engine-host/src/junction/manual_exchange.h": "7df4855f3950cb07",
     "native/mixxx-engine-host/src/junction/media_transport.cpp": "4ed0782c430c252e",
@@ -33,6 +35,7 @@
     "native/mixxx-engine-host/src/junction/turn_state.h": "d5b3776d4f0c9770"
   },
   "test_files": {
+    "native/mixxx-engine-host/tests/conformance/jlink.test.mjs": "449e0773bb7e5f2b",
     "native/mixxx-engine-host/tests/junction/authority_test.cpp": "c626af3f50cdf10d",
     "native/mixxx-engine-host/tests/junction/clock_test.cpp": "ff9ec9ae16074b44",
     "native/mixxx-engine-host/tests/junction/cross-platform-runtime.test.mjs": "0689e916fca47582",
@@ -55,6 +58,7 @@
     "src-tauri/src/share_musics.rs": "8368a3000157e437",
     "src/services/junction-v2/core/program.test.mjs": "ce260250d6358840",
     "src/services/junction-v2/core/turns.test.mjs": "67e3fd2d359d3925",
+    "src/services/junction-v2/io-worker.test.mjs": "4b7b14f4c06ed3ff",
     "src/services/junction/control-boundary.test.mjs": "15b4962b984e673e",
     "src/services/junction/exchange-actions.test.mjs": "880ba863d553c1ac",
     "src/services/junction/program-mixer.test.mjs": "102331f30b154851",
@@ -65,6 +69,7 @@
     "src/services/update-controller.test.mjs": "1baf3aecf62b185e"
   },
   "tests": {
+    "native/mixxx-engine-host/tests/conformance/jlink.test.mjs::Junction v2 PCM bridge on BlackHole 2ch": "f26f5b49bd4512e1",
     "native/mixxx-engine-host/tests/junction/authority_test.cpp::authority > waiting DJ can query waveform and timing": "ad50348a03b8d0e1",
     "native/mixxx-engine-host/tests/junction/authority_test.cpp::authority > fader start never refuses a DJ's own mixer and locks only the outgoing tail": "f4938cb5339443c0",
     "native/mixxx-engine-host/tests/junction/clock_test.cpp::media-timeline > counts 48 kHz frames from T0 and never goes backwards": "9bbd9d23c1d601d6",
@@ -234,6 +239,7 @@
     "src/services/junction-v2/core/turns.test.mjs::removing a participant drops them from the order; stop clears the air": "a309cb2c953d7460",
     "src/services/junction-v2/core/turns.test.mjs::guests keep the newest broadcast only": "4bb3540e34faf536",
     "src/services/junction-v2/core/turns.test.mjs::protocol messages validate and codes round-trip": "6bce139d4001cea1",
+    "src/services/junction-v2/io-worker.test.mjs::capture slots become program and J input on the engine wire; uplink reaches the source port": "9a33cc11e513a919",
     "src/services/junction/control-boundary.test.mjs::PFL stays local": "1f69253ca69098a6",
     "src/services/junction/control-boundary.test.mjs::while a Lite DJ performs, this computer prepares its own decks": "b6c38f5ae8a79d2a",
     "src/services/junction/control-boundary.test.mjs::fader start: a waiting DJ plays their own decks and only the OUTGOING tail is refused": "f0410143deea1060",
@@ -338,5 +344,5 @@
     "turn.repeat": "932988418a681829",
     "turn.skip": "19e89238e553b705"
   },
-  "constants": "5b3f95eec70ad35b"
+  "constants": "b105624f05667b77"
 }

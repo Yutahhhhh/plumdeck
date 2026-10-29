@@ -8,6 +8,20 @@
     "retired": "dropped on purpose (port.note says why)"
   },
   "tests": {
+    "native/mixxx-engine-host/tests/conformance/jlink.test.mjs::Junction v2 PCM bridge on BlackHole 2ch": {
+      "file": "native/mixxx-engine-host/tests/conformance/jlink.test.mjs",
+      "suite": null,
+      "name": "Junction v2 PCM bridge on BlackHole 2ch",
+      "hash": "f26f5b49bd4512e1",
+      "port": {
+        "layer": "junction-v2",
+        "item": null,
+        "action": "keep",
+        "status": "kept",
+        "rust": null,
+        "note": null
+      }
+    },
     "native/mixxx-engine-host/tests/junction/authority_test.cpp::authority > waiting DJ can query waveform and timing": {
       "file": "native/mixxx-engine-host/tests/junction/authority_test.cpp",
       "suite": "authority",
@@ -2365,6 +2379,20 @@
       "suite": null,
       "name": "protocol messages validate and codes round-trip",
       "hash": "6bce139d4001cea1",
+      "port": {
+        "layer": "frontend",
+        "item": "W2-47",
+        "action": "rerun",
+        "status": "todo",
+        "rust": null,
+        "note": null
+      }
+    },
+    "src/services/junction-v2/io-worker.test.mjs::capture slots become program and J input on the engine wire; uplink reaches the source port": {
+      "file": "src/services/junction-v2/io-worker.test.mjs",
+      "suite": null,
+      "name": "capture slots become program and J input on the engine wire; uplink reaches the source port",
+      "hash": "9a33cc11e513a919",
       "port": {
         "layer": "frontend",
         "item": "W2-47",

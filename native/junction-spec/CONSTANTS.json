@@ -83,6 +83,26 @@
       "value": "300000000000LL",
       "comment": "5 minutes."
     },
+    "link.cpp::kHeaderBytes": {
+      "type": "int",
+      "value": "16"
+    },
+    "link.cpp::kKindInput": {
+      "type": "quint8",
+      "value": "1,kKindProgram=2,kKindUplink=3"
+    },
+    "link.cpp::kMaxMessage": {
+      "type": "qsizetype",
+      "value": "1<<20"
+    },
+    "link.cpp::kMaxBacklogBytes": {
+      "type": "qint64",
+      "value": "48000*8/2+4096"
+    },
+    "link.h::kEngineRate": {
+      "type": "unsigned",
+      "value": "44100"
+    },
     "manual_exchange.cpp::kExchangeVersion": {
       "type": "int",
       "value": "1"
