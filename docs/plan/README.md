@@ -152,12 +152,12 @@
 - バックエンド：台帳の差分（proposed）の承認と、S14 で直す予定だった既知のバグの修正。WebSocket（`/ws/*`）と、実 rekordbox・ネットワーク・実デバイスが要る経路のパリティ（ゴールデンに無い）。Junction の MCP ツールは bridge が要るので未カバー（Python のツールテスト 15 件は削除。ツールと bridge 操作の対応は `tools/junction-spec/baseline.mjs` が `routes/junction.rs` から検査する）。
 - 開発ツール：`tools/real-music-grid-test.mjs` と `native/mixxx-engine-host/tests/real-music-grid.mjs` は Python の `real_music_grid_probe.py` の出力を前提にしていたので、Rust の解析で作り直す必要がある（オーナーの実音源でのみ使う手動テスト）。
 - `rekordbox-mcp/` は独立した Python の MCP サーバーとして残している（アプリ本体は使わない）。Rust 化するかはオーナー判断。
-- rekordbox 同等化：RB-01 の残り（HOT CUE マーカーの色の食い違いは要確認。Setlist 自動生成のキー変換の部分一致バグは修正済み）、RB-13（3 層モデル）、RB-20（PDW3）、RB-21（フレーズ表示）、RB-40、MEMORY CUE の DB 化など。
+- rekordbox 同等化：RB-01 の残り（HOT CUE マーカーの色の食い違いは要確認。Setlist 自動生成のキー変換の部分一致バグは修正済み）、RB-13（3 層モデル）、RB-20 の残り（PDW3 バイナリとキャッシュ）、RB-40 など。RB-21（フレーズ表示）と MEMORY CUE の DB 化は `feat/play-rekordbox` で実装。
 - 解析：評価ハーネス RB-30 と精度の評価、フレーズ検出。
 - エンジンと Junction：W2-01 以降すべて、切替 W3-01〜W3-04。
 - 取り込み UX：Explorer 撤去、ドラッグ＆ドロップ、「曲を追加」、Dashboard の要対応と rekordbox コレクション取り込み。
 - ジャンル分類器、アプリ内 AI キー、STEMS の調査。
-- Play の残り：波形の統一（3 バンド、共通ズーム、キュー色の共通化）、ブラウザ（Traffic Light、ΔBPM、MASTER 基準のフィルタ、再生済みの色、キー相性フィルタ）、PAD FX のインライン編集ビュー、Rust エンジンでしか作れない項目（[engine-and-junction.md](engine-and-junction.md) §4）。
+- Play の残り：Rust エンジンでしか作れない項目（[engine-and-junction.md](engine-and-junction.md) §4）。波形の統一（3 バンド、共通ズーム、キュー色の共通化）、フレーズ表示、MEMORY CUE の DB 化、ブラウザ（ΔBPM、MASTER 基準のフィルタ、再生済みの色）、PAD FX のインライン編集ビューは `feat/play-rekordbox` で実装（D-52、§6 #19〜#24）。PDW3 のバイナリ形式とファイルキャッシュ、自前のフレーズ検出、エンジン側 Pyramid の置き換え（RB-43）は未着手。
 
 ---
 
@@ -288,6 +288,12 @@
 | 16 | Rust の MusiCNN 埋め込みで、類似曲の並びが既存の埋め込み（Essentia / ONNX 版）と大きく変わらないこと。手順：DB コピーで数曲を再解析し、`/api/tracks/{id}/similar` の上位を比べる | S14 | Mac |
 | 17 | Windows のリリース CI：pip を使わなくなったので、Visual Studio 付属の CMake / Ninja で Mixxx ホストがビルドできること（`build-windows.mjs`） | S14 | Win |
 | 18 | `pnpm tauri`（開発起動）と `pnpm backend:dev`、保守コマンド（`pnpm backup:db` など）が Rust 版で動くこと | S14 | Mac |
+| 19 | Play の曲ロード：ブラウザからのドラッグ、ダブルクリック、→A ボタンでデッキに曲が入り、デッキ見出しに「読み込み中…」が出てから曲名に変わること。エンジンホストを作り直した後（`pnpm dj-engine:build` と stage）に、起動直後の接続で「不正な状態スナップショット」が出ないこと | play-rekordbox | Mac |
+| 20 | 3 バンド波形：rekordbox にある曲で、デッキの全体波形・拡大波形・一覧のプレビュー・ミニプレーヤーが rekordbox の 3Band 表示と同じ色・形に見えること（低域＝青、中域＝アンバー、高域＝白）。拡大波形の位置が音・グリッド・キューとずれないこと（時刻補正）。rekordbox に無い曲でも同じ見た目で出ること。共通ズーム（− / + / RST）とテンポ連動 | play-rekordbox | Mac |
+| 21 | フレーズ：rekordbox でフレーズ解析済みの曲で、全体波形と拡大波形の下に色の帯が出て境界が小節頭に合うこと、名前の表示（常に / ホバー時）、デッキ見出しの「次のフレーズまで N BARS」が実際の小節数と合うこと | play-rekordbox | Mac |
+| 22 | MEMORY CUE：旧版でブラウザに保存したメモリーキューが DB に移って残ること、保存・削除・前後移動、波形上の赤い印、「rekordbox CUE一括反映」で rekordbox のメモリーキューも入ること | play-rekordbox | Mac |
+| 23 | ブラウザ：ΔBPM 列、MASTER 基準の BPM ± / KEY 絞り込み、このセッションで再生した曲の ✓ と色 | play-rekordbox | Mac |
+| 24 | PAD FX：パッドの押下・離し・同時押しで音が残らないこと、歯車の編集ビューで変えた FX / 拍 / パラメータが全デッキとコントローラーに反映され、再起動後も残ること。コンパクト・4 デッキ・1280×800 以下で文字のはみ出しが無いこと、パッド欄（2 列 × 4 段）の見た目 | play-rekordbox | Mac |
 
 ---
 
