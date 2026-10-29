@@ -108,6 +108,21 @@ export function useTrackSearch({ initialFilters = INITIAL_FILTERS, limit = 50, e
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters, extraParamsKey]);
 
+  // Newly imported tracks appear without a manual reload while the list is
+  // still at its first page (a deeper scroll position is left alone).
+  const pageRef = useRef(page);
+  pageRef.current = page;
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const refresh = () => {
+      if (pageRef.current > 1) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => searchRef.current(true), 1500);
+    };
+    window.addEventListener("plumdeck:import-tracks-updated", refresh);
+    return () => { clearTimeout(timer); window.removeEventListener("plumdeck:import-tracks-updated", refresh); };
+  }, []);
+
   const loadMore = () => {
     if (!loading && hasMore) {
       search(false);

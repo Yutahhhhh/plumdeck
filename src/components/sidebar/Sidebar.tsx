@@ -3,7 +3,6 @@ import {
   BookOpen,
   Settings,
   Menu,
-  Folder,
   List,
   Tags,
   LayoutDashboard,
@@ -75,13 +74,6 @@ export function Sidebar({
           label="Setlists"
           isActive={activeView === "setlists"}
           onClick={() => onNavigate("setlists")}
-          isOpen={isOpen}
-        />
-        <NavButton
-          icon={<Folder className="h-5 w-5" />}
-          label="Explorer"
-          isActive={activeView === "explorer"}
-          onClick={() => onNavigate("explorer")}
           isOpen={isOpen}
         />
         <NavButton

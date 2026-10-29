@@ -4,10 +4,13 @@ import { StatCards } from "./StatCards";
 import { GenreBarChart } from "./GenreBarChart";
 import { RecentSetlists } from "./RecentSetlists";
 import { Button } from "@/components/ui/button";
-import { Loader2, RefreshCw, AlertTriangle } from "lucide-react";
+import { Loader2, RefreshCw } from "lucide-react";
 import { useIngestion } from "@/contexts/IngestionContext";
-import { AnalysisModal } from "@/components/file-explorer/AnalysisModal";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { AddMusicButton } from "@/components/import/AddMusicButton";
+import { libraryImportService } from "@/services/library-import";
+import { toast } from "@/components/ui/toast";
+import { AttentionSection } from "./AttentionSection";
+import { RekordboxImportCard } from "./RekordboxImportCard";
 
 interface DashboardViewProps {
   onNavigate: (view: string) => void;
@@ -18,10 +21,8 @@ export function DashboardView({ onNavigate }: DashboardViewProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Ingestion Control
-  const [isAnalysisModalOpen, setIsAnalysisModalOpen] = useState(false);
-  const [forceUpdate, setForceUpdate] = useState(false);
   const { isAnalyzing } = useIngestion();
+  const [refreshKey, setRefreshKey] = useState(0);
 
   // Load Data
   const fetchData = async () => {
@@ -42,12 +43,30 @@ export function DashboardView({ onNavigate }: DashboardViewProps) {
     fetchData();
   }, [isAnalyzing]); // Refresh when analysis status changes
 
+  // Imports finish in the background; keep the counts current.
+  useEffect(() => {
+    const refresh = () => { void systemService.getDashboardStats().then(setStats).catch(() => undefined); };
+    window.addEventListener("plumdeck:import-tracks-updated", refresh);
+    return () => window.removeEventListener("plumdeck:import-tracks-updated", refresh);
+  }, []);
+
+  const refreshAll = () => { void fetchData(); setRefreshKey((key) => key + 1); };
+  const analyzeUnanalyzed = async () => {
+    try {
+      const { started } = await libraryImportService.fixAttention("unanalyzed");
+      if (started) toast.success(`${started.toLocaleString()}曲を解析しています`, "進み具合は画面右下に表示されます。");
+      else toast.info("解析できる曲が見つかりませんでした", "ファイルが移動・削除されていないか確認してください。");
+    } catch (cause) {
+      toast.error("解析を開始できませんでした", cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
   if (isLoading && !stats) {
     return (
       <div className="h-full flex items-center justify-center">
         <div className="flex flex-col items-center gap-2 text-muted-foreground">
           <Loader2 className="h-8 w-8 animate-spin" />
-          <p>Loading Dashboard...</p>
+          <p>読み込み中…</p>
         </div>
       </div>
     );
@@ -57,11 +76,15 @@ export function DashboardView({ onNavigate }: DashboardViewProps) {
     return (
       <div className="h-full flex items-center justify-center p-4">
         <div className="text-center space-y-4">
-          <h2 className="text-xl font-bold text-destructive">
-            Dashboard Error
+          <h2 className="text-xl font-bold">
+            ダッシュボードを表示できませんでした
           </h2>
-          <p className="text-muted-foreground">{error}</p>
-          <Button onClick={fetchData}>Try Again</Button>
+          <p className="text-sm text-muted-foreground">少し待ってから、もう一度お試しください。</p>
+          <Button onClick={fetchData}>再試行</Button>
+          <details className="text-xs text-muted-foreground">
+            <summary className="cursor-pointer">詳細</summary>
+            <p className="mt-1 break-all">{error}</p>
+          </details>
         </div>
       </div>
     );
@@ -75,51 +98,34 @@ export function DashboardView({ onNavigate }: DashboardViewProps) {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
           <p className="text-muted-foreground">
-            Overview of your music library and system status.
+            ライブラリの状態と、やっておくとよいこと。曲やフォルダは画面のどこにでもドロップして追加できます。
           </p>
         </div>
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
             size="sm"
-            onClick={fetchData}
+            onClick={refreshAll}
             disabled={isLoading}
+            aria-label="更新"
           >
             <RefreshCw
-              className={`h-4 w-4 mr-2 ${isLoading ? "animate-spin" : ""}`}
+              className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`}
             />
-            Refresh
           </Button>
+          <AddMusicButton />
         </div>
       </div>
 
-      {/* Alerts */}
-      {!stats.config.has_root_path && (
-        <Alert variant="destructive">
-          <AlertTriangle className="h-4 w-4" />
-          <AlertTitle>Root Path Not Configured</AlertTitle>
-          <AlertDescription className="flex items-center justify-between">
-            <span>
-              Please set your music folder location in Settings to start using
-              plumdeck.
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              className="bg-white text-destructive hover:bg-white/90"
-              onClick={() => onNavigate("settings")}
-            >
-              Go to Settings
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
+      <RekordboxImportCard refreshKey={refreshKey} />
+
+      <AttentionSection refreshKey={refreshKey} />
 
       {/* KPI Cards */}
       <StatCards
         stats={stats}
         onNavigate={onNavigate}
-        onAnalyze={() => setIsAnalysisModalOpen(true)}
+        onAnalyze={() => void analyzeUnanalyzed()}
       />
 
       {/* Main Charts Area */}
@@ -157,21 +163,6 @@ export function DashboardView({ onNavigate }: DashboardViewProps) {
         </div>
       </div>
 
-      {/* Analysis Modal */}
-      <AnalysisModal
-        isOpen={isAnalysisModalOpen}
-        onOpenChange={setIsAnalysisModalOpen}
-        selectedPaths={new Set()}
-        forceUpdate={forceUpdate}
-        onSetForceUpdate={setForceUpdate}
-        onToggleSelection={() => {}}
-        onClearSelection={() => {}}
-        onIngest={async () => {
-          // Redirect to Explorer for Analysis if root is set
-          onNavigate("explorer");
-          setIsAnalysisModalOpen(false);
-        }}
-      />
     </div>
   );
 }

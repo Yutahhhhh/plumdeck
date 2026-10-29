@@ -81,7 +81,7 @@ export function StatCards({
               className="w-full h-7 text-xs bg-white"
               onClick={onAnalyze}
             >
-              Analyze {stats.unanalyzed_tracks} Tracks
+              {stats.unanalyzed_tracks.toLocaleString()}曲を解析
             </Button>
           )}
         </CardContent>
@@ -130,13 +130,7 @@ export function StatCards({
       </Card>
 
       {/* Config Status */}
-      <Card
-        className={
-          !stats.config.has_root_path
-            ? "border-red-200 bg-red-50/30"
-            : ""
-        }
-      >
+      <Card>
         <CardContent className="p-4 flex flex-col justify-between h-full">
           <div className="flex items-center gap-4">
             <div className="bg-gray-100 p-3 rounded-full text-gray-600">
@@ -156,16 +150,6 @@ export function StatCards({
             </div>
           </div>
 
-          {!stats.config.has_root_path && (
-            <Button
-              size="sm"
-              variant="destructive"
-              className="w-full h-7 text-xs mt-2"
-              onClick={() => onNavigate("settings")}
-            >
-              Set Root Path
-            </Button>
-          )}
         </CardContent>
       </Card>
     </div>

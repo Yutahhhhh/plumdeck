@@ -7,7 +7,7 @@ import { Sidebar } from "@/components/sidebar";
 import { MusicLibrary } from "@/components/music-library";
 import { SettingsView } from "@/components/settings-view";
 import { McpView } from "@/components/mcp-view/McpView";
-import { FileExplorer } from "@/components/file-explorer";
+import { AppDropImport } from "@/components/import/AppDropImport";
 import { SetlistCreator } from "@/components/setlist-creator";
 import { TagManager } from "@/components/tag-manager/TagManager";
 import { MusicPlayer } from "@/components/MusicPlayer";
@@ -33,9 +33,11 @@ function App() {
     const saved = sessionStorage.getItem("plumdeck.appMode");
     return isAppMode(saved) ? saved : "analysis";
   });
-  const [activeView, setActiveView] = useState(() =>
-    sessionStorage.getItem("plumdeck.activeView") ?? "dashboard"
-  );
+  const [activeView, setActiveView] = useState(() => {
+    const saved = sessionStorage.getItem("plumdeck.activeView");
+    // The Explorer view was removed (README §2.5).
+    return saved && saved !== "explorer" ? saved : "dashboard";
+  });
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const startup = useStartupProgress();
   const previousMode = useRef(appMode);
@@ -116,8 +118,6 @@ function App() {
         return (
           <SetlistCreator />
         );
-      case "explorer":
-        return <FileExplorer />;
       case "tags":
         return <TagManager />;
       case "mcp":
@@ -171,10 +171,11 @@ function App() {
         {!releasingPerformanceAudio && (
           <MusicPlayer onLoadingChange={setIsPlayerLoading} />
         )}
-        <Toaster />
       </div>}
         </div>
         <GlobalProgressIndicator />
+        <AppDropImport enabled={appMode !== "play" && !releasingPerformanceAudio} />
+        <Toaster />
         </div>
       </MetadataProvider>
     </IngestionProvider>

@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
+import { AddMusicButton } from "@/components/import/AddMusicButton";
 import { Input } from "@/components/ui/input";
 import { Sparkles, Search, X } from "lucide-react";
 import { Track } from "@/types";
@@ -127,10 +128,13 @@ export function MusicLibrary({
             <Sparkles className="h-6 w-6 text-purple-500" />
             Music Library
           </h2>
-          <div className="text-sm text-muted-foreground">
-            {totalCount !== null
-              ? `${tracks.length} / ${totalCount} tracks`
-              : `${tracks.length} tracks loaded`}
+          <div className="flex items-center gap-3">
+            <div className="text-sm text-muted-foreground">
+              {totalCount !== null
+                ? `${tracks.length} / ${totalCount} tracks`
+                : `${tracks.length} tracks loaded`}
+            </div>
+            <AddMusicButton />
           </div>
         </div>
 
