@@ -4589,11 +4589,13 @@ dependencies = [
  "chrono",
  "clap",
  "encoding_rs",
+ "keyring",
  "md-5",
  "plumdeck-analysis",
  "plumdeck-core",
  "plumdeck-db",
  "plumdeck-domain",
+ "plumdeck-genre",
  "plumdeck-key",
  "plumdeck-media",
  "plumdeck-rekordbox",
@@ -4663,6 +4665,14 @@ name = "plumdeck-dsp"
 version = "0.1.0"
 dependencies = [
  "rustfft",
+]
+
+[[package]]
+name = "plumdeck-genre"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -1,0 +1,11 @@
+[package]
+name = "plumdeck-genre"
+version = "0.1.0"
+description = "On-device genre classifier trained on the user's verified genres (audio features only)"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
