@@ -117,6 +117,8 @@ int deckIndex(const QString& name) {
 Host::Host(std::unique_ptr<PlaybackBackend> backend) : backend_(std::move(backend)), engineId_(QUuid::createUuid().toString(QUuid::WithoutBraces)) {
     junction_ = std::make_unique<junction::Runtime>(backend_.get(), this);
     backend_->attachJunction(junction_.get());
+    link_ = std::make_unique<junction::Link>(backend_.get(), this);
+    backend_->attachLink(link_.get());
     performanceInput_=std::make_unique<PerformanceInput>(backend_.get(),[this](int i){return slots_[i].state;},[this]{return backend_->available()&&!junction_->active()&&!sessionId_.isEmpty();},this);
     clock_.start();
     for (int index = 0; index < 4; ++index) resetDeck(index);
@@ -213,8 +215,10 @@ Host::~Host() {
     // Stop while the backend is alive, then keep Runtime storage in place
     // until backend destruction has joined the audio callback.
     if (junction_) junction_->detachBackend();
+    if (link_) link_->detachBackend();
     backend_.reset();
     junction_.reset();
+    link_.reset();
 }
 void Host::result(const QJsonObject& cmd, const QJsonObject& data) {
     auto message = envelope("result");
@@ -326,6 +330,11 @@ void Host::line(const QByteArray& bytes) {
     if (cmd["sessionId"] != sessionId_) { error(cmd, "session_mismatch", "Expired or missing session"); return; }
     if (id <= lastId_) { error(cmd, "stale_command_id", "Command id must increase"); return; }
     lastId_ = id;
+    if (op.startsWith("jlink.")) {
+        QString failure; const auto data = link_->command(op.mid(6), cmd["params"].toObject(), &failure);
+        if (!failure.isEmpty()) error(cmd,"junction_rejected",failure); else result(cmd,data);
+        return;
+    }
     if (op.startsWith("junction.")) {
         QString failure; const auto data = junction_->command(op.mid(9), cmd["params"].toObject(), &failure);
         if (!failure.isEmpty()) error(cmd,"junction_rejected",failure); else result(cmd,data);

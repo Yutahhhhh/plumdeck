@@ -9,6 +9,7 @@
 #include "beat_fx.h"
 #include "engine/effects/engineeffectsmanager.h"
 #include "junction/runtime.h"
+#include "junction/link.h"
 #include "junction/audio_bridge.h"
 #include "junction/private_preview.h"
 #include <QCoreApplication>
@@ -76,6 +77,7 @@ class MixxxBackend final : public QObject, public PlaybackBackend {
 public:
     MixxxBackend() = default;
     void attachJunction(junction::Runtime* runtime) override { junctionRuntime_.store(runtime,std::memory_order_release); }
+    void attachLink(junction::Link* link) override { junctionLink_.store(link,std::memory_order_release); }
     QString privatePreviewCommand(const QString& op,const QJsonObject& params) override {
         if(!available_||!pflAvailable_)return "Private preview requires an available headphone output";
         return preview_.command(op,params);
@@ -273,6 +275,9 @@ public:
             if(runtime&&master){
                 runtime->capture(programWritten?self->audioBridge_.programPre.data():master,local,frames,frame,44100);
                 if(local)runtime->captureLocalReturn(local,frames,frame,44100);
+            }
+            if(auto* link=self->junctionLink_.load(std::memory_order_acquire);link&&link->active()){
+                link->capture(programWritten?self->audioBridge_.programPre.data():master,local,frames);
             }
             // Metered as the venue receives it: before the booth (master) knob.
             self->meterBlock(programWritten?self->audioBridge_.programPre.data():master,pfl,local,frames);
@@ -1211,10 +1216,13 @@ private:
         if(!junctionAux_)return;
         const unsigned count=std::min(frames,junction::AudioBridge::maxFrames);
         auto* runtime=junctionRuntime_.load(std::memory_order_acquire);
-        if(runtime)runtime->readJunctionInput(junctionAuxBuffer_.data(),count);else std::fill_n(junctionAuxBuffer_.data(),size_t(count)*2,0.f);
+        auto* link=junctionLink_.load(std::memory_order_acquire);
+        if(link&&link->active())link->readInput(junctionAuxBuffer_.data(),count);
+        else if(runtime)runtime->readJunctionInput(junctionAuxBuffer_.data(),count);else std::fill_n(junctionAuxBuffer_.data(),size_t(count)*2,0.f);
         junctionAux_->receiveBuffer(junctionAuxInput_,junctionAuxBuffer_.data(),count);
     }
     std::atomic<junction::Runtime*> junctionRuntime_{nullptr};
+    std::atomic<junction::Link*> junctionLink_{nullptr};
     junction::AudioBridge audioBridge_;
     /// Audio thread only: frames rendered since the stream opened.
     quint64 renderFrame_=0;

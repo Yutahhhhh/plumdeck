@@ -3,6 +3,7 @@
 #include "backend.h"
 #include "performance_input.h"
 #include "junction/runtime.h"
+#include "junction/link.h"
 #include <QElapsedTimer>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -37,6 +38,7 @@ private:
     void beginLoad(const QJsonObject& cmd, int index, const QJsonObject& descriptor);
     std::unique_ptr<PlaybackBackend> backend_;
     std::unique_ptr<junction::Runtime> junction_;
+    std::unique_ptr<junction::Link> link_;
     std::unique_ptr<PerformanceInput> performanceInput_;
     QElapsedTimer clock_;
     QTimer timer_, metersTimer_;
