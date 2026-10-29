@@ -44,7 +44,7 @@ export function RecordingSaveDialog({ recording, onClose, onBeforePreview, onSet
     setTitle(recording.title ?? "");
     setError(null); setPending(null); setPlaying(false); setPreviewPending(false); setPosition(0);
     const sourceExtension = recording.filepath.split(".").pop()?.toLowerCase() ?? "";
-    const sourceFormat = sourceExtension === "wav" || sourceExtension === "flac" || sourceExtension === "mp3" ? sourceExtension : "original";
+    const sourceFormat = sourceExtension === "wav" || sourceExtension === "flac" ? sourceExtension : "original";
     const sourceOption: DialogFormatOption = {
       value: sourceFormat,
       extension: sourceExtension ? `.${sourceExtension}` : "",

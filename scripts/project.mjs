@@ -87,10 +87,6 @@ async function engineStage() {
 }
 async function appBuild() {
     if (!existsSync(stage)) throw new Error('Build and stage the audio engine first.');
-    // The release configs bundle FFmpeg (externalBin bin/ffmpeg, plus its dylibs
-    // on macOS); stage it for the host triple. Dev builds use the base config and
-    // the backend falls back to ffmpeg on PATH.
-    await run(process.execPath, [join(root, 'scripts/packaging-ffmpeg.mjs')]);
     await run(process.execPath, [tauri, 'build', '--config', win ? 'src-tauri/tauri.windows.conf.json' : 'src-tauri/tauri.mixxx.conf.json']);
     if (!win) await run('bash', [join(host, 'scripts/sign-tauri-bundle-macos.sh')]);
 }

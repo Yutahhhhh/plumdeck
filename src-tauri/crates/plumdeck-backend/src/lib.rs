@@ -18,6 +18,7 @@ pub mod logging;
 pub mod middleware;
 pub mod models;
 pub mod query;
+pub mod recording_export;
 pub mod response;
 pub mod routes;
 pub mod sandbox;

@@ -88,10 +88,8 @@ jobs:
         run: cargo test -p plumdeck-core -p plumdeck-db -p plumdeck-domain -p plumdeck-media -p plumdeck-key -p plumdeck-backend -p plumdeck-analysis -p plumdeck-parity
       - name: Parity against the recorded Python answers
         working-directory: src-tauri
-        # The golden files replace the retired Python oracle; detailed
-        # waveforms decode through FFmpeg on side B.
+        # The golden files replace the retired Python oracle.
         run: |
-          sudo apt-get install -y --no-install-recommends ffmpeg
           cargo build -p plumdeck-core -p plumdeck-db -p plumdeck-domain -p plumdeck-media -p plumdeck-key -p plumdeck-backend -p plumdeck-analysis -p plumdeck-parity
           ./target/debug/plumdeck-parity suite --work "$RUNNER_TEMP/parity" --golden ../contracts/parity/golden ../contracts/parity/scenarios/*.yaml
       - name: Test plumdeck-dsp (release; filter quality and no-allocation checks)

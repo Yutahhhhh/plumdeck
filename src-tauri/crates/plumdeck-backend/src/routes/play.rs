@@ -1,6 +1,6 @@
 //! Play mode (backend/api/routers/play.py; S7): local playlists over the
 //! setlist tables, the imported rekordbox mirror, play sessions and history,
-//! and the recorder's files (naming, conversion with FFmpeg, discard).
+//! and the recorder's files (naming, WAV/FLAC conversion in-process, discard).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -996,11 +996,8 @@ const RECORDING_MEDIA_TYPES: [(&str, &str); 8] = [
 ];
 
 /// (name, extension, label, encoder).
-const EXPORT_FORMATS: [(&str, &str, &str, &str); 3] = [
-    ("wav", ".wav", "WAV（可逆・最大サイズ）", "pcm_s16le"),
-    ("flac", ".flac", "FLAC（可逆・圧縮）", "flac"),
-    ("mp3", ".mp3", "MP3（非可逆）", "libmp3lame"),
-];
+/// (value, extension, label). WAV and FLAC only, written in-process (D-04).
+const EXPORT_FORMATS: [(&str, &str, &str); 2] = [("wav", ".wav", "WAV（可逆・最大サイズ）"), ("flac", ".flac", "FLAC（可逆・圧縮）")];
 
 fn recording_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -1160,57 +1157,10 @@ fn recording_file(conn: &Connection, id: i128) -> Result<Result<(PyValue, PathBu
     Ok(Ok((row, path)))
 }
 
-/// `utils.executables.find_ffmpeg`.
-pub fn find_ffmpeg() -> Option<PathBuf> {
-    let name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
-    // The desktop bundle ships FFmpeg next to the app executable (a Tauri
-    // externalBin); a packaged copy wins over developer installations.
-    if let Some(bundled) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|dir| dir.join(name))).filter(|path| path.is_file()) {
-        return Some(bundled);
-    }
-    if let Some(paths) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&paths) {
-            let candidate = dir.join(name);
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-    if cfg!(target_os = "macos") {
-        for prefix in ["/opt/homebrew/bin", "/usr/local/bin"] {
-            let candidate = Path::new(prefix).join(name);
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-    None
-}
-
-fn available_formats() -> Vec<&'static str> {
-    static CACHE: OnceLock<Mutex<Option<Vec<&'static str>>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(None));
-    if let Some(formats) = cache.lock().unwrap_or_else(|e| e.into_inner()).clone() {
-        return formats;
-    }
-    let Some(executable) = find_ffmpeg() else { return Vec::new() };
-    let Ok(output) = std::process::Command::new(executable).args(["-hide_banner", "-encoders"]).output() else { return Vec::new() };
-    if !output.status.success() {
-        return Vec::new();
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let words: BTreeSet<&str> = stdout.split_whitespace().collect();
-    let formats: Vec<&'static str> = EXPORT_FORMATS.iter().filter(|f| words.contains(f.3)).map(|f| f.0).collect();
-    *cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(formats.clone());
-    formats
-}
-
 /// `GET /api/play/recordings/formats`.
 pub async fn recording_formats() -> Response {
-    let formats = tokio::task::spawn_blocking(available_formats).await.unwrap_or_default();
-    let items = formats
+    let items = EXPORT_FORMATS
         .iter()
-        .filter_map(|name| EXPORT_FORMATS.iter().find(|f| f.0 == *name))
         .map(|f| dict([("value", text(f.0)), ("extension", text(f.1)), ("label", text(f.2))]))
         .collect();
     PyJson(dict([("formats", PyValue::List(items))])).into_response()
@@ -1247,9 +1197,9 @@ impl BodyModel for NameRecording {
         let title = bounded_str(fields, "title", fields.required_str("title"), 1, 200);
         let format = match fields.value("format") {
             None | Some(PyValue::None) => None,
-            Some(PyValue::Str(s)) if ["wav", "flac", "mp3"].contains(&s.as_str()) => Some(s.clone()),
+            Some(PyValue::Str(s)) if ["wav", "flac"].contains(&s.as_str()) => Some(s.clone()),
             Some(_) => {
-                fields.reject("format", "literal_error", "Input should be 'wav', 'flac' or 'mp3'");
+                fields.reject("format", "literal_error", "Input should be 'wav' or 'flac'");
                 None
             }
         };
@@ -1258,31 +1208,14 @@ impl BodyModel for NameRecording {
 }
 
 fn convert(path: &Path, target: &Path, format: &str) -> Result<(), Response> {
-    let details = EXPORT_FORMATS.iter().find(|f| f.0 == format);
-    let executable = find_ffmpeg();
-    let (Some(details), Some(executable)) = (details, executable) else {
-        return Err(http(503, format!("{} の書き出しに必要なエンコーダーを利用できません", format.to_uppercase())));
+    let Some(details) = EXPORT_FORMATS.iter().find(|f| f.0 == format) else {
+        return Err(http(503, format!("{} の書き出しには対応していません", format.to_uppercase())));
     };
-    if !available_formats().contains(&format) {
-        return Err(http(503, format!("{} の書き出しに必要なエンコーダーを利用できません", format.to_uppercase())));
-    }
     let stem = target.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let directory = target.parent().unwrap_or(Path::new("."));
     let temporary = directory.join(format!(".{stem}-{}{}", uuid_like(), details.1));
     let result = (|| {
-        let output = std::process::Command::new(&executable)
-            .args(["-nostdin", "-v", "error", "-i"])
-            .arg(path)
-            .args(["-vn", "-c:a", details.3])
-            .arg(&temporary)
-            .output()
-            .map_err(|error| http(500, format!("録音ファイルを書き出せません: {error}")))?;
-        let size = std::fs::metadata(&temporary).map(|m| m.len()).unwrap_or(0);
-        if !output.status.success() || size == 0 {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let message = stderr.trim().lines().last().map(str::to_owned).unwrap_or_else(|| "変換結果が空です".into());
-            return Err(http(422, format!("録音を {} に変換できません: {message}", format.to_uppercase())));
-        }
+        crate::recording_export::export(path, &temporary, format).map_err(|message| http(422, format!("録音を {} に変換できません: {message}", format.to_uppercase())))?;
         match std::fs::hard_link(&temporary, target) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {

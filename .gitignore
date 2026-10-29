@@ -26,8 +26,6 @@ dist-ssr
 db_data/
 **/__pycache__/
 
-# Staged Tauri externalBin (FFmpeg)
-src-tauri/bin/
 keys/
 
 # Coverage

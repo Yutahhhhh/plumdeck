@@ -63,16 +63,9 @@ jobs:
       - name: install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      # Homebrew's ffmpeg (first in this list) is the recording converter
-      # bundled into the app; packaging-ffmpeg.mjs relocates its dylibs.
-      - name: install build dependencies and FFmpeg (macOS)
+      - name: install build dependencies (macOS)
         if: matrix.platform == 'macos-latest'
-        run: brew install ffmpeg cmake ninja pkgconf qtbase qt5compat qtsvg qtdeclarative qttranslations portaudio libsndfile libsamplerate rubberband sound-touch chromaprint libebur128 taglib protobuf abseil opus libnice openssl@3 flac libogg libvorbis speex mpg123 googletest
-
-      - name: install FFmpeg (Windows)
-        if: matrix.platform == 'windows-2022'
-        shell: pwsh
-        run: choco install ffmpeg -y --no-progress
+        run: brew install cmake ninja pkgconf qtbase qt5compat qtsvg qtdeclarative qttranslations portaudio libsndfile libsamplerate rubberband sound-touch chromaprint libebur128 taglib protobuf abseil opus libnice openssl@3 flac libogg libvorbis speex mpg123 googletest
 
       - uses: ilammy/msvc-dev-cmd@v1
         if: matrix.platform == 'windows-2022'
@@ -96,16 +89,6 @@ jobs:
       - name: configure production frontend environment
         shell: bash
         run: cp .env.production.example .env.production
-
-      - name: stage bundled FFmpeg
-        shell: bash
-        run: |
-          set -euo pipefail
-          ffmpeg -version
-          # Selects an FFmpeg with pcm_s16le/flac/libmp3lame for this target and
-          # stages src-tauri/bin/ffmpeg-<triple> (externalBin in the release configs).
-          node scripts/packaging-ffmpeg.mjs --target ${{ matrix.rust_target }}
-          ls -la src-tauri/bin/
 
       - name: build tauri app
         run: pnpm exec tauri build ${{ matrix.args }}

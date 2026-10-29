@@ -331,8 +331,11 @@ steps:
     http: {method: POST, path: /api/play/sessions/s-1/end}
 
   # ------------------------------------------------------------ recordings
-  - name: export formats backed by the local FFmpeg
-    expect_status: 200
+  - name: export formats written in-process
+    deviation:
+      id: D-04
+      b_status: 200
+      b_body: {formats: [{value: wav, extension: .wav, label: WAV（可逆・最大サイズ）}, {value: flac, extension: .flac, label: FLAC（可逆・圧縮）}]}
     http: {method: GET, path: /api/play/recordings/formats}
   - name: recordings newest first
     expect_status: 200
@@ -408,7 +411,7 @@ steps:
     expect_status: 422
     http: {method: PATCH, path: /api/play/recordings/2, body: {title: "   "}}
   - name: rename with a bad format
-    expect_status: 422
+    deviation: {id: D-04, b_status: 422}
     http: {method: PATCH, path: /api/play/recordings/2, body: {title: x, format: ogg}}
   - name: rename to an existing name
     expect_status: 409

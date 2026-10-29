@@ -1,13 +1,11 @@
 //! The Play deck's detailed waveform (backend/api/routers/waveform_detail.py
-//! over app/services/waveform_detail_service.py; S7): FFmpeg decodes to
+//! over app/services/waveform_detail_service.py; S7): decodes to
 //! mono 24 kHz with three band splits, peaks per 1/300 s, cached on disk.
 //!
 //! The cache is a plain binary file in its own folder (the Python cache is
 //! NumPy `.npz`); both are disposable (deviation D-20).
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
@@ -21,7 +19,6 @@ use sha2::{Digest, Sha256};
 
 use crate::query::Params;
 use crate::response::{dict, float, int, text, PyJson};
-use crate::routes::play::find_ffmpeg;
 use crate::{AppState, HttpError};
 
 const SAMPLE_RATE: usize = 24_000;
@@ -30,7 +27,7 @@ const SAMPLES_PER_BIN: usize = SAMPLE_RATE / BINS_PER_SECOND;
 const MAX_SECONDS: usize = 3600;
 const CACHE_MAX_BYTES: u64 = 256 * 1024 * 1024;
 const CACHE_MAX_FILES: usize = 128;
-const MAGIC: &[u8; 8] = b"PDWFD\x01\0\0";
+const MAGIC: &[u8; 8] = b"PDWFD\x02\0\0";
 
 struct Failure(u16, &'static str);
 
@@ -45,85 +42,65 @@ fn cache_dir() -> PathBuf {
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
             .map(|p| p.join("plumdeck"))
     };
-    base.unwrap_or_else(std::env::temp_dir).join("waveform-detail-rs-v1")
+    base.unwrap_or_else(std::env::temp_dir).join("waveform-detail-rs-v2")
 }
 
-/// (values as rows of [full, low, mid, high], samples).
+/// (values as rows of [full, low, mid, high], samples). Decoded in-process
+/// (plumdeck-decode to mono 24 kHz, RBJ biquads at Q 1/sqrt(2) like FFmpeg's
+/// lowpass/highpass defaults) instead of FFmpeg's filter graph (D-05).
 fn decode(path: &Path) -> Result<(Vec<[u8; 4]>, usize), Failure> {
-    let decoder = find_ffmpeg().ok_or(Failure(503, "詳細波形には FFmpeg が必要です。FFmpeg をインストールしてください。"))?;
-    let graph = "[0:a:0]aformat=sample_fmts=flt:channel_layouts=mono,aresample=24000,asplit=4[full][lo][mi][hi];\
-                 [lo]lowpass=f=250[low];[mi]highpass=f=250,lowpass=f=2500[mid];[hi]highpass=f=2500[high];\
-                 [full][low][mid][high]join=inputs=4:channel_layout=quad:map=0.0-FL|1.0-FR|2.0-BL|3.0-BR[out]";
-    let mut child = Command::new(decoder)
-        .args(["-nostdin", "-v", "error", "-threads", "1", "-i"])
-        .arg(path)
-        .args(["-filter_complex_threads", "1", "-filter_complex", graph, "-map", "[out]", "-t", &(MAX_SECONDS + 1).to_string()])
-        .args(["-f", "f32le", "-acodec", "pcm_f32le", "pipe:1"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|_| Failure(503, "波形デコーダーを起動できませんでした。"))?;
+    use plumdeck_dsp::biquad::{Biquad, Coefficients, Shape};
     let started = std::time::Instant::now();
-    let mut stdout = child.stdout.take().expect("piped");
-    let frame = 16;
-    let bin_bytes = SAMPLES_PER_BIN * frame;
-    let mut pending: Vec<u8> = Vec::new();
-    let mut chunk = vec![0u8; bin_bytes * BINS_PER_SECOND];
-    let mut values: Vec<[f32; 4]> = Vec::new();
-    let mut samples = 0usize;
-    let peak = |audio: &[u8]| {
-        let mut out = [0f32; 4];
-        for sample in audio.chunks_exact(frame) {
-            for (channel, slot) in out.iter_mut().enumerate() {
-                let x = f32::from_le_bytes(sample[channel * 4..channel * 4 + 4].try_into().expect("4 bytes")).abs();
-                if x > *slot || x.is_nan() {
-                    *slot = x;
-                }
-            }
-        }
-        out
+    // FFmpeg's float downmix to mono (swresample: each front channel at
+    // 1/sqrt(2), unnormalized) keeps the band peaks the Python cache had.
+    let opts = plumdeck_decode::DecodeOptions { target_rate: Some(SAMPLE_RATE as u32), mono: false, max_seconds: (MAX_SECONDS + 1) as f64, ..plumdeck_decode::DecodeOptions::default() };
+    let decoded = match plumdeck_decode::decode_to_pages(path, &opts) {
+        Ok(decoded) => decoded,
+        // A valid header without audio frames (FFmpeg decoded it to nothing).
+        Err(_) if plumdeck_decode::probe_path(path).is_ok() => return Err(Failure(422, "音源に再生可能な音声がありません。")),
+        Err(_) => return Err(Failure(422, "音源をデコードできません。ファイル形式または破損を確認してください。")),
     };
-    let result = loop {
-        if started.elapsed() > Duration::from_secs(120) {
-            let _ = child.kill();
-            break Err(Failure(504, "詳細波形の生成がタイムアウトしました。"));
-        }
-        let read = match stdout.read(&mut chunk) {
-            Ok(0) => break Ok(()),
-            Ok(n) => n,
-            Err(_) => break Ok(()),
-        };
-        pending.extend_from_slice(&chunk[..read]);
-        let count = pending.len() / bin_bytes * bin_bytes;
-        if count == 0 {
-            continue;
-        }
-        samples += count / frame;
-        if samples > MAX_SECONDS * SAMPLE_RATE {
-            let _ = child.kill();
-            break Err(Failure(422, "詳細波形は60分以内の音源に対応しています。"));
-        }
-        values.extend(pending[..count].chunks_exact(bin_bytes).map(peak));
-        pending.drain(..count);
+    if started.elapsed() > Duration::from_secs(120) {
+        return Err(Failure(504, "詳細波形の生成がタイムアウトしました。"));
+    }
+    let channels = decoded.channels().max(1);
+    let gain = match channels {
+        1 => 1.0,
+        2 => std::f32::consts::FRAC_1_SQRT_2,
+        n => 1.0 / n as f32,
     };
-    let status = child.wait();
-    result?;
-    let whole = pending.len() / frame * frame;
-    if whole > 0 {
-        samples += whole / frame;
-        values.push(peak(&pending[..whole]));
+    let mono: Vec<f32> = decoded.pages.to_interleaved().chunks_exact(channels).map(|frame| frame.iter().sum::<f32>() * gain).collect();
+    let samples = mono.len();
+    if samples > MAX_SECONDS * SAMPLE_RATE {
+        return Err(Failure(422, "詳細波形は60分以内の音源に対応しています。"));
     }
-    if !status.map(|s| s.success()).unwrap_or(false) {
-        return Err(Failure(422, "音源をデコードできません。ファイル形式または破損を確認してください。"));
-    }
-    if values.is_empty() || samples == 0 {
+    if samples == 0 {
         return Err(Failure(422, "音源に再生可能な音声がありません。"));
     }
-    if values.iter().flatten().any(|x| !x.is_finite()) {
+    if mono.iter().any(|x| !x.is_finite()) {
         return Err(Failure(422, "音源に無効な音声サンプルがあります。"));
     }
+    let rate = SAMPLE_RATE as f64;
+    let q = std::f64::consts::FRAC_1_SQRT_2;
+    let mut low = Biquad::new(Coefficients::design(Shape::Lowpass, 250.0, q, rate));
+    let mut mid_hp = Biquad::new(Coefficients::design(Shape::Highpass, 250.0, q, rate));
+    let mut mid_lp = Biquad::new(Coefficients::design(Shape::Lowpass, 2500.0, q, rate));
+    let mut high = Biquad::new(Coefficients::design(Shape::Highpass, 2500.0, q, rate));
     let quantize = |x: f32| (x.clamp(0.0, 1.0) as f64 * 255.0).round_ties_even() as u8;
-    Ok((values.into_iter().map(|row| row.map(quantize)).collect(), samples))
+    let values = mono
+        .chunks(SAMPLES_PER_BIN)
+        .map(|bin| {
+            let mut peak = [0f32; 4];
+            for &x in bin {
+                let bands = [x, low.tick(x), mid_lp.tick(mid_hp.tick(x)), high.tick(x)];
+                for (slot, band) in peak.iter_mut().zip(bands) {
+                    *slot = slot.max(band.abs());
+                }
+            }
+            peak.map(quantize)
+        })
+        .collect();
+    Ok((values, samples))
 }
 
 fn read_cache(path: &Path) -> Option<(Vec<[u8; 4]>, usize)> {

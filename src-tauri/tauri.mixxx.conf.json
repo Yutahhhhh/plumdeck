@@ -1,9 +1,7 @@
 {
   "bundle": {
-    "externalBin": ["bin/ffmpeg"],
     "resources": {
-      "../native/mixxx-engine-host/stage/PlumdeckMixxxHost.app/": "PlumdeckMixxxHost.app/",
-      "bin/ffmpeg-libs/": "ffmpeg-libs/"
+      "../native/mixxx-engine-host/stage/PlumdeckMixxxHost.app/": "PlumdeckMixxxHost.app/"
     }
   }
 }

@@ -60,7 +60,7 @@ export interface RecordingEntry {
   title: string | null;
 }
 
-export type RecordingExportFormat = "wav" | "flac" | "mp3";
+export type RecordingExportFormat = "wav" | "flac";
 export interface RecordingFormatOption { value: RecordingExportFormat; extension: string; label: string }
 
 export interface Page<T> { items: T[]; total: number; limit: number; offset: number; has_more: boolean }
