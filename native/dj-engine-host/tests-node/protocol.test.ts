@@ -299,8 +299,18 @@ test("FX の掛かり幅は送信検証と受信検証で同じ", () => {
 
   const beyond = snapshotFixture();
   beyond.mixer.channels.A.fx = { effect: "echo", enabled: true, mix: FX_MIX_RANGE.max + 0.01 };
-  assert.equal(isEngineSnapshot(beyond), false);
+  // An unreadable PAD FX slot is dropped, never the whole snapshot.
+  assert.equal(isEngineSnapshot(beyond), true);
+  assert.equal(beyond.mixer.channels.A.fx, undefined);
   assert.throws(() => buildFxParams("A", "echo", true, FX_MIX_RANGE.max + 0.01));
+});
+
+test("an empty PAD FX slot (no pad pressed since start) keeps the snapshot usable", () => {
+  // The Mixxx host reports effect "" until the first pad loads an effect.
+  const empty = snapshotFixture();
+  (empty.mixer.channels.A as unknown as Record<string, unknown>).fx = { effect: "", enabled: false, mix: 0 };
+  assert.equal(isEngineSnapshot(empty), true);
+  assert.equal(empty.mixer.channels.A.fx, undefined);
 });
 
 test("録音状態と4デッキのミキサー構造を検証する", () => {

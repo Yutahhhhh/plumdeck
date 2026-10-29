@@ -489,7 +489,8 @@ public:
             channel["trim"] = ControlObject::get(ConfigKey(groups[index], "pregain"));
             channel["filter"] = effects_->getQuickEffectChain(groups[index])->getSuperParameter() * 2.0 - 1.0;
             const auto fxGroup = StandardEffectChain::formatEffectChainGroup(index);
-            channel["fx"] = QJsonObject{{"effect", fxEffects_[index]}, {"enabled", fxHeld_[index]}, {"tail", fxTails_[index]},
+            // No "fx" until a pad loaded an effect: an empty effect name is not a PAD FX.
+            if (!fxEffects_[index].isEmpty()) channel["fx"] = QJsonObject{{"effect", fxEffects_[index]}, {"enabled", fxHeld_[index]}, {"tail", fxTails_[index]},
                 {"nativeEnabled", ControlObject::get(ConfigKey(fxGroup, "enabled")) > 0}, {"mix", ControlObject::get(ConfigKey(fxGroup, "mix"))},
                 {"depth", fxDepths_[index]}, {"beats", fxBeats_[index]}, {"parameters", effectParameters(effects_->getStandardEffectChain(index)->getEffectSlot(0))}};
             channels[names[index]] = channel;
