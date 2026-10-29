@@ -325,7 +325,7 @@
   },
   {
     "name": "suggest_track_genre",
-    "description": "類似曲の実績ジャンルから、指定楽曲に合いそうなジャンルを推測する（LLMは使わずベクトル類似ベース）。",
+    "description": "端末上のジャンル分類器（利用者が検証したジャンルで学習、音響特徴のみ）で、指定楽曲のジャンル/サブジャンルを確信度付きで推定する。タグのジャンルは使わない。",
     "inputSchema": {
       "properties": {
         "track_id": {
@@ -1952,7 +1952,7 @@
   },
   {
     "name": "get_similar_genre_suggestions",
-    "description": "指定した楽曲に音響特徴が近く、ジャンル統一の候補となる楽曲を類似度付きで返す。",
+    "description": "指定楽曲と同じジャンル（検証済みならそのラベル、未検証なら分類器の推定）に分類器が判定した未検証楽曲を確信度付きで返す。threshold は最低確信度（0〜1）。",
     "inputSchema": {
       "properties": {
         "track_id": {
@@ -1983,6 +1983,91 @@
         "result"
       ],
       "title": "get_similar_genre_suggestionsOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_genre_classifier_status",
+    "description": "端末上のジャンル分類器の状態（学習日時、ホールドアウトでの正解率、新しい検証ラベル数、学習中か）を返す。",
+    "inputSchema": {
+      "properties": {},
+      "title": "get_genre_classifier_statusArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "get_genre_classifier_statusOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "train_genre_classifier",
+    "description": "検証済みジャンル（is_genre_verified）と音響特徴だけで端末上のジャンル分類器を学習し直す（バックグラウンド）。状態は get_genre_classifier_status で確認する。",
+    "inputSchema": {
+      "properties": {},
+      "title": "train_genre_classifierArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "train_genre_classifierOutput",
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_genre_predictions",
+    "description": "未検証楽曲に対する分類器の推定（ジャンル/サブジャンル、確信度、候補）を確信度順に返す。level: low/medium/high/all（既定 low = AI や人の確認が必要な曲）。\n    タグのジャンルは含まれない。判定結果は apply_genre_analyses で適用する。\n    ",
+    "inputSchema": {
+      "properties": {
+        "level": {
+          "default": "low",
+          "title": "Level",
+          "type": "string"
+        },
+        "offset": {
+          "default": 0,
+          "title": "Offset",
+          "type": "integer"
+        },
+        "limit": {
+          "default": 100,
+          "title": "Limit",
+          "type": "integer"
+        }
+      },
+      "title": "get_genre_predictionsArguments",
+      "type": "object"
+    },
+    "outputSchema": {
+      "properties": {
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "get_genre_predictionsOutput",
       "type": "object"
     }
   },

@@ -174,6 +174,106 @@ pub fn write_genres(conn: &Connection, writes: &[GenreWrite]) -> Result<(), DbEr
     finish(conn, result)
 }
 
+/// One track's inputs for the on-device genre classifier: audio-derived
+/// features only (the stored embedding, timbre and BPM) plus the human
+/// labels when it is verified. Tag genres are never read as features.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GenreFeatureRow {
+    pub id: i64,
+    pub filepath: String,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub bpm: Option<f32>,
+    pub brightness: Option<f32>,
+    pub loudness: Option<f32>,
+    pub contrast: Option<f32>,
+    pub noisiness: Option<f32>,
+    pub genre: Option<String>,
+    pub subgenre: Option<String>,
+    pub verified: bool,
+    pub embedding_json: Option<String>,
+}
+
+/// Which tracks [`genre_feature_rows`] reads.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FeatureScope<'a> {
+    /// Verified tracks with a real genre: the training labels.
+    Verified,
+    /// Tracks whose genre is not verified (or empty / Unknown).
+    Unclassified,
+    Ids(&'a [i64]),
+}
+
+const VERIFIED_GENRE: &str =
+    "(tracks.is_genre_verified = true AND tracks.genre IS NOT NULL AND tracks.genre != '' AND lower(tracks.genre) != 'unknown')";
+
+/// Classifier inputs, ordered by id.
+pub fn genre_feature_rows(conn: &Connection, scope: FeatureScope<'_>) -> Result<Vec<GenreFeatureRow>, DbError> {
+    let condition = match scope {
+        FeatureScope::Verified => VERIFIED_GENRE.to_owned(),
+        FeatureScope::Unclassified => UNKNOWN_GENRE.to_owned(),
+        FeatureScope::Ids(ids) if ids.is_empty() => return Ok(Vec::new()),
+        FeatureScope::Ids(ids) => format!("tracks.id IN ({})", vec!["?"; ids.len()].join(",")),
+    };
+    let sql = format!(
+        "SELECT tracks.id, tracks.filepath, tracks.title, tracks.artist, tracks.bpm, tracks.brightness, tracks.loudness, \
+         tracks.contrast, tracks.noisiness, tracks.genre, tracks.subgenre, coalesce(tracks.is_genre_verified, false), \
+         track_embeddings.embedding_json FROM tracks LEFT JOIN track_embeddings ON track_embeddings.track_id = tracks.id \
+         WHERE {condition} ORDER BY tracks.id"
+    );
+    let params: Vec<Value> = match scope {
+        FeatureScope::Ids(ids) => ids.iter().map(|id| Value::BigInt(*id)).collect(),
+        _ => Vec::new(),
+    };
+    let mut statement = conn.prepare(&sql)?;
+    let rows = statement
+        .query_map(params_from_iter(params), |row| {
+            Ok(GenreFeatureRow {
+                id: row.get(0)?,
+                filepath: row.get(1)?,
+                title: row.get(2)?,
+                artist: row.get(3)?,
+                bpm: row.get(4)?,
+                brightness: row.get(5)?,
+                loudness: row.get(6)?,
+                contrast: row.get(7)?,
+                noisiness: row.get(8)?,
+                genre: row.get(9)?,
+                subgenre: row.get(10)?,
+                verified: row.get(11)?,
+                embedding_json: row.get(12)?,
+            })
+        })?
+        .collect::<Result<_, _>>()?;
+    Ok(rows)
+}
+
+/// A reviewed suggestion: the genre (and subgenre, when given) a person
+/// accepted for a track.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AcceptedGenre {
+    pub track_id: i64,
+    pub genre: String,
+    pub subgenre: Option<String>,
+}
+
+/// Write accepted suggestions and mark the tracks verified. A missing
+/// subgenre keeps the stored one. Returns the number of tracks updated.
+pub fn accept_genres(conn: &Connection, accepted: &[AcceptedGenre]) -> Result<usize, DbError> {
+    conn.execute_batch("BEGIN TRANSACTION")?;
+    let result = (|| {
+        let mut updated = 0;
+        for item in accepted {
+            updated += conn.execute(
+                "UPDATE tracks SET genre=?, subgenre=coalesce(?, subgenre), is_genre_verified=true WHERE tracks.id = ?",
+                params![item.genre, item.subgenre, item.track_id],
+            )?;
+        }
+        Ok(updated)
+    })();
+    finish(conn, result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,5 +315,28 @@ mod tests {
         assert_eq!(batch_update_genres(&conn, 99, &[1]).unwrap_err().to_string(), PARENT_NOT_FOUND);
         assert_eq!(execute_cleanup(&conn, "Deep House", &[1, 2], AnalysisMode::Subgenre).unwrap(), 2);
         assert_eq!(execute_cleanup(&conn, "X", &[], AnalysisMode::Genre).unwrap(), 0);
+    }
+
+    #[test]
+    fn classifier_rows_and_accepting() {
+        let conn = library();
+        conn.execute_batch("INSERT INTO track_embeddings (track_id, embedding_json) VALUES (1, '[1, 2]');").unwrap();
+        let verified = genre_feature_rows(&conn, FeatureScope::Verified).unwrap();
+        assert_eq!(verified.iter().map(|r| r.id).collect::<Vec<_>>(), [1, 6]);
+        assert_eq!(verified[0].embedding_json.as_deref(), Some("[1, 2]"));
+        assert_eq!(verified[1].embedding_json, None);
+        let open = genre_feature_rows(&conn, FeatureScope::Unclassified).unwrap();
+        assert_eq!(open.iter().map(|r| r.id).collect::<Vec<_>>(), [2, 3, 4, 5]);
+        assert_eq!(genre_feature_rows(&conn, FeatureScope::Ids(&[6, 4])).unwrap().len(), 2);
+        let accepted = [
+            AcceptedGenre { track_id: 4, genre: "House".into(), subgenre: None },
+            AcceptedGenre { track_id: 3, genre: "Techno".into(), subgenre: Some("Peak".into()) },
+            AcceptedGenre { track_id: 99, genre: "X".into(), subgenre: None },
+        ];
+        assert_eq!(accept_genres(&conn, &accepted).unwrap(), 2);
+        let row = super::super::tracks::get_track(&conn, BigInt(4)).unwrap().unwrap();
+        assert_eq!((row.genre.as_deref(), row.subgenre.as_deref(), row.is_genre_verified), (Some("House"), Some("Deep"), Some(true)));
+        let row = super::super::tracks::get_track(&conn, BigInt(3)).unwrap().unwrap();
+        assert_eq!((row.genre.as_deref(), row.subgenre.as_deref()), (Some("Techno"), Some("Peak")));
     }
 }

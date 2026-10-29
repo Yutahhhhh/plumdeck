@@ -592,9 +592,21 @@ async fn run(state: &AppState, name: &str, a: &Value) -> ToolResult {
             ok(state, Method::POST, "/api/genres/cleanup-execute", Some(body)).await
         }
         "get_similar_genre_suggestions" => {
+            // The on-device classifier: unverified tracks it puts in this
+            // track's genre; `threshold` is the minimum confidence.
             let id = required_int(a, "track_id")?;
-            let pairs = [("threshold", a.get("threshold"))];
-            Ok(json!({"suggestions": ok(state, Method::GET, &format!("/api/genres/grouped-suggestions/{id}{}", query(&pairs)), None).await?}))
+            let pairs = [("min_confidence", a.get("threshold"))];
+            Ok(json!({"suggestions": ok(state, Method::GET, &format!("/api/genres/classifier/similar/{id}{}", query(&pairs)), None).await?}))
+        }
+        "get_genre_classifier_status" => ok(state, Method::GET, "/api/genres/classifier", None).await,
+        "train_genre_classifier" => {
+            let (status, value) = api(state, Method::POST, "/api/genres/classifier/train", None).await;
+            Ok(json!({"started": status == 202, "status": value}))
+        }
+        "get_genre_predictions" => {
+            let level = a.get("level").cloned().unwrap_or(json!("low"));
+            let pairs = [("level", Some(&level)), ("offset", a.get("offset")), ("limit", a.get("limit"))];
+            ok(state, Method::GET, &format!("/api/genres/classifier/predictions{}", query(&pairs)), None).await
         }
         "apply_genres_to_files" => ok(state, Method::POST, "/api/genres/apply-to-files", Some(json!({"track_ids": a.get("track_ids")}))).await,
         // ---- lyrics
@@ -1211,16 +1223,29 @@ async fn genre_context(state: &AppState, a: &Value) -> ToolResult {
     let subgenres = ok(state, Method::GET, "/api/genres/subgenres", None).await?;
     let take = |value: &Value, n: usize| Value::Array(value.as_array().map(|v| v.iter().take(n).cloned().collect()).unwrap_or_default());
     let db = state.db.clone();
+    let classifier = state.genre_classifier.model();
     let tracks = state
         .blocking_result(move || -> ToolResult {
+            use plumdeck_db::repos::genres::{genre_feature_rows, FeatureScope};
             let conn = db.lease().map_err(|_| None)?;
+            let rows = genre_feature_rows(&conn, FeatureScope::Ids(&ids)).map_err(|_| None)?;
             let mut tracks = Vec::new();
             for id in ids {
                 let Some(t) = plumdeck_db::repos::tracks::get_track(&conn, plumdeck_db::repos::tracks::BigInt(id as i128)).map_err(|_| None)? else { continue };
+                // Plan §2.4: an unverified genre came from file tags or
+                // rekordbox and is not passed on as a hint.
+                let verified = t.is_genre_verified == Some(true);
+                let prediction = classifier.as_deref().and_then(|model| {
+                    let row = rows.iter().find(|row| row.id == t.id)?;
+                    model.predict(&super::genre_classifier::features(row)?)
+                });
                 tracks.push(json!({
                     "id": t.id, "title": t.title, "artist": t.artist, "album": t.album, "year": t.year, "bpm": t.bpm, "key": t.key,
                     "energy": t.energy, "danceability": t.danceability, "brightness": t.brightness, "noisiness": t.noisiness,
-                    "genre": t.genre, "subgenre": t.subgenre, "is_genre_verified": t.is_genre_verified,
+                    "genre": if verified { json!(t.genre) } else { Value::Null },
+                    "subgenre": if verified { json!(t.subgenre) } else { Value::Null },
+                    "is_genre_verified": t.is_genre_verified,
+                    "classifier": prediction.as_ref().map_or(Value::Null, super::genre_classifier::prediction_json),
                 }));
             }
             Ok(Value::Array(tracks))
@@ -1236,6 +1261,7 @@ async fn genre_context(state: &AppState, a: &Value) -> ToolResult {
             "Do not include edit labels such as Intro, Clean, Dirty, or Extended.",
             "Reuse the library vocabulary when it fits; introduce a label only when needed.",
             "Use confidence High, Medium, or Low. Do not mark uncertain guesses as High.",
+            "`classifier` is the on-device model trained on this DJ's verified genres; prefer its labels when unsure.",
         ],
         "existing_genres": take(&genres, 60),
         "existing_subgenres": take(&subgenres, 80),
