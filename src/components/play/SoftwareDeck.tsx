@@ -64,11 +64,13 @@ type Props = {
   savedLoops?: readonly PerformanceLoop[]; onRecallLoop?: (id: string) => void;
   trackKey?: string | null;
   cueColors?: (string|null)[];
+  /** Title of a load in flight (before the engine reports it). */
+  pendingLoad?: string;
   /** 曲頭より前に置いた無音の助走。countdown は再生開始待ちの残り時間。 */
   onGridEdit: () => void; onGridClose?: () => void; gridEditor?: ReactNode;
 };
 
-export function SoftwareDeck({ id, deck, channel, active, connected, capability, capabilities, tailLock, onActivate, onToggle, onCue, onSeekAbsolute, onTempo, onKeylock, onSync, onMaster, onUnload, syncLeader, onHotCue, onLoop, onBeatJump, onBeatLoop, onLoopEnable, onQuantize, onPadFx, fxContext, onFxError, onSaveLoop, onLoopIn, onLoopOut, onReloop, onLoopSet, pendingLoopIn, onMemory, onMemoryCall, onKeyShift, onKeySync, onKeyReset, onSlip, onReverse, onBend, savedLoops, onRecallLoop, trackKey, cueColors, onGridEdit, onGridClose, gridEditor }: Props) {
+export function SoftwareDeck({ id, deck, channel, active, connected, capability, capabilities, tailLock, onActivate, onToggle, onCue, onSeekAbsolute, onTempo, onKeylock, onSync, onMaster, onUnload, syncLeader, onHotCue, onLoop, onBeatJump, onBeatLoop, onLoopEnable, onQuantize, onPadFx, fxContext, onFxError, onSaveLoop, onLoopIn, onLoopOut, onReloop, onLoopSet, pendingLoopIn, onMemory, onMemoryCall, onKeyShift, onKeySync, onKeyReset, onSlip, onReverse, onBend, savedLoops, onRecallLoop, trackKey, cueColors, pendingLoad, onGridEdit, onGridClose, gridEditor }: Props) {
   const deckDrop = usePlayDeckDrop(`play-deck-controls-${id}`, id);
   const left = id === "A" || id === "C";
   const [autoBeats, setAutoBeats] = useState(4);
@@ -198,7 +200,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
     return `BAR ${Math.floor(Math.round(beat) / beatsPerBar) + 1} · ${Math.round(beat) % beatsPerBar + 1}/${beatsPerBar}`;
   };
 
-  const status = !capability ? "N/A" : !connected ? "OFFLINE" : deck?.status === "error" ? "ERROR"
+  const status = pendingLoad !== undefined ? "LOADING" : !capability ? "N/A" : !connected ? "OFFLINE" : deck?.status === "error" ? "ERROR"
     : deck?.status === "playing" ? "PLAYING" : deck?.status === "loading" ? "LOADING"
     : deck?.track ? deck.status === "paused" ? "PAUSED" : "READY" : "EMPTY";
   // MASTER lights from the engine's leader only, never from local intent.
@@ -211,7 +213,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
       <button className="dj-deck-number" aria-label={`Select deck ${id}`} aria-pressed={active} onClick={onActivate}>{id}</button>
       <div className="dj-cover">{data?.artwork ? <img src={artworkUrl(data.artwork)} alt="" /> : <Disc3 />}</div>
       <div className="dj-track-name">
-        <strong title={deck?.track?.title || ""}>{deck?.track?.title || (deck?.track?.assetId ? "共有音源" : "曲をドラッグしてロード")}</strong>
+        <strong title={pendingLoad ?? deck?.track?.title ?? ""}>{pendingLoad !== undefined ? `読み込み中… ${pendingLoad}` : deck?.track?.title || (deck?.track?.assetId ? "共有音源" : "曲をドラッグしてロード")}</strong>
         <span>{deck?.track?.artist || (deck?.track?.assetId ? "" : "ライブラリで曲を選び、ダブルクリック")}</span>
       </div>
       <div className="dj-track-time">

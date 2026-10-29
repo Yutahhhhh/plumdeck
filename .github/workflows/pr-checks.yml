@@ -59,7 +59,7 @@ jobs:
       - name: Waveform backspin detection and JOG weight braking
         run: node --experimental-strip-types --test native/dj-engine-host/tests-node/scratch-release.test.ts
       - name: Play controls logic (loops, tempo, key notation, mixer, shortcuts, PAD FX, protocol)
-        run: node --experimental-strip-types --test src/components/play/play-logic.test.mjs src/components/play/pending-grid.test.mjs src/components/play/keyboard-runtime.test.mjs src/components/play/pad-fx-failures.test.mjs src/services/midi/loop-resize.test.mjs native/dj-engine-host/tests-node/protocol.test.ts native/dj-engine-host/tests-node/ddj1000-pad-pages.test.ts native/dj-engine-host/tests-node/ddj1000.test.ts native/dj-engine-host/tests-node/ddj1000-gesture-state.test.ts native/dj-engine-host/tests-node/ddj1000-display.test.ts
+        run: node --experimental-strip-types --test src/components/play/play-logic.test.mjs src/components/play/pending-grid.test.mjs src/components/play/deck-load-flow.test.mjs src/components/play/keyboard-runtime.test.mjs src/components/play/pad-fx-failures.test.mjs src/services/midi/loop-resize.test.mjs native/dj-engine-host/tests-node/protocol.test.ts native/dj-engine-host/tests-node/ddj1000-pad-pages.test.ts native/dj-engine-host/tests-node/ddj1000.test.ts native/dj-engine-host/tests-node/ddj1000-gesture-state.test.ts native/dj-engine-host/tests-node/ddj1000-display.test.ts
       - name: Engine contract matches the host, simulator and client
         run: node --experimental-strip-types tools/engine-contract/contract.mjs
       - name: Junction specification baseline matches the sources

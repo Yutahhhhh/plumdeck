@@ -41,6 +41,7 @@ import { chooseSyncLeader } from "./sync-leader";
 import { deckKey, masterDeck } from "@/lib/key-display";
 import { manualLoopOut, snapToBeat } from "./loop-math";
 import { awaitPendingGrid } from "./pending-grid";
+import { DeckLoadError, runDeckLoad } from "./deck-load-flow";
 import { CROSSFADER_CURVE_OPTIONS, FADER_CURVES, FADER_CURVE_LABELS, nextDropouts, readCrossfaderCurve, readFaderCurve, type ColorFxEffect, type DropoutState } from "./mixer-math";
 import { readShortcutPreset, SHORTCUT_PRESETS, shortcutHelp } from "./keyboard-shortcuts";
 import { RotaryKnob } from "./RotaryKnob";
@@ -122,6 +123,8 @@ export function PlayWorkspace() {
   const [gridEdit, setGridEdit] = useState<GridEditSession | null>(null);
   const [cueRevision, setCueRevision] = useState(0);
   const [trackMetadata, setTrackMetadata] = useState<Record<number, PerformanceMetadata>>({});
+  /** Loads in flight per deck (title), shown on the deck until the engine reports the track. */
+  const [pendingLoads, setPendingLoads] = useState<Partial<Record<DeckId, string>>>({});
   // エンジンはキーを持たないので、ロード時のライブラリ値をヘッダ表示用に控えておく。
   const [trackKeys, setTrackKeys] = useState<Record<number, string>>({});
   const [gridPreview, setGridPreview] = useState<PerformanceBeatGrid | null>(null);
@@ -277,11 +280,23 @@ export function PlayWorkspace() {
 
   // The deck was loaded without a grid while the backend analyzes it; take
   // the grid onto the deck when it lands, unless another track replaced it.
-  const applyLateGrid = useCallback(async (deck: DeckId, trackId: number, loadRequest: number) => {
+  const applyLateGrid = useCallback(async (deck: DeckId, trackId: number, loadRequest: number, withCues = false) => {
     const holdsTrack = () => loadRequest === deckLoadRequests.current[deck]
       && client.getState().snapshot?.decks[deck]?.track?.trackId === String(trackId);
-    const metadata = await awaitPendingGrid({ fetch: () => performanceMetadataService.get(trackId), current: holdsTrack });
+    // A load whose metadata GET was late asks once more at once, then polls.
+    const metadata = await awaitPendingGrid({ fetch: () => performanceMetadataService.get(trackId), current: holdsTrack, intervalMs: withCues ? 500 : undefined });
     if (!metadata) return;
+    if (withCues) {
+      setTrackMetadata(old => ({ ...old, [trackId]: metadata }));
+      const duration = client.getState().snapshot?.decks[deck]?.track?.durationMs ?? 0;
+      try {
+        const positions = cuePositions(metadata, duration);
+        for (let slot = 0; slot < positions.length; slot++) {
+          const position = positions[slot];
+          if (position !== null && holdsTrack()) await client.setHotCue(deck, slot, position, false);
+        }
+      } catch { /* the cues stay editable; a reload applies them */ }
+    }
     const grid = metadata.beat_grid;
     if (!grid) {
       if (metadata.grid_warning) setCommandError(`グリッド注意: ${metadata.grid_warning}`);
@@ -310,61 +325,78 @@ export function PlayWorkspace() {
     cuePoints.current[deck] = 0;
     setLoopIn(deck, null);
     const descriptor: TrackDescriptor = { musicalKey: track.key || undefined, localTrackId: track.id, trackId: String(track.id), path: track.filepath, durationMs: track.duration * 1000, title: track.title || undefined, artist: track.artist || undefined, bpm: track.bpm || undefined };
+    const session = client.getSessionId();
+    setPendingLoads(old => ({ ...old, [deck]: track.title || track.filepath }));
+    let loadLease = junctionLeaseKey(), loadGeneration = -1;
+    const current = () => loadRequest === deckLoadRequests.current[deck]
+      && (loadGeneration < 0 || loadLease === junctionLeaseKey() && loadGeneration === client.getDeckGeneration(deck));
     void run(() => deckLoadOperations.current.run(DECK_IDS.indexOf(deck), () => gridOperations.current.run(track.id, async () => {
-      if (loadRequest !== deckLoadRequests.current[deck]) return;
-      if (!client.getSessionId()) {
-        if (!status?.running) await start(outputDevice || undefined, recordingDir || undefined);
-        if (!client.getSessionId()) await connect();
-      }
+      let gridPending = false, lateMetadata = false;
       try {
-        const audio = await ensureAudioReady(client, outputDevice || undefined, recordingDir || undefined);
-        const saved = parseOutputRouting(localStorage.getItem(OUTPUT_ROUTING_KEY));
-        if (saved && saved.deviceId === audio.deviceId && (JSON.stringify(saved.routing.masterChannels) !== JSON.stringify(audio.masterChannels) || JSON.stringify(saved.routing.pflChannels) !== JSON.stringify(audio.pflChannels))) {
-          await client.setOutputRouting(saved.routing);
-        }
+        const outcome = await runDeckLoad<PerformanceMetadata>({
+          trackId: descriptor.trackId,
+          current,
+          ensureEngine: async () => {
+            if (client.getSessionId()) return;
+            if (!status?.running) await start(outputDevice || undefined, recordingDir || undefined);
+            if (!client.getSessionId()) await connect();
+            if (!client.getSessionId()) throw new Error("音声エンジンに接続できませんでした。エンジンを起動して再試行してください。");
+          },
+          ensureAudio: async () => {
+            try {
+              const audio = await ensureAudioReady(client, outputDevice || undefined, recordingDir || undefined);
+              const saved = parseOutputRouting(localStorage.getItem(OUTPUT_ROUTING_KEY));
+              if (saved && saved.deviceId === audio.deviceId && (JSON.stringify(saved.routing.masterChannels) !== JSON.stringify(audio.masterChannels) || JSON.stringify(saved.routing.pflChannels) !== JSON.stringify(audio.pflChannels))) {
+                await client.setOutputRouting(saved.routing);
+              }
+            } catch (cause) {
+              setAudioSettingsOpen(true);
+              throw cause;
+            }
+          },
+          fetchMetadata: () => performanceMetadataService.get(track.id),
+          prepare: (metadata) => {
+            if (!metadata) { lateMetadata = true; gridPending = true; return; }
+            gridPending = !metadata.beat_grid && Boolean(metadata.grid_pending);
+            setTrackMetadata(old => ({ ...old, [track.id]: metadata }));
+            try { descriptor.hotCues = cuePositions(metadata, descriptor.durationMs); } catch { descriptor.hotCues = undefined; }
+            descriptor.bpm = metadata.beat_grid?.bpm ?? descriptor.bpm;
+            descriptor.beatgridOffsetMs = metadata.beat_grid?.first_beat_ms;
+            descriptor.beatsPerBar = metadata.beat_grid?.beats_per_bar;
+            descriptor.beatTimesMs = metadata.beat_grid?.beat_times_ms ?? undefined;
+            descriptor.beatNumbers = metadata.beat_grid?.beat_numbers ?? undefined;
+            if (metadata.grid_warning) setCommandError(`グリッド注意: ${metadata.grid_warning}`);
+          },
+          load: async () => {
+            // History of the replaced track is written in the background; the
+            // engine load never waits for the backend.
+            void finalizeHistory(deck, "replaced");
+            loadLease = junctionLeaseKey();
+            await client.load(deck, descriptor);
+            loadGeneration = client.getDeckGeneration(deck);
+          },
+          poll: async () => {
+            const state = (await client.refreshSnapshot()).decks[deck];
+            return { status: state?.status ?? "empty", trackId: state?.track?.trackId, lastError: state?.lastError };
+          },
+        });
+        if (outcome.kind === "superseded") return;
+        if (outcome.metadataError) setCommandError(outcome.metadataError);
       } catch (cause) {
-        setAudioSettingsOpen(true);
+        if (cause instanceof DeckLoadError && cause.stage === "settle" && current() && session === client.getSessionId()) await client.unload(deck).catch(() => undefined);
         throw cause;
-      }
-      let gridPending = false;
-      try {
-        const metadata = await performanceMetadataService.get(track.id);
-        gridPending = !metadata.beat_grid && Boolean(metadata.grid_pending);
-        setTrackMetadata(old => ({ ...old, [track.id]: metadata }));
-        descriptor.hotCues = cuePositions(metadata, descriptor.durationMs);
-        descriptor.bpm = metadata.beat_grid?.bpm ?? descriptor.bpm;
-        descriptor.beatgridOffsetMs = metadata.beat_grid?.first_beat_ms;
-        descriptor.beatsPerBar = metadata.beat_grid?.beats_per_bar;
-        descriptor.beatTimesMs = metadata.beat_grid?.beat_times_ms ?? undefined;
-        descriptor.beatNumbers = metadata.beat_grid?.beat_numbers ?? undefined;
-        if (metadata.grid_warning) setCommandError(`グリッド注意: ${metadata.grid_warning}`);
-      } catch {
-        throw new Error("保存済みグリッドを確認できないため、ロードを中止しました。接続を確認して再試行してください。");
-      }
-      await finalizeHistory(deck, "replaced");
-      if (loadRequest !== deckLoadRequests.current[deck]) return;
-      const loadLease = junctionLeaseKey();
-      await client.load(deck, descriptor);
-      const loadGeneration = client.getDeckGeneration(deck);
-      const deadline = performance.now() + 15000;
-      while (true) {
-        if (loadRequest !== deckLoadRequests.current[deck]) return;
-        if (loadLease !== junctionLeaseKey() || loadGeneration !== client.getDeckGeneration(deck)) return;
-        const state = (await client.refreshSnapshot()).decks[deck];
-        if (state.status === "error") throw new Error(state.lastError ?? "曲のロードに失敗しました");
-        if (state.track?.trackId === descriptor.trackId && state.status !== "loading") break;
-        if (performance.now() >= deadline) { if (loadRequest === deckLoadRequests.current[deck] && loadLease === junctionLeaseKey() && loadGeneration === client.getDeckGeneration(deck)) await client.unload(deck); throw new Error("曲のロードがタイムアウトしました。再試行してください。"); }
-        await new Promise(resolve => window.setTimeout(resolve, 50));
+      } finally {
+        setPendingLoads(old => { if (old[deck] === undefined || loadRequest !== deckLoadRequests.current[deck]) return old; const next = { ...old }; delete next[deck]; return next; });
       }
       const loadedAt = new Date().toISOString();
       const key = `${playSession.current}:${deck}:${track.id}:${Date.now()}`;
       historyKeys.current.set(deck, { key, trackId: track.id, loadedAt, playedMs: 0 });
       saveRuntime();
-      await persist(() => playService.upsertHistory({ event_key: key, session_id: playSession.current, deck, track_id: track.id, loaded_at: loadedAt }));
+      void persist(() => playService.upsertHistory({ event_key: key, session_id: playSession.current, deck, track_id: track.id, loaded_at: loadedAt })).catch(() => undefined);
       setActiveDeck(deck);
-      if (gridPending) void applyLateGrid(deck, track.id, loadRequest);
+      if (gridPending) void applyLateGrid(deck, track.id, loadRequest, lateMetadata);
     })));
-  }, [applyLateGrid, client, connect, finalizeHistory, outputDevice, persist, run, saveRuntime, setLoopIn, start, status?.running]);
+  }, [applyLateGrid, client, connect, finalizeHistory, outputDevice, persist, recordingDir, run, saveRuntime, setLoopIn, start, status?.running]);
 
   const editHotCue = (deck: DeckId, slot: number, clear: boolean) => run(async () => {
     const trackId = client.getState().snapshot?.decks[deck].track?.trackId;
@@ -891,6 +923,7 @@ export function PlayWorkspace() {
     return <SoftwareDeck key={id} id={id} deck={displayedDeck(id)} active={activeDeck === id} connected={connected}
     tailLock={tailLock(id)}
     cueColors={cueColorsFor(id)}
+    pendingLoad={pendingLoads[id]}
     onGridEdit={() => openGridEditor(id)}
     onGridClose={closeGridEditor}
     gridEditor={gridEdit?.deck === id && snapshot?.decks[id]?.track?.trackId === String(gridEdit.trackId) ? <BeatGridEditor key={`${id}:${gridEdit.trackId}`} trackId={gridEdit.trackId} durationMs={snapshot.decks[id].track!.durationMs} positionMs={snapshot.decks[id].positionMs} initialGrid={gridEdit.initialGrid} hasGrid={Boolean(gridEdit.metadata.beat_grid)} shiftRequest={gridShift} playing={snapshot.decks[id].status === "playing"} onTogglePlay={() => togglePlay(id)} onAnalyze={(force) => performanceMetadataService.analyzeGrid(gridEdit.trackId, force)} onRekordbox={() => performanceMetadataService.rekordboxGrid(gridEdit.trackId)} disabled={!connected} onPreview={setGridPreview} onSave={saveGrid} onClose={closeGridEditor} /> : undefined}
