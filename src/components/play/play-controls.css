@@ -502,3 +502,20 @@
 .dj-wave-zoom-group .dj-wave-zoom-value { min-width: 40px; font-size: 10px; }
 .dj-wave-source { position: absolute; top: 2px; right: 4px; padding: 0 3px; border-radius: 2px; background: #00000099; color: #9fb7e8; font-size: 10px; font-weight: 700; pointer-events: none; }
 .dj-wave-source:empty { display: none; }
+
+/* PAD FX inline edit view: one 22px row per pad (index, FX, beat, parameter, reset). */
+.dj-padfx-editor { display: grid; grid-auto-rows: 22px; gap: 2px; min-width: 0; }
+.dj-padfx-editor > div { display: grid; grid-template-columns: 14px minmax(0, 1.4fr) 44px minmax(40px, 1fr) 18px; align-items: center; gap: 3px; min-width: 0; padding: 0 2px; border: 1px solid #2b2e33; border-radius: 2px; background: #17191c; }
+.dj-padfx-editor > div.is-edited { border-color: #594a72; }
+.dj-padfx-editor select { min-width: 0; height: 18px; border: 1px solid #3a3f46; border-radius: 2px; padding: 0 2px; background: #1b1d20; color: #e2e5e9; font-size: 10px; }
+.dj-padfx-editor select:disabled { opacity: .4; }
+.dj-padfx-index { color: #8f959d; font-size: 10px; font-weight: 700; text-align: right; }
+.dj-padfx-param { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.dj-padfx-param input { min-width: 0; width: 100%; accent-color: #a878ff; }
+.dj-padfx-param b { min-width: 18px; color: #d0d4da; font-size: 10px; text-align: right; }
+.dj-padfx-reset { display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; background: none; color: #a9aeb6; }
+.dj-padfx-reset:disabled { opacity: .25; }
+.dj-padfx-reset svg { width: 11px; height: 11px; }
+.dj-padfx-gear { display: grid; place-items: center; flex-shrink: 0; width: 22px; height: 22px; padding: 0; border: 1px solid #424951; border-radius: 3px; background: #14181d; color: #a9aeb6; }
+.dj-padfx-gear.is-on { border-color: #a878ff; background: #3a2d52; color: #fff; }
+.dj-padfx-gear svg { width: 13px; height: 13px; }

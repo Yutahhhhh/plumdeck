@@ -5,7 +5,8 @@ import { useEffect, useMemo, useState, useSyncExternalStore, type CSSProperties,
 import { getPadSelection, selectPads, subscribePads, PAD_MODE_NAMES } from "@/services/midi/pad-state";
 import { sampler } from "@/services/dj-engine/sampler";
 import { memoryCues, selectedMemoryCue } from "@/services/dj-engine/memory-cues";
-import { AlignJustify, Disc3, LayoutGrid, Pause, Play, Upload } from "lucide-react";
+import { AlignJustify, Disc3, LayoutGrid, Pause, Play, Settings2, Upload } from "lucide-react";
+import { PadFxEditor } from "./PadFxEditor";
 import type { ChannelState, DeckId, DeckState } from "@/types/dj-engine";
 import type { PerformanceLoop } from "@/types/performance-metadata";
 import { cn } from "@/lib/utils";
@@ -84,6 +85,8 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
   const setPadPage = (update: number | ((page: number) => number)) => selectPads(id,selection.mode,typeof update === "function" ? update(padPage) : update,true);
   const [keyboardCue, setKeyboardCue] = useState(0);
   const [padError, setPadError] = useState("");
+  /** PAD FX inline edit view (gear), per deck. */
+  const [fxEditing, setFxEditing] = useState(false);
   const [extraMode, setExtraMode] = useState<PadMode | null>(null);
   // Modes the controller does not know page locally; paging the controller
   // selection would drop back to its mode.
@@ -268,7 +271,8 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
         <div className="dj-perf-main">
           <div className="dj-phase" aria-hidden style={{ gridTemplateColumns: `repeat(${phaseCells}, 1fr)` }}>{Array.from({ length: phaseCells }, (_, index) => <i key={index} className={cn(index % beatsPerBar === 0 && "is-bar", index === phase && "is-on")} />)}</div>
           {gridEditor ? <div className="dj-grid-editor-slot">{gridEditor}</div> : <>
-            {padMode === "sampler" ? <SamplerPads offset={left?8:0} enabled={Boolean(connected && capabilities.includes("sampler"))} cueAvailable={capabilities.includes("mixer.pfl")} /> : <PerformancePads page={displayedPage} cueColors={cueColors} onKey={(semitones, keyboard) => {
+            {(padMode === "padfx" || padMode === "padfx2") && fxEditing ? <PadFxEditor bank={padMode === "padfx2" ? 5 : 1} page={displayedPage} capabilities={capabilities} deckId={id} />
+            : padMode === "sampler" ? <SamplerPads offset={left?8:0} enabled={Boolean(connected && capabilities.includes("sampler"))} cueAvailable={capabilities.includes("mixer.pfl")} /> : <PerformancePads page={displayedPage} cueColors={cueColors} onKey={(semitones, keyboard) => {
               setPadError(""); const generation = djEngineClient.getDeckGeneration(id);
               void (async () => { await djEngineClient.keyShift(id, semitones);
                 if (keyboard && generation === djEngineClient.getDeckGeneration(id)) { const cue = deck?.hotCues[keyboardCue]; if (cue == null) throw new Error("KEYBOARDにはホットキューを設定してください"); await djEngineClient.seek(id,cue); if(generation === djEngineClient.getDeckGeneration(id)) await djEngineClient.play(id); }
@@ -289,6 +293,9 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
               <div className="dj-pad-pages" role="group" aria-label={`Deck ${id} ${padMode==="sampler"?"バンク":"ページ"}`}>
                 <span className="dj-pad-pages-label" aria-hidden>{padMode==="sampler"?"BANK":"PAGE"}</span>{Array.from({length:lastPage+1},(_,page)=><button key={page} type="button" aria-label={`${padMode==="sampler"?"BANK":"PAGE"} ${page+1}`} aria-pressed={displayedPage===page} onClick={()=>movePage(page-displayedPage)}>{page+1}</button>)}
               </div>
+              {(padMode === "padfx" || padMode === "padfx2") && <button type="button" className={cn("dj-padfx-gear", fxEditing && "is-on")} aria-pressed={fxEditing}
+                title={fxEditing ? "編集を閉じてパッドに戻る" : "PAD FX を編集（FX の種類・拍・パラメータ。全デッキ共通で保存）"} aria-label={`Deck ${id} PAD FX の編集`}
+                onClick={() => setFxEditing((value) => !value)}><Settings2 /></button>}
               <PadModeSelect deckId={id} value={padMode} modes={availablePadModes(capabilities, padMode)} onChange={(mode) => { if (gridEditor) onGridClose?.(); setPadMode(mode); }} />
             </div>
           </>}

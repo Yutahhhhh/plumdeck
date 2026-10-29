@@ -123,8 +123,97 @@ const BANKS: Record<1 | 5, readonly Entry[]> = {
  * The slot shown and sent depends on what the host declares.
  */
 export function padPreset(mode = 1, slot = 0, capabilities: readonly string[] = []): PadFxSlot {
+  const bank = mode === 5 ? 5 : 1;
+  const edited = padOverride(bank, slot & 15);
+  if (edited) {
+    const custom = slotFromOverride(edited);
+    if ((custom.requires ?? []).every((name) => capabilities.includes(name))) return custom;
+  }
+  return defaultPadPreset(bank, slot, capabilities);
+}
+
+/** The bank's own slot, ignoring the user's edits. */
+export function defaultPadPreset(mode = 1, slot = 0, capabilities: readonly string[] = []): PadFxSlot {
   const [preferred, fallback] = BANKS[mode === 5 ? 5 : 1][slot & 15];
   return (preferred.requires ?? []).every((name) => capabilities.includes(name)) ? preferred : fallback;
+}
+
+// ---------------------------------------------------------------- inline edit
+
+/**
+ * A user's edit of one PAD FX pad (rekordbox's pad editor): FX type, beat
+ * length and one parameter (0–100). Banks 1 and 2 are shared by every deck
+ * and every input (mouse, keyboard, controller), and persisted.
+ */
+export type PadFxType = `beat:${PadEffect}` | `color:${ColorPadEffect}`;
+export type PadOverride = { type: PadFxType; beats: number | null; param: number };
+type Overrides = Record<"1" | "5", Record<string, PadOverride>>;
+
+export const PAD_FX_TYPES: { type: PadFxType; label: string; extended?: boolean }[] = [
+  { type: "beat:echo", label: "ECHO" }, { type: "beat:reverb", label: "REVERB" }, { type: "beat:flanger", label: "FLANGER" },
+  { type: "beat:phaser", label: "PHASER" }, { type: "beat:filter", label: "FILTER" }, { type: "beat:moogladder4filter", label: "LADDER" },
+  { type: "beat:bitcrusher", label: "CRUSH" }, { type: "beat:distortion", label: "DIST" }, { type: "beat:autopan", label: "PAN" },
+  { type: "beat:tremolo", label: "TRANS" }, { type: "beat:lowcutecho", label: "LOW CUT ECHO" }, { type: "beat:mtdelay", label: "MT DELAY" },
+  { type: "beat:enigmajet", label: "ENIGMA JET" }, { type: "beat:roll", label: "ROLL", extended: true }, { type: "beat:sliproll", label: "SLIP ROLL", extended: true },
+  { type: "beat:spiral", label: "SPIRAL", extended: true }, { type: "beat:pitchshift", label: "PITCH", extended: true },
+  { type: "color:filter", label: "SWEEP (COLOR)" }, { type: "color:echo", label: "DUB ECHO (COLOR)" }, { type: "color:whitenoise", label: "NOISE (COLOR)" },
+];
+export const PAD_FX_BEATS = [1 / 16, 1 / 8, 1 / 4, 1 / 2, 3 / 4, 1, 2, 4, 8, 16] as const;
+const OVERRIDES_KEY = "plumdeck.padFxBanks.v1";
+
+function storage(): Storage | null {
+  try { return typeof localStorage === "undefined" ? null : localStorage; } catch { return null; }
+}
+function validOverride(value: unknown): value is PadOverride {
+  const v = value as PadOverride;
+  return Boolean(v) && PAD_FX_TYPES.some((t) => t.type === v.type) && (v.beats === null || PAD_FX_BEATS.some((b) => Math.abs(b - v.beats!) < 1e-9))
+    && Number.isFinite(v.param) && v.param >= 0 && v.param <= 100;
+}
+function readOverrides(): Overrides {
+  const empty: Overrides = { "1": {}, "5": {} };
+  try {
+    const raw = JSON.parse(storage()?.getItem(OVERRIDES_KEY) ?? "null");
+    for (const bank of ["1", "5"] as const) for (const [slot, value] of Object.entries(raw?.[bank] ?? {})) if (validOverride(value) && Number(slot) >= 0 && Number(slot) < 16) empty[bank][slot] = value;
+  } catch { /* defaults */ }
+  return empty;
+}
+let overrides: Overrides = readOverrides();
+let overridesVersion = 0;
+const overrideListeners = new Set<() => void>();
+
+export function padOverride(bank: 1 | 5, slot: number): PadOverride | null {
+  return overrides[bank === 5 ? "5" : "1"][String(slot & 15)] ?? null;
+}
+/** Sets (or with `null` resets to the default) one pad of a bank. */
+export function setPadOverride(bank: 1 | 5, slot: number, value: PadOverride | null) {
+  const key = bank === 5 ? "5" : "1";
+  const next = { ...overrides[key] };
+  if (value && validOverride(value)) next[String(slot & 15)] = value; else delete next[String(slot & 15)];
+  overrides = { ...overrides, [key]: next };
+  overridesVersion++;
+  try { storage()?.setItem(OVERRIDES_KEY, JSON.stringify(overrides)); } catch { /* in-memory only */ }
+  for (const listener of overrideListeners) listener();
+}
+export const subscribePadOverrides = (listener: () => void) => { overrideListeners.add(listener); return () => { overrideListeners.delete(listener); }; };
+export const padOverridesVersion = () => overridesVersion;
+
+/** The editor's view of a pad (edited or default) as type / beats / param. */
+export function padOverrideOf(slot: PadFxSlot): PadOverride {
+  if (slot.kind === "color") return { type: `color:${slot.effect}`, beats: null, param: Math.round(slot.effect === "filter" ? (slot.amount + 1) * 50 : Math.abs(slot.amount) * 100) };
+  return { type: `beat:${slot.effect}`, beats: slot.beats ?? null, param: Math.round((slot.insert ? slot.depth : slot.mix) * 100) };
+}
+
+export function slotFromOverride(value: PadOverride): PadFxSlot {
+  const entry = PAD_FX_TYPES.find((t) => t.type === value.type)!;
+  const p = Math.max(0, Math.min(100, value.param)) / 100;
+  if (value.type.startsWith("color:")) {
+    const effect = value.type.slice(6) as ColorPadEffect;
+    // SWEEP: below 50 a low-pass, above 50 a high-pass (the COLOR knob's own sense).
+    return color(effect, entry.label.replace(" (COLOR)", ""), effect === "filter" ? (p - 0.5) * 2 : p, effect === "filter" ? (p < 0.5 ? "LPF" : "HPF") : undefined);
+  }
+  const effect = value.type.slice(5) as PadEffect;
+  const base = slot(effect, entry.label, { beats: value.beats ?? undefined, mix: Math.max(0.05, p), depth: p, variant: value.beats ? undefined : String(Math.round(p * 100)) });
+  return entry.extended ? extended(base) : base;
 }
 
 /** Values sent for a chain slot. `beats` and `params` only when the host declares them. */

@@ -1,9 +1,9 @@
-import { padPreset, BEAT_LOOP_PAGES, beatJumpPages, keyPad, PAD_FX_EXTENDED, type PadFxSlot } from "@/services/midi/pad-presets";
+import { padPreset, BEAT_LOOP_PAGES, beatJumpPages, keyPad, PAD_FX_EXTENDED, padOverridesVersion, subscribePadOverrides, type PadFxSlot } from "@/services/midi/pad-presets";
 import { padFxGroup, type PadFxGroup } from "@/services/midi/pad-fx-send";
 import { emptyPadFxStack, pressPad, releaseAll, releasePad, pressFx, releaseFx, releaseAllFx, enqueuePadFx, type PadFxCommand, type PadFxStack, type PadFxActiveState } from "./pad-fx-stack";
 import { padColor } from "@/services/midi/pad-colors";
 export { CUE_COLORS } from "@/services/midi/pad-colors";
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { formatBeats, sameBeats } from "./loop-math";
 import type { PadEffect } from "@/types/dj-engine";
@@ -104,6 +104,8 @@ type UiFxPad = { key: number; send: (enabled: boolean) => Promise<unknown> };
 const emptyActive = (): Record<PadFxGroup, PadFxActiveState<UiFxPad>> => ({ chain: { pads: [], sounding: null }, color: { pads: [], sounding: null } });
 
 export function PerformancePads(props: Props) {
+  // Edited PAD FX banks apply at once (shared by every deck).
+  useSyncExternalStore(subscribePadOverrides, padOverridesVersion);
   const fxStack = useRef<PadFxStack>(emptyPadFxStack);
   const [fxHeld, setFxHeld] = useState<readonly number[]>([]);
   const fxActive = useRef(emptyActive());
