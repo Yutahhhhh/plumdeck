@@ -37,7 +37,7 @@
     ],
     "withGlobalTauri": true,
     "security": {
-      "csp": "default-src 'self'; worker-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://127.0.0.1:48123 ws://127.0.0.1:48123 http://localhost:48123 ws://localhost:48123 http://127.0.0.1:8001 ws://127.0.0.1:8001 http://localhost:8001 ws://localhost:8001; img-src 'self' asset: https: data: blob:; media-src 'self' asset: https: data: blob: http://127.0.0.1:48123 http://localhost:48123 http://127.0.0.1:8001 http://localhost:8001;"
+      "csp": "default-src 'self'; worker-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: ws://127.0.0.1:* http://127.0.0.1:48123 ws://127.0.0.1:48123 http://localhost:48123 ws://localhost:48123 http://127.0.0.1:8001 ws://127.0.0.1:8001 http://localhost:8001 ws://localhost:8001; img-src 'self' asset: https: data: blob:; media-src 'self' asset: https: data: blob: http://127.0.0.1:48123 http://localhost:48123 http://127.0.0.1:8001 http://localhost:8001;"
     }
   },
   "plugins": {

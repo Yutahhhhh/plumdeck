@@ -103,7 +103,7 @@ export function encodeCode(description: { type: string; sdp?: string }): string 
   return CODE_PREFIX + btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-export function decodeCode(code: string, expected: "offer" | "answer"): { type: "offer" | "answer"; sdp: string } {
+export function decodeCode<T extends "offer" | "answer">(code: string, expected: T): { type: T; sdp: string } {
   const trimmed = code.trim().replace(/\s+/g, "");
   if (!trimmed.startsWith(CODE_PREFIX)) throw new Error("Junctionのコードではありません");
   const b64 = trimmed.slice(CODE_PREFIX.length).replace(/-/g, "+").replace(/_/g, "/");
