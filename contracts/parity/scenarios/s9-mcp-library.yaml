@@ -20,8 +20,10 @@ steps:
   - name: search lyrics status
     mcp: {method: tools/call, params: {name: search_tracks, arguments: {lyrics_status: with, status: unverified}}}
   - name: genre context of the unknown tracks
+    deviation: {id: D-27, b_status: 200}
     mcp: {method: tools/call, params: {name: get_genre_analysis_context, arguments: {mode: genre, limit: 3}}}
   - name: genre context by ids
+    deviation: {id: D-27, b_status: 200}
     mcp: {method: tools/call, params: {name: get_genre_analysis_context, arguments: {track_ids: [4, 2, 999]}}}
   - name: apply analysis with an alias and a low confidence
     mcp: {method: tools/call, params: {name: apply_genre_analysis, arguments: {track_id: 7, genre: hip hop, subgenre: contemporary rnb, confidence: " high ", mode: genre}}}

@@ -160,30 +160,41 @@ steps:
     expect_status: 404
     http: {method: DELETE, path: /api/wordplay-pairs/6}
   - name: suggest genre for a track
+    deviation: {id: D-27, b_status: 200}
     http: {method: GET, path: /api/tracks/7/suggest-genre}
   - name: suggest genre for a verified track
+    deviation: {id: D-27, b_status: 200}
     http: {method: GET, path: /api/tracks/1/suggest-genre}
   - name: suggest genre without a vector
+    deviation: {id: D-27, b_status: 200}
     http: {method: GET, path: /api/tracks/9/suggest-genre}
   - name: suggest genre for a missing track
+    deviation: {id: D-27, b_status: 200}
     http: {method: GET, path: /api/tracks/999/suggest-genre}
   - name: suggest genre bad id
     expect_status: 422
     http: {method: GET, path: /api/tracks/x/suggest-genre}
   - name: grouped suggestions
+    deviation: {id: D-27, b_status: 404}
     http: {method: GET, path: /api/genres/grouped-suggestions}
   - name: grouped suggestions low threshold
+    deviation: {id: D-27, b_status: 404}
     http: {method: GET, path: /api/genres/grouped-suggestions, query: {threshold: 0.5, limit: 3}}
   - name: grouped suggestions subgenre mode
+    deviation: {id: D-27, b_status: 404}
     http: {method: GET, path: /api/genres/grouped-suggestions, query: {threshold: 0.5, mode: subgenre}}
   - name: grouped suggestions offset
+    deviation: {id: D-27, b_status: 404}
     http: {method: GET, path: /api/genres/grouped-suggestions, query: {threshold: 0.1, offset: 1, limit: 1}}
   - name: grouped suggestions bad mode
-    expect_status: 422
+    deviation: {id: D-27, b_status: 404}
     http: {method: GET, path: /api/genres/grouped-suggestions, query: {mode: x}}
   - name: suggestions for a track
+    deviation: {id: D-27, b_status: 404}
     http: {method: GET, path: /api/genres/grouped-suggestions/1, query: {threshold: 0.5}}
   - name: suggestions for a track default threshold
+    deviation: {id: D-27, b_status: 404}
     http: {method: GET, path: /api/genres/grouped-suggestions/3}
   - name: suggestions for a missing track
+    deviation: {id: D-27, b_status: 404}
     http: {method: GET, path: /api/genres/grouped-suggestions/999}

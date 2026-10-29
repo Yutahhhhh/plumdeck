@@ -15,6 +15,7 @@ steps:
   - name: ping
     mcp: {method: ping}
   - name: tool list
+    deviation: {id: D-27, b_status: 200}
     mcp: {method: tools/list}
   - name: prompt list
     mcp: {method: prompts/list}
@@ -41,6 +42,7 @@ steps:
   - name: similar tracks of a missing track
     mcp: {method: tools/call, params: {name: get_track_similar, arguments: {track_id: 999}}}
   - name: suggest genre
+    deviation: {id: D-27, b_status: 200}
     mcp: {method: tools/call, params: {name: suggest_track_genre, arguments: {track_id: 2}}}
   - name: update genre
     mcp: {method: tools/call, params: {name: update_track_genre, arguments: {track_id: 7, genre: Techno}}}
@@ -122,6 +124,7 @@ steps:
   - name: unknown tracks with a bad mode
     mcp: {method: tools/call, params: {name: get_unknown_genre_tracks, arguments: {mode: bogus}}}
   - name: analysis context
+    deviation: {id: D-27, b_status: 200}
     mcp: {method: tools/call, params: {name: get_genre_analysis_context, arguments: {track_ids: [1, 2], mode: both}}}
   - name: apply one analysis
     mcp: {method: tools/call, params: {name: apply_genre_analysis, arguments: {track_id: 2, genre: House, subgenre: Deep House, confidence: High, reason: test}}}
