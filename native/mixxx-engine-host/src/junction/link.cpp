@@ -115,8 +115,9 @@ QJsonObject Link::command(const QString& op,const QJsonObject& p,QString* error)
         bool ok=false;const int index=id.section(':',-1).toInt(&ok);
         if(!ok)return fail("配信先のデバイスを選んでください");
         // Timeline off (t0 = 0): the WebView already delays and splices the
-        // program; this stage only follows its own fill (~100 ms) to the device.
-        program_.setTimeline(0,0,9600);
+        // program; this stage only follows its own fill (~400 ms, so a stalled
+        // WebView worker never underruns the stream) to the device.
+        program_.setTimeline(0,0,24000);
         QString failure;
         if(!program_.open(index,&failure)){programOpen_=false;return fail(failure.isEmpty()?"配信先のデバイスを開けませんでした":failure);}
         programOpen_=true;programDevice_=id;

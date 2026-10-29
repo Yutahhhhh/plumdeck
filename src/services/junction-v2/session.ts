@@ -6,15 +6,18 @@
 // from the on-air uplink (core/program.ts), which the engine plays on the
 // program device (OBS / interface / BlackHole) at a fixed delay.
 //
-// Audio inside this WebView (one AudioContext at 48 kHz):
-//   engine uplink --ws--> jlink-source (elastic) --+--> capture slot 0 (host)
-//                                                   +--> uplink track (guest)
+// Audio inside this WebView (one AudioContext at 48 kHz). The PCM path never
+// touches the UI thread: worklets talk to the I/O worker over MessagePorts and
+// the worker holds the engine socket (io-worker.ts).
+//   engine uplink --ws--> I/O worker --> jlink-source (elastic) --+--> capture slot 0 (host)
+//                                                                  +--> uplink track (guest)
 //   remote track -> MediaStreamSource --+--> capture slot k
 //                                        +--> per-guest feed gains (host)
-//   capture batches --> program assembler --ws--> engine program device (host)
-//                   --> own J feed slot   --ws--> engine JUNCTION deck
+//   capture --> I/O worker: program assembler --ws--> engine program device (host)
+//                           own J feed slot   --ws--> engine JUNCTION deck
 import workletUrl from "./worklet.ts?worker&url";
-import { ProgramAssembler, type SplicePlan } from "./core/program.ts";
+import type { SplicePlan } from "./core/program.ts";
+import type { IoCommand, IoEvent } from "./io-worker.ts";
 import { LinkPeer, type LinkStats } from "./core/peer.ts";
 import {
   PROTOCOL, decodeCode, encodeCode, parseGuestMessage, parseHostMessage,
@@ -81,21 +84,18 @@ export const linkStore = {
 const message = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 const randomId = (prefix: string) => `${prefix}${Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => b.toString(16).padStart(2, "0")).join("")}`;
 
-/** Splits a capture batch into per-slot stereo blocks. */
-function slotBlock(data: Float32Array, slot: number, frames: number) {
-  const left = new Float32Array(frames), right = new Float32Array(frames);
-  const base = slot * 2 * BATCH;
-  for (let i = 0; i < frames; i += 1) { left[i] = data[base + 2 * i]; right[i] = data[base + 2 * i + 1]; }
-  return { left, right };
-}
-
 class AudioRig {
   readonly ctx: AudioContext;
   readonly capture: AudioWorkletNode;
   readonly uplink: AudioWorkletNode;
+  readonly io: Worker;
+  readonly engine = new EngineLink();
   sourceFillMs = 0;
+  programDelayFrames: number | null = null;
+  onSplice: ((plan: SplicePlan) => void) | null = null;
+  private closed = false;
 
-  private constructor(ctx: AudioContext, slots: number) {
+  private constructor(ctx: AudioContext, slots: number, program: boolean) {
     this.ctx = ctx;
     this.capture = new AudioWorkletNode(ctx, "jlink-capture", {
       numberOfInputs: slots, numberOfOutputs: 1, outputChannelCount: [2],
@@ -105,20 +105,43 @@ class AudioRig {
     this.capture.connect(ctx.destination);
     this.uplink = new AudioWorkletNode(ctx, "jlink-source", { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2] });
     this.uplink.port.onmessage = (event: MessageEvent<{ fill: number }>) => { this.sourceFillMs = (event.data.fill / SAMPLE_RATE) * 1000; };
+    this.io = new Worker(new URL("./io-worker.ts", import.meta.url), { type: "module" });
+    const capture = new MessageChannel();
+    const uplink = new MessageChannel();
+    this.capture.port.postMessage({ port: capture.port1 }, [capture.port1]);
+    this.uplink.port.postMessage({ port: uplink.port1 }, [uplink.port1]);
+    this.command({ t: "init", capture: capture.port2, uplink: uplink.port2, batch: BATCH, program, delaySeconds: PROGRAM_DELAY_SECONDS }, [capture.port2, uplink.port2]);
+    this.io.onmessage = (event: MessageEvent<IoEvent>) => {
+      const e = event.data;
+      if (e.t === "stats") this.programDelayFrames = e.programDelayFrames;
+      else if (e.t === "splice") this.onSplice?.(e.plan);
+      // The engine restarted or dropped the socket: ask for a fresh token.
+      else if (e.t === "socket" && !e.open && !this.closed) setTimeout(() => void this.connectEngine().catch(() => undefined), 1000);
+    };
   }
 
-  static async create(slots: number): Promise<AudioRig> {
+  static async create(slots: number, program: boolean): Promise<AudioRig> {
     const ctx = new AudioContext({ sampleRate: SAMPLE_RATE, latencyHint: "playback" });
     await ctx.audioWorklet.addModule(workletUrl);
     if (ctx.state !== "running") await ctx.resume().catch(() => undefined);
-    return new AudioRig(ctx, slots);
+    return new AudioRig(ctx, slots, program);
   }
 
-  pushUplink(left: Float32Array, right: Float32Array) {
-    this.uplink.port.postMessage({ left, right }, [left.buffer, right.buffer]);
+  command(cmd: IoCommand, transfer: Transferable[] = []) { this.io.postMessage(cmd, transfer); }
+
+  async connectEngine() {
+    if (this.closed) return;
+    const state = await this.engine.start();
+    this.command({ t: "connect", port: state.port, token: state.token });
   }
 
-  close() { void this.ctx.close().catch(() => undefined); }
+  async close() {
+    this.closed = true;
+    this.command({ t: "close" });
+    await this.engine.stop();
+    this.io.terminate();
+    await this.ctx.close().catch(() => undefined);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -144,8 +167,7 @@ class HostSession {
   readonly hostId = "host";
   state: SessionState;
   private readonly rig: AudioRig;
-  private readonly engine = new EngineLink();
-  private readonly program = new ProgramAssembler({ delaySeconds: PROGRAM_DELAY_SECONDS });
+  private readonly engine: EngineLink;
   private readonly guests = new Map<string, GuestLink>();
   private readonly slots: (string | null)[] = Array(SLOTS).fill(null);
   private readonly releaseWatch = new ReleaseWatch();
@@ -158,28 +180,24 @@ class HostSession {
     this.rig = rig;
     this.state = emptySession({ id: this.hostId, name, kind: "host", connected: true }, hostPlays);
     this.slots[0] = this.hostId;
+    this.engine = rig.engine;
     rig.uplink.connect(rig.capture, 0, 0);
-    rig.capture.port.onmessage = (event: MessageEvent<{ frame: number; frames: number; data: Float32Array }>) => this.onCapture(event.data);
-    this.engine.onUplink = (_frame, left, right) => rig.pushUplink(left, right);
+    rig.onSplice = (plan) => { this.lastSplice = { ...plan, atMs: Date.now() }; this.publish(); };
+    this.syncIo();
   }
 
   async start() {
-    await this.engine.start();
+    await this.rig.connectEngine();
     await this.engine.setUplink(routeFor(this.state, this.hostId).uplink);
     this.timers.push(window.setInterval(() => void this.poll(), 1000));
     this.publish();
   }
 
   // ---- audio ----
-  private onCapture({ frame, frames, data }: { frame: number; frames: number; data: Float32Array }) {
-    const blocks: Record<string, { left: Float32Array; right: Float32Array }> = {};
-    this.slots.forEach((id, slot) => { if (id) blocks[id] = slotBlock(data, slot, frames); });
-    this.program.ingest(frame, frames, blocks);
-    const out = this.program.render(frames);
-    this.engine.sendProgram(frame, out.left, out.right);
-    const feed = routeFor(this.state, this.hostId).feedFrom;
-    const block = feed ? blocks[feed] : undefined;
-    if (block) this.engine.sendInput(frame, block.left, block.right);
+  /** Tells the I/O worker which capture slot is whom and what our J deck plays. */
+  private syncIo() {
+    this.rig.command({ t: "slots", slots: [...this.slots] });
+    this.rig.command({ t: "feed", from: routeFor(this.state, this.hostId).feedFrom });
   }
 
   private sourceNode(id: string): AudioNode | null {
@@ -224,12 +242,10 @@ class HostSession {
     void this.engine.setUplink(r[this.hostId]?.uplink ?? "local").catch(() => undefined);
     for (const g of this.guests.values()) this.setFeed(g, r[g.id]?.feedFrom ?? null);
     if (prev.onAir !== next.onAir) {
-      if (!next.onAir) this.program.setSource(null);
-      else {
-        const plan = this.program.handoff(next.onAir, this.priorFrames(next.onAir));
-        this.lastSplice = { ...plan, atMs: Date.now() };
-      }
+      if (!next.onAir) this.rig.command({ t: "source", id: null });
+      else this.rig.command({ t: "handoff", to: next.onAir, prior: this.priorFrames(next.onAir) });
     }
+    this.syncIo();
     this.broadcast({ t: "state", state: next });
     this.publish();
   }
@@ -289,6 +305,7 @@ class HostSession {
     };
     this.slots[slot] = id;
     this.guests.set(id, g);
+    this.syncIo();
     // Placeholder until the guest says hello; not in the order yet.
     this.change(addParticipant(this.state, { id, name: "接続中のDJ", kind: "app", connected: false }, false));
     return g;
@@ -339,6 +356,7 @@ class HostSession {
     for (const other of this.guests.values()) { other.feeds.get(id)?.disconnect(); other.feeds.delete(id); if (other.feedFrom === id) other.feedFrom = null; }
     this.slots[g.slot] = null;
     this.guests.delete(id);
+    this.syncIo();
     this.change(removeParticipant(this.state, id));
     for (const other of this.guests.values()) this.setFeed(other, routeFor(this.state, other.id).feedFrom);
   }
@@ -395,8 +413,14 @@ class HostSession {
     patch({ pending });
   }
 
+  private polling = false;
   private async poll() {
-    if (this.stopped) return;
+    if (this.stopped || this.polling) return;
+    this.polling = true;
+    try { await this.pollOnce(); } finally { this.polling = false; }
+  }
+
+  private async pollOnce() {
     if (this.share) await this.pollShare().catch((cause) => patch({ error: `PlumDeck Liteとの通信: ${message(cause)}` }));
     for (const g of this.guests.values()) g.stats = await g.peer.stats().catch(() => g.stats);
     await this.engine.state().catch(() => undefined);
@@ -423,7 +447,7 @@ class HostSession {
     }
     patch({
       phase: "hosting", role: "host", me: this.hostId, session: this.state, members, lastSplice: this.lastSplice,
-      programDelayMs: this.program.source ? (this.program.delay / SAMPLE_RATE) * 1000 : null,
+      programDelayMs: this.rig.programDelayFrames !== null ? (this.rig.programDelayFrames / SAMPLE_RATE) * 1000 : null,
       engine: this.engine.lastState,
     });
   }
@@ -434,8 +458,7 @@ class HostSession {
     this.broadcast({ t: "error", message: "ホストがセッションを終了しました" });
     for (const id of [...this.guests.keys()]) this.guests.get(id)?.peer.close();
     if (this.share) await shareMusicsApi.leave(this.share.sessionId).catch(() => undefined);
-    await this.engine.stop();
-    this.rig.close();
+    await this.rig.close();
   }
 }
 
@@ -446,7 +469,7 @@ class GuestSession {
   state: SessionState | null = null;
   me: string | null = null;
   private readonly rig: AudioRig;
-  private readonly engine = new EngineLink();
+  private readonly engine: EngineLink;
   readonly peer: LinkPeer;
   private readonly dest: MediaStreamAudioDestinationNode;
   private source: MediaStreamAudioSourceNode | null = null;
@@ -459,15 +482,11 @@ class GuestSession {
   constructor(rig: AudioRig, name: string) {
     this.rig = rig;
     this.name = name;
+    this.engine = rig.engine;
     this.dest = rig.ctx.createMediaStreamDestination();
     rig.uplink.connect(this.dest);
-    this.engine.onUplink = (_frame, left, right) => rig.pushUplink(left, right);
-    rig.capture.port.onmessage = (event: MessageEvent<{ frame: number; frames: number; data: Float32Array }>) => {
-      const { frame, frames, data } = event.data;
-      if (!this.source) return;
-      const block = slotBlock(data, 0, frames);
-      this.engine.sendInput(frame, block.left, block.right);
-    };
+    // Capture slot 0 is the host's J feed; the I/O worker sends it to our J deck.
+    rig.command({ t: "slots", slots: ["host"] });
     this.peer = new LinkPeer({
       initiator: false,
       sendTrack: this.dest.stream.getAudioTracks()[0] ?? null,
@@ -475,6 +494,7 @@ class GuestSession {
         this.source?.disconnect();
         this.source = rig.ctx.createMediaStreamSource(stream);
         this.source.connect(rig.capture, 0, 0);
+        rig.command({ t: "feed", from: "host" });
       },
       onMessage: (raw) => this.onHostMessage(raw),
       onOpen: () => this.peer.send({ t: "hello", protocol: PROTOCOL, name: this.name, kind: "app" }),
@@ -486,7 +506,7 @@ class GuestSession {
   }
 
   async start() {
-    await this.engine.start();
+    await this.rig.connectEngine();
     await this.engine.setUplink("local");
     this.timers.push(window.setInterval(() => void this.tick(), 1000));
   }
@@ -541,8 +561,14 @@ class GuestSession {
 
   setInput(settings: Parameters<EngineLink["setInput"]>[0]) { return this.engine.setInput(settings).then(() => this.publish()); }
 
+  private ticking = false;
   private async tick() {
-    if (this.stopped) return;
+    if (this.stopped || this.ticking) return;
+    this.ticking = true;
+    try { await this.tickOnce(); } finally { this.ticking = false; }
+  }
+
+  private async tickOnce() {
     if (this.share) await this.pollShare().catch((cause) => patch({ error: `PlumDeck Liteとの通信: ${message(cause)}` }));
     this.peer.send({ t: "ping", id: ++this.pingId, sentAt: Date.now() });
     const stats = await this.peer.stats().catch(() => null);
@@ -563,8 +589,7 @@ class GuestSession {
     for (const t of this.timers) clearInterval(t);
     this.peer.close();
     if (this.share) await shareMusicsApi.leave(this.share.sessionId).catch(() => undefined);
-    await this.engine.stop();
-    this.rig.close();
+    await this.rig.close();
   }
 }
 
@@ -592,7 +617,7 @@ export const junctionLink = {
     if (host || guest) throw new Error("すでにJunctionに参加しています");
     patch({ ...initial, phase: "starting", role: "host", sessionName: options.sessionName });
     try {
-      const rig = await AudioRig.create(SLOTS);
+      const rig = await AudioRig.create(SLOTS, true);
       host = new HostSession(rig, options.djName, options.hostPlays);
       await host.start();
       if (options.share) await host.publishOnShare(options.sessionName, options.djName);
@@ -608,7 +633,7 @@ export const junctionLink = {
     if (host || guest) throw new Error("すでにJunctionに参加しています");
     patch({ ...initial, phase: "starting", role: "guest", sessionName: options.sessionName ?? "" });
     try {
-      const rig = await AudioRig.create(1);
+      const rig = await AudioRig.create(1, false);
       guest = new GuestSession(rig, options.djName);
       await guest.start();
       patch({ phase: "joining" });

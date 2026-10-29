@@ -1,11 +1,12 @@
 // AudioWorklet processors for Junction v2. Loaded with `?worker&url` so Vite
 // bundles the imports into one classic script.
 //
-//  jlink-capture  N inputs -> batches of interleaved stereo posted to the main
-//                 thread with the AudioContext frame of their first sample.
+//  jlink-capture  N inputs -> batches of interleaved stereo posted (to the
+//                 I/O worker's MessagePort once handed over) with the
+//                 AudioContext frame of their first sample.
 //                 All inputs share that frame, which is what makes the
 //                 program splice a pure index computation (see program.ts).
-//  jlink-source   PCM pushed from the main thread (the engine's uplink, on the
+//  jlink-source   PCM pushed by the I/O worker (the engine's uplink, on the
 //                 engine's clock) -> elastic buffer -> stereo output on the
 //                 AudioContext clock.
 import { ElasticBuffer } from "./core/elastic.ts";
@@ -25,12 +26,14 @@ class CaptureProcessor extends AudioWorkletProcessor {
   private buffer: Float32Array;
   private filled = 0;
   private start = 0;
+  private out: MessagePort | null = null;
 
   constructor(options: { processorOptions?: CaptureOptions }) {
     super(options);
     this.slots = options.processorOptions?.slots ?? 1;
     this.batch = options.processorOptions?.batch ?? 1024;
     this.buffer = new Float32Array(this.slots * 2 * this.batch);
+    this.port.onmessage = (event: MessageEvent<{ port?: MessagePort }>) => { if (event.data.port) this.out = event.data.port; };
   }
 
   process(inputs: Float32Array[][]): boolean {
@@ -48,7 +51,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
     }
     this.filled += frames;
     if (this.filled >= this.batch) {
-      this.port.postMessage({ frame: this.start, frames: this.filled, data: this.buffer }, [this.buffer.buffer]);
+      (this.out ?? this.port).postMessage({ frame: this.start, frames: this.filled, data: this.buffer }, [this.buffer.buffer]);
       this.buffer = new Float32Array(this.slots * 2 * this.batch);
       this.filled = 0;
     }
@@ -64,8 +67,10 @@ class SourceProcessor extends AudioWorkletProcessor {
 
   constructor(options: unknown) {
     super(options);
-    this.port.onmessage = (event: MessageEvent<{ left: Float32Array; right: Float32Array }>) => {
-      this.elastic.push(event.data.left, event.data.right);
+    const push = (event: MessageEvent<{ left: Float32Array; right: Float32Array }>) => this.elastic.push(event.data.left, event.data.right);
+    this.port.onmessage = (event: MessageEvent<{ port?: MessagePort; left: Float32Array; right: Float32Array }>) => {
+      if (event.data.port) event.data.port.onmessage = push;
+      else push(event);
     };
   }
 
