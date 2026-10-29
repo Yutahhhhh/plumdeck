@@ -256,3 +256,47 @@ deviations:
       summary, no likeness ordering and no missing-reference note. Without
       other filters assist_search answers "検索条件か「〜のような曲」を1つ以上指定してください".
     current: temporary; the reference anchor and likeness scoring are not ported yet.
+  - id: D-04
+    status: approved
+    source: plan README §7 #4; backend/app/services/play_recording_service.py (ffmpeg conversion), src-tauri/crates/plumdeck-backend/src/recording_export.rs
+    summary: >
+      Recording export is WAV or FLAC only, written in-process (plumdeck-decode
+      + flacenc, Apache-2.0) instead of through a bundled FFmpeg. GET
+      /api/play/recordings/formats always lists wav and flac (Python listed
+      the formats the local FFmpeg could encode, including mp3), and PATCH
+      /api/play/recordings/{id} rejects format mp3 with "Input should be
+      'wav' or 'flac'". The app no longer bundles FFmpeg.
+    current: implemented; s7-play.yaml pins B's answers.
+  - id: D-05
+    status: proposed
+    source: backend/app/services/waveform_detail_service.py (FFmpeg filter graph), src-tauri/crates/plumdeck-backend/src/routes/waveform_detail.rs
+    summary: >
+      The detailed Play waveform decodes with plumdeck-decode (mono, resampled
+      to 24 kHz) and splits bands with RBJ biquads at Q 1/sqrt(2) (FFmpeg's
+      lowpass/highpass defaults) after FFmpeg's float stereo downmix
+      ((L+R)/sqrt(2)) instead of FFmpeg's filter graph. Peaks may differ by
+      small amounts on real files from resampling and gapless trimming; the
+      cache moves to waveform-detail-rs-v2.
+    current: implemented; s7-waveform-detail.yaml matches the golden answers exactly.
+  - id: D-52
+    status: proposed
+    source: plan README §2.5 (Dashboard 要対応); src-tauri/crates/plumdeck-backend/src/routes/library.rs
+    summary: >
+      Addition: GET /api/library/attention counts tracks that need work
+      (unanalyzed, failed imports, all-zero timbre, pending embeddings,
+      outdated analysis components) and reports the analysis job fixing
+      them; POST /api/library/attention/{kind} starts the fix (unanalyzed and
+      failed files through the Play import queue, the rest through the
+      analysis job queue). Python had no such routes.
+    current: implemented; unit tests in routes/library.rs.
+  - id: D-53
+    status: proposed
+    source: plan README §2.5 (rekordbox collection import); src-tauri/crates/plumdeck-backend/src/routes/library.rs, routes/ingest.rs
+    summary: >
+      Addition: GET /api/rekordbox/unregistered lists rekordbox collection
+      tracks whose files exist but are not in plumdeck (available false
+      without rekordbox); POST /api/rekordbox/unregistered/import imports all
+      or the selected ones through the Play import queue with origin
+      "rekordbox". Those tracks take BPM, grid and key from rekordbox even
+      when the rekordbox_key_source setting is off. master.db is only read.
+    current: implemented.

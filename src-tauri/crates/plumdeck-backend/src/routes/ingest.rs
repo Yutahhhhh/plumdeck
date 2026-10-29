@@ -126,11 +126,18 @@ fn strings(value: &Value) -> Option<Vec<String>> {
 
 /// `process_track_ingestion` with `save_to_db`: `Ok(None)` when unchanged.
 fn ingest_track(state: &AppState, filepath: &str, force: bool, save: bool, on_progress: &mut dyn FnMut(Value)) -> Result<Option<Value>, String> {
+    ingest_track_with(state, filepath, force, save, false, on_progress)
+}
+
+/// `rekordbox_key`: take the key from rekordbox even when the
+/// `rekordbox_key_source` setting is off (tracks imported from rekordbox's
+/// collection take BPM, grid and key from rekordbox).
+fn ingest_track_with(state: &AppState, filepath: &str, force: bool, save: bool, rekordbox_key: bool, on_progress: &mut dyn FnMut(Value)) -> Result<Option<Value>, String> {
     on_progress(json!({"stage": "checking", "label": "登録済み情報・音源の更新を確認しています"}));
     let lrc = PathBuf::from(filepath).with_extension("lrc");
     let lyrics = std::fs::read_to_string(&lrc).ok().filter(|t| !t.is_empty());
     let conn = state.db.lease().map_err(|e| e.to_string())?;
-    let keys = analysis::key_source_enabled(&conn);
+    let keys = rekordbox_key || analysis::key_source_enabled(&conn);
     let existing: Option<(i64, Option<String>, Option<String>, Option<String>, Option<f32>)> = conn
         .query_row("SELECT id, title, artist, album, duration FROM tracks WHERE filepath=? LIMIT 1", [filepath], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
         .optional()
@@ -570,6 +577,9 @@ fn fingerprint(path: &str) -> String {
 
 // ------------------------------------------------------------------ Play imports
 
+/// `import_batches.origin` of imports from rekordbox's collection.
+pub const REKORDBOX_ORIGIN: &str = "rekordbox";
+
 fn batch(state: &AppState, conn: &plumdeck_db::duckdb::Connection, id: &str) -> Result<Option<Value>, String> {
     let rows = json_rows(conn, "SELECT * FROM import_batches WHERE id=?", vec![Db::Text(id.into())]).map_err(|e| e.to_string())?;
     let Some(row) = rows.into_iter().next() else { return Ok(None) };
@@ -668,6 +678,29 @@ pub async fn create_play_import(State(state): State<AppState>, headers: HeaderMa
     let target_id = payload["target"]["id"].as_i64();
     let origin = payload["origin"].as_str().unwrap_or("native_file_drop").to_owned();
     let profile = payload["analysis_profile"].as_str().unwrap_or("auto").to_owned();
+    let request = ImportRequest { request_id, paths, kind, target_id, origin, profile };
+    match start_import(&state, request).await {
+        Ok(value) => (axum::http::StatusCode::ACCEPTED, PyJson(to_py(&value))).into_response(),
+        Err(Ok(message)) => http(409, message),
+        Err(Err(response)) => response,
+    }
+}
+
+/// One Play import request (the shared import queue: drops, the file picker,
+/// the Dashboard's attention fixes and rekordbox imports).
+pub struct ImportRequest {
+    pub request_id: String,
+    pub paths: Vec<String>,
+    pub kind: String,
+    pub target_id: Option<i64>,
+    pub origin: String,
+    pub profile: String,
+}
+
+/// Records a batch (or returns the one with the same request id) and starts
+/// it. `Err(Ok(message))` is a 409 for the caller to word.
+pub async fn start_import(state: &AppState, request: ImportRequest) -> Result<Value, Result<String, Response>> {
+    let ImportRequest { request_id, paths, kind, target_id, origin, profile } = request;
     let worker = state.clone();
     let result = tokio::task::spawn_blocking(move || -> Result<Value, String> {
         let conn = worker.db.lease().map_err(|e| e.to_string())?;
@@ -725,10 +758,10 @@ pub async fn create_play_import(State(state): State<AppState>, headers: HeaderMa
             if ["queued", "paused"].contains(&value["state"].as_str().unwrap_or("")) {
                 spawn_batch(state.clone(), value["id"].as_str().unwrap_or("").to_owned());
             }
-            (axum::http::StatusCode::ACCEPTED, PyJson(to_py(&value))).into_response()
+            Ok(value)
         }
-        Ok(Err(message)) => http(409, message),
-        Err(error) => server_error(&error),
+        Ok(Err(message)) => Err(Ok(message)),
+        Err(error) => Err(Err(server_error(&error))),
     }
 }
 
@@ -857,6 +890,7 @@ fn process_batch(state: &AppState, batch_id: &str) -> Result<(), String> {
         return Ok(());
     }
     let clock_time = || state.clock.now_naive();
+    let from_rekordbox = current["origin"].as_str() == Some(REKORDBOX_ORIGIN);
     state.db.write(|c| c.execute("UPDATE import_batches SET state='processing',updated_at=? WHERE id=?", params_from_iter([ts(clock_time()), Db::Text(batch_id.into())])).map(|_| ()).map_err(Into::into)).map_err(db)?;
     for item in current["items"].as_array().cloned().unwrap_or_default() {
         let flags: Option<(bool, bool)> = state.db.lease().map_err(db)?.query_row("SELECT paused,cancel_requested FROM import_batches WHERE id=?", [batch_id], |r| Ok((r.get(0)?, r.get(1)?))).optional().map_err(|e| e.to_string())?;
@@ -905,7 +939,7 @@ fn process_batch(state: &AppState, batch_id: &str) -> Result<(), String> {
             drop(conn);
             if !reused {
                 state.db.write(|c| c.execute("UPDATE import_items SET state='analyzing' WHERE id=?", params_from_iter([Db::Text(item_id.clone())])).map(|_| ()).map_err(Into::into)).map_err(db)?;
-                let result = ingest_track(state, &path, track.is_some(), false, &mut report)?.ok_or("解析に必要な情報（BPM・長さ・特徴量・ビートなど）が不足しています")?;
+                let result = ingest_track_with(state, &path, track.is_some(), false, from_rekordbox, &mut report)?.ok_or("解析に必要な情報（BPM・長さ・特徴量・ビートなど）が不足しています")?;
                 if !completed_result(&result) {
                     return Err("解析に必要な情報（BPM・長さ・特徴量・ビートなど）が不足しています".into());
                 }

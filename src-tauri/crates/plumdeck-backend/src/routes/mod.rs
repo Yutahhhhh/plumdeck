@@ -9,6 +9,7 @@ pub mod file_tags;
 pub mod genres;
 pub mod ingest;
 pub mod junction;
+pub mod library;
 pub mod lyrics;
 pub mod mcp;
 pub mod media;
@@ -34,6 +35,10 @@ pub fn api() -> Router<AppState> {
     Router::new()
         .route("/api/settings", get(settings::get_settings).post(settings::update_setting))
         .route("/api/dashboard", get(dashboard::get_dashboard))
+        .route("/api/library/attention", get(library::attention))
+        .route("/api/library/attention/{kind}", post(library::fix_attention))
+        .route("/api/rekordbox/unregistered", get(library::rekordbox_unregistered))
+        .route("/api/rekordbox/unregistered/import", post(library::import_rekordbox_unregistered))
         .route("/api/system/save-file", post(dashboard::save_file))
         .route("/api/system/reveal-file", post(dashboard::reveal_file))
         .route("/api/tracks", get(tracks::get_tracks))

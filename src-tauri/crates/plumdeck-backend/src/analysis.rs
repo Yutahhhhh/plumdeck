@@ -32,16 +32,21 @@ const PERSISTED_KEYS: [&str; 9] = ["analysis_components", "playback_grid", "play
 
 /// Component versions counted as current: this analyzer's, and Python's
 /// (rows analysed before the switch are not re-analysed).
-fn current_version(feature: &str, version: Option<&str>) -> bool {
-    let Some(version) = version else { return false };
+/// Component versions that count as current (older analyzers whose output
+/// is still compatible included).
+pub fn current_versions(feature: &str) -> &'static [&'static str] {
     match feature {
-        "rhythm" => ["rust-attacks-v1", "rhythm-attacks-v4", "numpy-attacks-v2", "librosa-attacks-v2"].contains(&version),
-        "key" => ["rust-chroma-v1", "key-v1", "librosa-key-v1"].contains(&version),
-        "timbre" => ["rust-timbre-v1", "timbre-v1", "librosa-timbre-v1"].contains(&version),
-        "waveform" => version == "waveform-v1",
-        "embedding" => version == "musicnn-16khz-v1",
-        _ => false,
+        "rhythm" => &["rust-attacks-v1", "rhythm-attacks-v4", "numpy-attacks-v2", "librosa-attacks-v2"],
+        "key" => &["rust-chroma-v1", "key-v1", "librosa-key-v1"],
+        "timbre" => &["rust-timbre-v1", "timbre-v1", "librosa-timbre-v1"],
+        "waveform" => &["waveform-v1"],
+        "embedding" => &["musicnn-16khz-v1"],
+        _ => &[],
     }
+}
+
+fn current_version(feature: &str, version: Option<&str>) -> bool {
+    version.is_some_and(|version| current_versions(feature).contains(&version))
 }
 
 pub fn ts(at: NaiveDateTime) -> Db {
