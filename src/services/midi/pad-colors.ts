@@ -13,8 +13,11 @@ export const CUE_COLORS = ["#00df80","#ffe052","#ff923a","#ff435a","#ed64d5","#a
 // filters yellow, modulation magenta/cyan, dirt orange/red, noise white.
 const FX_COLORS:Record<string,string>={echo:"#448aff",lowcutecho:"#448aff",mtdelay:"#448aff",spiral:"#40cfff",reverb:"#a878ff",flanger:"#40cfff",enigmajet:"#40cfff",phaser:"#ed64d5",
   filter:"#ffe052",moogladder4filter:"#ffe052",autopan:"#00df80",tremolo:"#00df80",roll:"#00df80",sliproll:"#00df80",bitcrusher:"#ff923a",distortion:"#ff435a",pitchshift:"#ed64d5",whitenoise:"#ffffff"};
+/** Hot cue colour: the cue's own colour, else the slot's default. The one
+ * source for pads, waveform markers and controller LEDs. */
+export function hotCueColor(slot:number,custom?:string|null):string { return custom && /^#[0-9a-f]{6}$/i.test(custom)?custom:CUE_COLORS[slot&7]; }
 export function padColor(mode:number,slot:number,custom?:string|null,capabilities:readonly string[]=[]):string {
-  if(mode===0) return custom && /^#[0-9a-f]{6}$/i.test(custom)?custom:CUE_COLORS[slot&7];
+  if(mode===0) return hotCueColor(slot,custom);
   if(mode===1 || mode===5) return FX_COLORS[padPreset(mode,slot,capabilities).effect] ?? "#448aff";
   return mode===3?"#ed64d5":mode===6?"#ff923a":mode===2?"#448aff":mode===4?"#00df80":"#40cfff";
 }

@@ -53,7 +53,7 @@ jobs:
       - name: Manual updater state and restart tests
         run: node --experimental-strip-types --test src/services/update-controller.test.mjs
       - name: Play drop routing and waveform manifest compatibility tests
-        run: node --experimental-strip-types --test src/services/deck-drop.test.mjs src/services/play-drag-routing.test.mjs src/services/waveform/repository.test.mjs
+        run: node --experimental-strip-types --test src/services/deck-drop.test.mjs src/services/play-drag-routing.test.mjs src/services/waveform/repository.test.mjs src/services/waveform/three-band.test.mjs
       - name: Edited tempo boundaries and cue persistence
         run: node --experimental-strip-types --test native/dj-engine-host/tests-node/beat-grid-math.test.ts native/dj-engine-host/tests-node/performance-cue-metadata.test.ts
       - name: Waveform backspin detection and JOG weight braking

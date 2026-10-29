@@ -55,8 +55,8 @@ export function MiniPlayer({
       >
       </div>
 
-      <Waveform 
-        metadata={metadata} 
+      <Waveform
+        trackId={Number.isSafeInteger(track?.id) ? track.id : null}
         progress={progress} 
         duration={duration} 
         onSeek={onSeek} 

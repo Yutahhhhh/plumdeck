@@ -9,7 +9,10 @@ import { JunctionInputDeck } from "./JunctionInputDeck";
 import { JunctionTurnBar } from "./JunctionTurnBar";
 import { TAIL_LOCK_TEXT } from "@/services/junction/turn-state";
 import { BeatFxPanel } from "./BeatFxPanel";
-import { callMemoryCue, memoryAction } from "@/services/dj-engine/memory-cues";
+import { callMemoryCue, invalidateMemoryCues, memoryAction, memoryCues, migrateLegacyMemoryCues } from "@/services/dj-engine/memory-cues";
+import { assetIdentity } from "@/services/junction/asset-resolver";
+import { useRekordboxTrack } from "./useThreeBand";
+import { resetWaveformZoom, stepWaveformZoom, useWaveformZoom, ZOOM_LEVELS } from "./waveform-zoom";
 import { jogWeight } from "@/services/dj-engine/jog-weight";
 import { sampler } from "@/services/dj-engine/sampler";
 import "./sampler.css";
@@ -91,6 +94,15 @@ function restoredHistory(): [DeckId, HistoryRuntime][] {
 export function PlayWorkspace() {
   const { status, state, error, busy, client, start, stop, connect } = useDjEngine();
   const preferences = usePlayPreferences();
+  const zoomSeconds = useWaveformZoom();
+  // MEMORY CUEs live in the database; move what the old build kept locally once.
+  useEffect(() => { void migrateLegacyMemoryCues().catch(() => undefined); }, []);
+  const [memoryRevision, setMemoryRevision] = useState(0);
+  useEffect(() => {
+    const changed = () => setMemoryRevision((value) => value + 1);
+    window.addEventListener("plumdeck:memory-cues", changed);
+    return () => window.removeEventListener("plumdeck:memory-cues", changed);
+  }, []);
   useEffect(() => { const timer = setInterval(() => void sampler.poll(), 250); return () => { clearInterval(timer); }; }, []);
   const [deckCount, setDeckCount] = useState<2 | 4>(() => localStorage.getItem("plumdeck.deckCount") === "4" ? 4 : 2);
   const [expandedPair,setExpandedPair]=useState<'AB'|'CD'|null>(null);
@@ -450,6 +462,7 @@ export function PlayWorkspace() {
 
   const importRekordboxCues = async () => {
     const result = await performanceMetadataService.importAllRekordboxCues();
+    invalidateMemoryCues();
     setTrackMetadata({});
     setCueRevision(value => value + 1);
     const ids = [...new Set(DECK_IDS.map(id => (localTrackId(client.getState().snapshot?.decks[id].track) ?? -1)).filter(id => Number.isSafeInteger(id) && id > 0))];
@@ -747,6 +760,14 @@ export function PlayWorkspace() {
     if (command.phase === "begin") setCommandError(null);
     return client.scratch(deck, command.phase, command.positionMs, command.gestureId, command.capturedAt, command.keepalive);
   }, [client]);
+  const rekordboxDecks: Record<DeckId, ReturnType<typeof useRekordboxTrack>> = {
+    A: useRekordboxTrack(localTrackId(snapshot?.decks.A?.track)),
+    B: useRekordboxTrack(localTrackId(snapshot?.decks.B?.track)),
+    C: useRekordboxTrack(localTrackId(snapshot?.decks.C?.track)),
+    D: useRekordboxTrack(localTrackId(snapshot?.decks.D?.track)),
+  };
+  void memoryRevision;
+  const deckMemoryCues = (id: DeckId) => { const track = snapshot?.decks[id]?.track; return track ? memoryCues(assetIdentity(track), track.durationMs) : undefined; };
   const waveform = (id: DeckId, layout: WaveformLayout) => {
     const deck = displayedDeck(id);
     return <DeckWaveform key={id} label={id} assetId={deck?.track?.assetId} remoteWaveform={deck?.track?.waveform} trackId={localTrackId(deck?.track)}
@@ -755,7 +776,8 @@ export function PlayWorkspace() {
       beatTimesMs={deck?.track?.beatTimesMs} beatNumbers={deck?.track?.beatNumbers}
       gridAvailable={Boolean(deck?.track?.beatgridOffsetMs !== undefined || deck?.track?.beatTimesMs?.length)}
       onGridShift={gridEdit?.deck === id && !gridSaving.current ? (deltaMs) => setGridShift(old => ({ sequence: (old?.sequence ?? 0) + 1, deltaMs })) : undefined}
-      hotCues={deck?.hotCues} scratching={deck?.scratching} loopRegion={deck?.loopRegion} pendingLoopInMs={pendingLoopIn[id]}
+      hotCues={deck?.hotCues} cueColors={cueColorsFor(id)} memoryCues={deckMemoryCues(id)} phrases={rekordboxDecks[id].phrases} phraseLabels={preferences.phraseLabels}
+      scratching={deck?.scratching} loopRegion={deck?.loopRegion} pendingLoopInMs={pendingLoopIn[id]}
       onSeek={connected && !tailLock(id) ? (ms) => seekAbsolute(id, ms) : undefined}
       onScratch={connected && !tailLock(id) ? (command) => scratch(id, command) : undefined}
       onBackspin={connected && !tailLock(id) ? (release) => client.backspin(id, release.gestureId, release.positionMs, release.velocity, jogWeight(id),
@@ -924,6 +946,7 @@ export function PlayWorkspace() {
     tailLock={tailLock(id)}
     cueColors={cueColorsFor(id)}
     pendingLoad={pendingLoads[id]}
+    phrases={rekordboxDecks[id].phrases}
     onGridEdit={() => openGridEditor(id)}
     onGridClose={closeGridEditor}
     gridEditor={gridEdit?.deck === id && snapshot?.decks[id]?.track?.trackId === String(gridEdit.trackId) ? <BeatGridEditor key={`${id}:${gridEdit.trackId}`} trackId={gridEdit.trackId} durationMs={snapshot.decks[id].track!.durationMs} positionMs={snapshot.decks[id].positionMs} initialGrid={gridEdit.initialGrid} hasGrid={Boolean(gridEdit.metadata.beat_grid)} shiftRequest={gridShift} playing={snapshot.decks[id].status === "playing"} onTogglePlay={() => togglePlay(id)} onAnalyze={(force) => performanceMetadataService.analyzeGrid(gridEdit.trackId, force)} onRekordbox={() => performanceMetadataService.rekordboxGrid(gridEdit.trackId)} disabled={!connected} onPreview={setGridPreview} onSave={saveGrid} onClose={closeGridEditor} /> : undefined}
@@ -1013,11 +1036,19 @@ export function PlayWorkspace() {
         <label>チャンネルフェーダーのカーブ <select aria-label="チャンネルフェーダーのカーブ" value={preferences.faderCurve} onChange={event => setPlayPreference("faderCurve", readFaderCurve(event.target.value))}>
           {FADER_CURVES.map(curve => <option key={curve} value={curve}>{FADER_CURVE_LABELS[curve]}</option>)}</select></label>
         <label>キー表記 <select aria-label="キー表記" value={preferences.keyNotation} onChange={event => setPlayPreference("keyNotation", readKeyNotation(event.target.value))}>
-          <option value="camelot">Camelot（8A）</option><option value="classic">Classic（Am）</option></select></label>
+          <option value="camelot">Alphanumeric（8A）</option><option value="classic">Classic（Am）</option></select></label>
         <label>キーボード配列 <select aria-label="キーボード配列" value={preferences.keyboard} onChange={event => setPlayPreference("keyboard", readShortcutPreset(event.target.value))}>
           {SHORTCUT_PRESETS.map(preset => <option key={preset.id} value={preset.id}>{preset.label}</option>)}</select></label>
+        <label title="rekordbox のフレーズ解析がある曲で、波形の下の帯に名前を出します">フレーズ名 <select aria-label="フレーズ名の表示" value={preferences.phraseLabels} onChange={event => setPlayPreference("phraseLabels", event.target.value === "always" ? "always" : "hover")}>
+          <option value="hover">波形にカーソルがあるとき</option><option value="always">常に表示</option></select></label>
         <label title="音より波形が先行する場合は増やします。">波形の表示遅延（ms） <input type="number" min="-50" max="500" step="1" value={waveDelay} onChange={event=>{const value=Math.max(-50,Math.min(500,Number(event.target.value)||0));setWaveDelay(value);localStorage.setItem('plumdeck.waveDelay',String(value));}} /></label>
       </div></details>
+      <div className="dj-segmented dj-wave-zoom-group" role="group" aria-label="波形ズーム（全デッキ共通）">
+        <button type="button" title="ズームアウト（全デッキ共通）" aria-label="ズームアウト" disabled={zoomSeconds >= ZOOM_LEVELS[ZOOM_LEVELS.length - 1]} onClick={() => stepWaveformZoom(-1)}>−</button>
+        <button type="button" className="dj-wave-zoom-value dj-num" title="表示範囲（実時間の秒数。テンポに合わせて伸縮）。クリックで既定に戻す" onClick={resetWaveformZoom}>{zoomSeconds < 1 ? `${zoomSeconds * 1000}ms` : `${zoomSeconds}s`}</button>
+        <button type="button" title="ズームイン（全デッキ共通）" aria-label="ズームイン" disabled={zoomSeconds <= ZOOM_LEVELS[0]} onClick={() => stepWaveformZoom(1)}>+</button>
+        <button type="button" title="ズームを既定（8 秒）に戻す" onClick={resetWaveformZoom}>RST</button>
+      </div>
       <div className="dj-segmented" aria-label="波形レイアウト">{(["horizontal", "vertical"] as const).map((layout) => <button key={layout} title={layout === "horizontal" ? "横波形（デッキ上部に重ねて表示）" : "縦波形（デッキ中央に並べて表示）"} aria-label={layout === "horizontal" ? "横波形" : "縦波形（デッキ中央）"} aria-pressed={waveformLayout === layout} className={waveformLayout === layout ? "is-on" : ""} onClick={() => { setWaveformLayout(layout); localStorage.setItem("plumdeck.waveformLayout", layout); }}>{layout === "horizontal" ? <Rows3 /> : <Columns3 />}</button>)}</div>
       <div className="dj-engine-status"><i className={connected && snapshot?.audio.applied ? "is-connected" : ""} /><span>{connected ? snapshot?.engine.simulated ? "SIMULATOR · 音声出力なし" : snapshot?.audio.applied ? "AUDIO CONNECTED" : "音声出力を確認中" : busy ? "音声エンジンを起動中…" : "AUDIO OFFLINE"}</span></div>
       {connected && metersSupported && <MasterMeter meter={state.meters?.master} />}

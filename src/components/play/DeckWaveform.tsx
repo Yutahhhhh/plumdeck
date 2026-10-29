@@ -6,12 +6,14 @@ import { assetWaveform } from '@/services/junction/asset-resolver';
 import type { AssetWaveform } from '@/types/dj-engine';
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import { useTrackVisuals } from "./useTrackVisuals";
-import { useWaveformDetail } from "./useWaveformDetail";
+import { useThreeBand } from "./useThreeBand";
+import { drawThreeBand, fromBandPeaks, PHRASE_COLORS, type Phrase } from "@/services/waveform/three-band";
+import { laneSpanMs, stepWaveformZoom, useWaveformZoom } from "./waveform-zoom";
+import type { MemoryCue } from "@/services/dj-engine/memory-cues";
 import { createWaveformRenderLoop } from "./waveform-render-loop";
 import { waveformPlayhead, type SeekPreview } from "./waveform-playhead";
 import { barNumbers, lowerBeat } from "./beat-grid-math";
-import { CUE_COLORS } from "./PerformancePads";
+import { hotCueColor } from "@/services/midi/pad-colors";
 import type { LoopRegion, ScratchPhase } from "@/types/dj-engine";
 
 export type WaveformLayout = "horizontal" | "vertical";
@@ -35,15 +37,17 @@ type Props = {
   /** Manual loop IN waiting for OUT: drawn as a dotted line. */
   pendingLoopInMs?: number | null;
   /** 曲頭より前に置いた無音の助走（ms）。0 なら助走なし。 */
+  /** Hot cue colours by slot (the pads' source). */
+  cueColors?: (string | null)[];
+  memoryCues?: readonly MemoryCue[];
+  /** rekordbox phrases on the playback timeline. */
+  phrases?: readonly Phrase[];
+  /** Phrase names: always, or while the pointer is over the lane. */
+  phraseLabels?: "always" | "hover";
 };
 const NO_CUES: (number | null)[] = [];
-// rekordbox の 3 バンド波形色。低域＝青、中域＝アンバー、高域＝白。
-const WAVE_LOW = "#1a7bf0", WAVE_MID = "#ffa02c", WAVE_HIGH = "#e9f1ff";
-// バックエンドが返すのは帯域通過後の「ピーク」なので、そのまま高さにすると
-// 音楽的にはずっと小さいはずの高域が中央を白く埋めてしまう。音楽のスペクトル
-// は高い方へ傾いて減衰するので、その傾きぶんを表示側で戻して rekordbox と
-// 同じ見た目の比率（青が輪郭・橙が胴・白が芯）にする。
-const WAVE_TILT_MID = 0.85, WAVE_TILT_HIGH = 0.5;
+const NO_MEMORY: readonly MemoryCue[] = [];
+const NO_PHRASES: readonly Phrase[] = [];
 
 type DragGesture = {
   lastMotionAt: number; layout: WaveformLayout; pointer: number; coordinate: number; origin: number; moved: boolean;
@@ -54,7 +58,7 @@ type DragGesture = {
   /** 0 より大きければ、このジェスチャーはスクラッチではなくプリロール調整に切り替わっている。 */
 };
 
-export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform, trackId, positionMs, durationMs, layout, side, color, onSeek, mode = "overview", bpm, beatgridOffsetMs = 0, beatsPerBar = 4, hotCues = NO_CUES, label, compact, playing = false, rate = 1, beatTimesMs, beatNumbers, gridAvailable = true, onGridShift, onScratch, onScratchError, onBackspin, onScratchGrab, scratching = false, loopRegion = null, pendingLoopInMs = null }: Props) {
+export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform, trackId, positionMs, durationMs, layout, side, color, onSeek, mode = "overview", bpm, beatgridOffsetMs = 0, beatsPerBar = 4, hotCues = NO_CUES, label, compact, playing = false, rate = 1, beatTimesMs, beatNumbers, gridAvailable = true, onGridShift, onScratch, onScratchError, onBackspin, onScratchGrab, scratching = false, loopRegion = null, pendingLoopInMs = null, cueColors, memoryCues = NO_MEMORY, phrases = NO_PHRASES, phraseLabels = "hover" }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sizeRef = useRef({ width: 0, height: 0 });
   const paintRef = useRef<() => void>(() => undefined);
@@ -62,20 +66,19 @@ export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform
   const visibleRef = useRef(true);
   const invalidateRef = useRef<() => void>(() => undefined);
   const overviewRaster = useRef<{ key: unknown[]; canvas: HTMLCanvasElement } | null>(null);
-  const envelopes = useRef({ low: new Float32Array(0), mid: new Float32Array(0), high: new Float32Array(0) });
-  const { data, loading } = useTrackVisuals(mode === "overview" ? trackId : null);
-  const detail = useWaveformDetail(mode === "scroll" || mode === "overview" ? trackId : null, compact ? 400 : undefined);
-  const [zoomSeconds, setZoomSeconds] = useState(8);
+  const hovering = useRef(false);
+  const local = useThreeBand(trackId, mode === "scroll" ? "detail" : "overview");
+  const zoomSeconds = useWaveformZoom();
   useEffect(() => {
     const zoom = (event: Event) => {
       const action = (event as CustomEvent<{ control: string; value: number }>).detail;
       if (action.control !== "zoom" || !action.value) return;
-      const levels = [0.01, 0.02, 0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8, 16, 32];
-      setZoomSeconds(current => levels[Math.max(0, Math.min(levels.length - 1, levels.indexOf(current) - Math.sign(action.value)))]);
+      stepWaveformZoom(action.value > 0 ? 1 : -1);
     };
-    if (mode === "scroll") window.addEventListener("plumdeck:controller-library", zoom);
+    // One listener is enough for the shared zoom: deck A's lane takes it.
+    if (mode === "scroll" && label === "A") window.addEventListener("plumdeck:controller-library", zoom);
     return () => window.removeEventListener("plumdeck:controller-library", zoom);
-  }, [mode]);
+  }, [mode, label]);
   const bars = useMemo(() => barNumbers(beatTimesMs?.length ?? 0, beatNumbers, beatsPerBar), [beatTimesMs, beatNumbers, beatsPerBar]);
   const [dragging, setDragging] = useState(false);
   const drag = useRef<DragGesture | null>(null);
@@ -86,50 +89,15 @@ export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform
   const telemetry = useRef({ position: positionMs, receivedAt: performance.now() });
   const pendingSeek = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSeekAt = useRef(0);
-  const span = mode === "scroll" ? zoomSeconds * 1000 : durationMs;
+  // Tempo-linked: a lane shows the same real time at any tempo, so synced
+  // decks draw their beats at the same spacing.
+  const span = mode === "scroll" ? laneSpanMs(zoomSeconds, rate) : durationMs;
   const [physicalPixels,setPhysicalPixels]=useState(2000);
   const nativeWaveform = useNativeWaveform(label, positionMs, span, mode === "overview", physicalPixels);
   useEffect(()=>{const size=sizeRef.current;setPhysicalPixels((layout==='vertical'?size.height:size.width)*(window.devicePixelRatio||1));},[layout]);
   const remoteBands = useMemo(() => assetWaveform(remoteWaveform), [remoteWaveform]);
-  const bands = remoteBands ?? detail.data;
-  const peaks = bands ? bands.peaks : mode === "scroll" ? undefined : data?.waveform_peaks;
+  const wave = useMemo(() => remoteBands ? fromBandPeaks(remoteBands) : local.wave, [remoteBands, local.wave]);
   const clamp = (position: number) => Math.max(mode === "scroll" ? -60_000 : 0, Math.min(durationMs, position));
-  // 表示ゲイン。上位 2% に入る高さをレーンの天井付近へ合わせる。基準を最大値
-  // ではなく分位点に置くのは、単発のクリック 1 本で曲全体が縮むのを避けるため。
-  // 持ち上げる側だけを許し（下限 1）、大きいマスターを縮めることはしない。
-  // 分位点をこれ以上下げると、現代のマスターでは頭打ちが増えて抑揚が消える。
-  // peak はビンのピークを描くレーン用、summary は全体波形の RMS 用。描く統計
-  // ごとに基準が違うので、同じ規則をそれぞれの分布に当てて別々に求める。
-  const gain = useMemo(() => {
-    if (!bands) return { peak: 1, summary: 1 };
-    const peakLevels = new Uint32Array(256), summaryLevels = new Uint32Array(256);
-    const group = 45; // ≒150ms。全体波形で 1 列に収まるビン数の目安。
-    let lowSquares = 0, midSquares = 0, highSquares = 0, filled = 0, groups = 0;
-    for (let index = 0; index < bands.low.length; index++) {
-      const lowBin = bands.low[index], midBin = bands.mid[index] * WAVE_TILT_MID, highBin = bands.high[index] * WAVE_TILT_HIGH;
-      const loudest = Math.max(lowBin, midBin, highBin);
-      peakLevels[loudest < 0 ? 0 : loudest > 255 ? 255 : loudest | 0]++;
-      lowSquares += lowBin * lowBin; midSquares += midBin * midBin; highSquares += highBin * highBin;
-      if (++filled === group) {
-        const rms = Math.sqrt(Math.max(lowSquares, midSquares, highSquares) / group);
-        summaryLevels[rms > 255 ? 255 : rms | 0]++; groups++;
-        lowSquares = midSquares = highSquares = filled = 0;
-      }
-    }
-    const ceiling = (levels: Uint32Array, total: number) => {
-      let remaining = Math.floor(total * 0.02), value = 255;
-      for (; value > 1; value--) {
-        remaining -= levels[value];
-        if (remaining < 0) break;
-      }
-      return value;
-    };
-    const headroom = bands.amplitude_scale * 0.95;
-    return {
-      peak: Math.min(3, Math.max(1, headroom / ceiling(peakLevels, bands.low.length))),
-      summary: groups ? Math.min(6, Math.max(1, headroom / ceiling(summaryLevels, groups))) : 1,
-    };
-  }, [bands]);
 
   useEffect(() => {
     const now = performance.now();
@@ -184,93 +152,15 @@ export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform
       else { ctx.moveTo(0, axis); ctx.lineTo(width, axis); }
       ctx.stroke();
 
-      const rasterKey = [nativeWaveform.tiles, peaks, bands, width, height, ratio, layout, side, compact, color, gain, durationMs];
+      const tiles = wave ? [] : nativeWaveform.tiles;
+      const rasterKey = [tiles, wave, width, height, ratio, layout, side, compact, durationMs];
       const cached = mode === "overview" && overviewRaster.current?.key.every((value, i) => value === rasterKey[i]);
       if (cached) ctx.drawImage(overviewRaster.current!.canvas, 0, 0, width, height);
-      if (nativeWaveform.tiles.length && !cached) waveformRenderer.draw(ctx, nativeWaveform.tiles, startMs, span, width, height, vertical, side);
-      if (!nativeWaveform.tiles.length && peaks?.length && !cached) {
-        const density = bands ? bands.bins_per_second / 1000 : peaks.length / durationMs;
-        const scale = bands ? bands.amplitude_scale : 1;
-        const columns = Math.max(1, Math.ceil(length * ratio));
-        if (envelopes.current.low.length < columns) {
-          // Grow in chunks and retain capacity when shrinking a live window.
-          const capacity = Math.ceil(columns / 256) * 256;
-          envelopes.current = { low: new Float32Array(capacity), mid: new Float32Array(capacity), high: new Float32Array(capacity) };
-        }
-        const { low, mid, high } = envelopes.current;
-        low.fill(0, 0, columns); mid.fill(0, 0, columns); high.fill(0, 0, columns);
-        // Keep short overview strips filled while reserving proportional
-        // headroom for the beat ruler in larger detail lanes.
-        const maxSize = Math.max(0, breadth - (compact ? 2 : Math.min(24, breadth * 0.2))) * (vertical ? 1 : 0.5);
-        const lowValues = bands ? bands.low : peaks, midValues = bands?.mid, highValues = bands?.high;
-        const bins = lowValues.length, step = span / columns;
-        const perColumn = step * density;
-        // 1 列に 1 ビンも入らないズーム域では、最大値だけ拾うと稜線が階段になる。
-        // そこは隣接ビンを線形補間して、rekordbox のように滑らかな輪郭にする。
-        const interpolate = perColumn < 1;
-        // 逆に 1 列が数十ビンをまたぐ全体波形では、最大値は「曲のどこかで一度
-        // 鳴った音」に収束し、どの帯域も飽和して抑揚も色の差も消える。そこは
-        // 実効値（RMS）に切り替えて、曲の起伏と帯域バランスが出るようにする。
-        const summarise = perColumn > 8;
-        const level = summarise ? gain.summary : gain.peak;
-        for (let index = 0; index < columns; index++) {
-          const time = startMs + index * step;
-          if (time < 0 || time >= durationMs) continue;
-          let lowBand = 0, midBand = 0, highBand = 0;
-          if (interpolate) {
-            const exact = time * density;
-            const first = Math.min(bins - 1, Math.max(0, Math.floor(exact)));
-            const next = Math.min(bins - 1, first + 1), blend = exact - first;
-            lowBand = lowValues[first] + (lowValues[next] - lowValues[first]) * blend;
-            if (midValues && highValues) {
-              midBand = midValues[first] + (midValues[next] - midValues[first]) * blend;
-              highBand = highValues[first] + (highValues[next] - highValues[first]) * blend;
-            }
-          } else {
-            const first = Math.max(0, Math.floor(time * density));
-            const end = Math.min(bins, Math.max(first + 1, Math.ceil((time + step) * density)));
-            for (let bin = first; bin < end; bin++) {
-              const lowBin = lowValues[bin], midBin = midValues?.[bin] ?? 0, highBin = highValues?.[bin] ?? 0;
-              if (summarise) { lowBand += lowBin * lowBin; midBand += midBin * midBin; highBand += highBin * highBin; }
-              else {
-                if (lowBin > lowBand) lowBand = lowBin;
-                if (midBin > midBand) midBand = midBin;
-                if (highBin > highBand) highBand = highBin;
-              }
-            }
-            if (summarise) {
-              const count = end - first;
-              lowBand = Math.sqrt(lowBand / count); midBand = Math.sqrt(midBand / count); highBand = Math.sqrt(highBand / count);
-            }
-          }
-          low[index] = Math.min(1, lowBand / scale * level) * maxSize;
-          mid[index] = Math.min(1, midBand / scale * level * WAVE_TILT_MID) * maxSize;
-          high[index] = Math.min(1, highBand / scale * level * WAVE_TILT_HIGH) * maxSize;
-        }
-        const fillBand = (values: Float32Array, fill: string) => {
-          ctx.fillStyle = fill; ctx.beginPath();
-          const unit = length / columns;
-          // 列ごとに垂直な辺で立ち上げる。隣の列と斜めに結ぶとキックの立ち上がりが
-          // 鈍り、rekordbox のような切れ味のある輪郭にならない。
-          const edge = (index: number, sign: number, back: boolean) => {
-            const from = index * unit, size = values[index] * sign;
-            const head = back ? from + unit : from, tail = back ? from : from + unit;
-            if (vertical) { ctx.lineTo(axis + size, head); ctx.lineTo(axis + size, tail); }
-            else { ctx.lineTo(head, axis + size); ctx.lineTo(tail, axis + size); }
-          };
-          const front = vertical ? (side === "left" ? -1 : 1) : -1;
-          if (vertical) ctx.moveTo(axis, 0); else ctx.moveTo(0, axis);
-          for (let index = 0; index < columns; index++) edge(index, front, false);
-          if (vertical) ctx.lineTo(axis, length);
-          else for (let index = columns - 1; index >= 0; index--) edge(index, 1, true);
-          ctx.closePath(); ctx.fill();
-        };
-        // rekordbox 準拠：低域＝青／中域＝橙／高域＝白を、それぞれ独立した高さで
-        // 重ねる。以前は全帯域の輪郭を帯域比で塗り分けていたので 3 色が同じ
-        // シルエットを共有し、キックもハイハットも同じ形に潰れていた。
-        if (bands) { fillBand(low, WAVE_LOW); fillBand(mid, WAVE_MID); fillBand(high, WAVE_HIGH); }
-        else fillBand(low, color === "cyan" ? WAVE_LOW : "#ffac48");
-      }
+      else if (wave) {
+        // Keep the ruler band of a zoomed lane and the phrase strip free.
+        const reserve = compact ? 2 : (mode === "scroll" ? Math.min(24, breadth * 0.2) : 0) + (phrases.length ? 5 : 0);
+        drawThreeBand(ctx, wave, { startMs, spanMs: span, width, height, vertical, side, style: mode === "scroll" ? "detail" : "overview", reserve, ratio });
+      } else if (tiles.length) waveformRenderer.draw(ctx, tiles, startMs, span, width, height, vertical, side);
       if (mode === "overview" && !cached) {
         const raster = document.createElement("canvas");
         raster.width = pixelWidth; raster.height = pixelHeight;
@@ -378,6 +268,57 @@ export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform
           }
         }
       }
+      // Phrase bands under the waveform (rekordbox colours by family; Fill-in hatched).
+      if (phrases.length && !compact) {
+        const strip = mode === "scroll" ? 5 : 4;
+        const showNames = phraseLabels === "always" || hovering.current;
+        const toOffset = (time: number) => (time - startMs) / span * length;
+        let lastLabelEnd = -Infinity;
+        for (const phrase of phrases) {
+          const from = toOffset(phrase.startMs), to = toOffset(phrase.endMs);
+          if (to < 0 || from > length) continue;
+          const a = Math.max(0, from), b = Math.min(length, to);
+          ctx.fillStyle = PHRASE_COLORS[phrase.kind];
+          if (vertical) ctx.fillRect(side === "left" ? 0 : width - strip, a, strip, Math.max(1, b - a - 1));
+          else ctx.fillRect(a, height - strip, Math.max(1, b - a - 1), strip);
+          if (phrase.fillMs !== null) {
+            const f = Math.max(a, toOffset(phrase.fillMs));
+            ctx.fillStyle = "#00000088";
+            for (let x = f; x < b - 1; x += 4) {
+              if (vertical) ctx.fillRect(side === "left" ? 0 : width - strip, x, strip, 1.5); else ctx.fillRect(x, height - strip, 1.5, strip);
+            }
+          }
+          if (showNames && !vertical && b - a > 18) {
+            ctx.font = "bold 10px ui-sans-serif, system-ui, sans-serif";
+            const text = phrase.label, textWidth = ctx.measureText(text).width;
+            const x = Math.max(a + 2, 2);
+            if (x > lastLabelEnd + 4 && x + textWidth < length) {
+              ctx.fillStyle = "#000000b0"; ctx.fillRect(x - 2, height - strip - 13, textWidth + 4, 12);
+              ctx.fillStyle = PHRASE_COLORS[phrase.kind]; ctx.textBaseline = "alphabetic";
+              ctx.fillText(text, x, height - strip - 3);
+              lastLabelEnd = x + textWidth;
+            }
+          }
+        }
+      }
+      // MEMORY CUEs: red marks at the top edge; memory loops as an amber bar.
+      for (const memory of memoryCues) {
+        const at = (memory.positionMs - startMs) / span * length;
+        if (at < -6 || at > length + 6) continue;
+        if (memory.endMs !== undefined) {
+          const to = Math.min(length, (memory.endMs - startMs) / span * length);
+          ctx.fillStyle = "#f2c94c99";
+          if (vertical) ctx.fillRect(side === "left" ? 0 : width - 3, Math.max(0, at), 3, Math.max(2, to - Math.max(0, at)));
+          else ctx.fillRect(Math.max(0, at), 0, Math.max(2, to - Math.max(0, at)), 3);
+        }
+        ctx.fillStyle = memory.endMs !== undefined ? "#f2c94c" : "#ff4b4b";
+        ctx.beginPath();
+        const mark = compact ? 3 : 5;
+        if (vertical) { const x = side === "left" ? 0 : width; const d = side === "left" ? 1 : -1; ctx.moveTo(x, at - mark); ctx.lineTo(x + d * mark * 1.4, at); ctx.lineTo(x, at + mark); }
+        else { ctx.moveTo(at - mark, 0); ctx.lineTo(at + mark, 0); ctx.lineTo(at, mark * 1.4); }
+        ctx.fill();
+        if (mode === "scroll" && !compact) { ctx.setLineDash([2, 3]); line(at, "#ff4b4b88", 1); ctx.setLineDash([]); }
+      }
       const cueGroups:{at:number;indices:number[]}[]=[];
       hotCues.map((time,index)=>({time,index})).filter(item=>item.time!==null&&item.time>=startMs&&item.time<=startMs+span).sort((a,b)=>a.time!-b.time!).forEach(({time,index})=>{
         const at=(time!-startMs)/span*length,last=cueGroups[cueGroups.length-1];
@@ -386,7 +327,7 @@ export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform
       hotCues.forEach((time, index) => {
         if (time === null || time < startMs || time > startMs + span) return;
         const at = (time - startMs) / span * length;
-        const cueColor = CUE_COLORS[index % CUE_COLORS.length];
+        const cueColor = hotCueColor(index, cueColors?.[index]);
         line(at, cueColor, 1.5);
         const group=cueGroups.find(group=>group.indices[0]===index);if(!group)return;
         const letter = group.indices.length>1?`${String.fromCharCode(65+index)}+${group.indices.length-1}`:String.fromCharCode(65 + index);
@@ -571,14 +512,16 @@ export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform
         releaseDrag.current(true);
         if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
       }}
+      onPointerEnter={() => { hovering.current = true; invalidateRef.current(); }}
+      onPointerLeave={() => { hovering.current = false; invalidateRef.current(); }}
       onLostPointerCapture={() => releaseDrag.current()}
       onPointerCancel={() => releaseDrag.current()} />
     {dragging&&<span className="dj-wave-grip" aria-hidden="true">⋮⋮</span>}
     {label && <span title={hotCues.map((time,i)=>time===null?null:`${String.fromCharCode(65+i)}: ${(time/1000).toFixed(3)}s`).filter(Boolean).join(" / ")} className={cn("dj-wave-label", color === "cyan" ? "dj-blue" : "dj-orange")}>{label}</span>}
-    {mode === "scroll" && <select className="dj-wave-zoom" aria-label={`Deck ${label ?? side} waveform zoom`} title="表示範囲 / 青:低域・橙:中域・白:高域" value={zoomSeconds} onChange={(event) => setZoomSeconds(Number(event.target.value))}>{[0.01, 0.02, 0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8, 16, 32].map((seconds) => <option key={seconds} value={seconds}>{seconds}s</option>)}</select>}
     {nativeWaveform.error&&<button className="dj-wave-retry" onClick={nativeWaveform.retry} title={nativeWaveform.error}>波形を再試行</button>}
-    {!peaks?.length && !nativeWaveform.tiles.length && <span className="dj-wave-empty" style={{ pointerEvents: detail.error ? "auto" : "none" }}>
-      {(mode === "scroll" ? detail.loading : loading) ? "Loading waveform…" : detail.error ? <button onClick={detail.retry} title={detail.error}>詳細波形を再試行</button> : assetId ? "共有音源の波形を準備中" : trackId ? "波形未解析" : compact ? "—" : "No track loaded"}
+    {!wave && !nativeWaveform.tiles.length && <span className="dj-wave-empty" style={{ pointerEvents: local.error ? "auto" : "none" }}>
+      {local.loading ? (compact ? "" : "Loading waveform…") : local.error ? <button onClick={local.retry} title={local.error}>波形を再試行</button> : assetId ? "共有音源の波形を準備中" : trackId ? "波形未解析" : compact ? "—" : "No track loaded"}
     </span>}
+    {mode === "scroll" && wave && !compact && <span className="dj-wave-source" title={wave.source === "rekordbox" ? "rekordbox の解析波形" : "plumdeck の解析波形"}>{wave.source === "rekordbox" ? "RB" : ""}</span>}
   </div>;
 });

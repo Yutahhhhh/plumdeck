@@ -1,7 +1,7 @@
 import { assetIdentity, localTrackId } from '@/services/junction/asset-resolver';
 import { SamplerPads } from "./SamplerPads";
 import { djEngineClient } from "@/services/dj-engine/client";
-import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { getPadSelection, selectPads, subscribePads, PAD_MODE_NAMES } from "@/services/midi/pad-state";
 import { sampler } from "@/services/dj-engine/sampler";
 import { memoryCues, selectedMemoryCue } from "@/services/dj-engine/memory-cues";
@@ -13,6 +13,7 @@ import { DJ_ENGINE_CAPABILITIES } from "@/types/dj-engine";
 import { currentKey, formatKeyDelta, formatLibraryKey, parseKey } from "@/services/dj-engine/musical-key";
 import { usePlayPreferences } from "./play-preferences";
 import { DeckWaveform } from "./DeckWaveform";
+import { barsToNextPhrase, phraseAt, PHRASE_COLORS, type Phrase } from "@/services/waveform/three-band";
 import { artworkUrl, useTrackVisuals } from "./useTrackVisuals";
 import { barNumbers, lowerBeat } from "./beat-grid-math";
 import { availablePadModes, PerformancePads, UNBACKED_PAD_MODES, type PadMode } from "./PerformancePads";
@@ -66,11 +67,13 @@ type Props = {
   cueColors?: (string|null)[];
   /** Title of a load in flight (before the engine reports it). */
   pendingLoad?: string;
+  /** rekordbox phrases of the loaded track (none without rekordbox data). */
+  phrases?: readonly Phrase[];
   /** 曲頭より前に置いた無音の助走。countdown は再生開始待ちの残り時間。 */
   onGridEdit: () => void; onGridClose?: () => void; gridEditor?: ReactNode;
 };
 
-export function SoftwareDeck({ id, deck, channel, active, connected, capability, capabilities, tailLock, onActivate, onToggle, onCue, onSeekAbsolute, onTempo, onKeylock, onSync, onMaster, onUnload, syncLeader, onHotCue, onLoop, onBeatJump, onBeatLoop, onLoopEnable, onQuantize, onPadFx, fxContext, onFxError, onSaveLoop, onLoopIn, onLoopOut, onReloop, onLoopSet, pendingLoopIn, onMemory, onMemoryCall, onKeyShift, onKeySync, onKeyReset, onSlip, onReverse, onBend, savedLoops, onRecallLoop, trackKey, cueColors, pendingLoad, onGridEdit, onGridClose, gridEditor }: Props) {
+export function SoftwareDeck({ id, deck, channel, active, connected, capability, capabilities, tailLock, onActivate, onToggle, onCue, onSeekAbsolute, onTempo, onKeylock, onSync, onMaster, onUnload, syncLeader, onHotCue, onLoop, onBeatJump, onBeatLoop, onLoopEnable, onQuantize, onPadFx, fxContext, onFxError, onSaveLoop, onLoopIn, onLoopOut, onReloop, onLoopSet, pendingLoopIn, onMemory, onMemoryCall, onKeyShift, onKeySync, onKeyReset, onSlip, onReverse, onBend, savedLoops, onRecallLoop, trackKey, cueColors, pendingLoad, phrases, onGridEdit, onGridClose, gridEditor }: Props) {
   const deckDrop = usePlayDeckDrop(`play-deck-controls-${id}`, id);
   const left = id === "A" || id === "C";
   const [autoBeats, setAutoBeats] = useState(4);
@@ -143,7 +146,9 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
   const quantizeReason = unavailable("deck.quantize", "QUANTIZE", Boolean(onQuantize), false);
   const gridReason = unavailable("deck.beatgrid", "GRID EDIT", true);
   const memoryReason = unavailable("deck.transport", "MEMORY CUE", Boolean(onMemory && onMemoryCall));
-  const { keyNotation } = usePlayPreferences();
+  const { keyNotation, phraseLabels } = usePlayPreferences();
+  const phraseNow = phrases?.length ? phraseAt(phrases, position) : null;
+  const phraseBars = phrases?.length ? barsToNextPhrase(phrases, position, { beatTimesMs: deck?.track?.beatTimesMs, bpm: deck?.track?.bpm, beatgridOffsetMs: deck?.track?.beatgridOffsetMs, beatsPerBar: deck?.track?.beatsPerBar }) : null;
   const keyShift = Math.round(deck?.keyShift ?? 0);
   const key = currentKey(trackKey, keyShift, rate, Boolean(deck?.keylock), keyNotation);
   const originalKey = formatLibraryKey(trackKey, keyNotation);
@@ -222,6 +227,9 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
       </div>
       <div className="dj-deck-flags">
         {tailLock && <span className="dj-chip dj-chip--tail" title={tailLock}>残りの曲 · ループのみ</span>}
+        {phraseNow && (phraseNow.current || phraseNow.next) && <span className="dj-chip dj-chip--phrase" style={{ "--phrase-color": PHRASE_COLORS[(phraseNow.current ?? phraseNow.next)!.kind] } as CSSProperties}
+          title={`フレーズ（rekordbox）: ${phraseNow.current?.label ?? "—"}${phraseNow.next ? ` → 次は ${phraseNow.next.label}` : ""}`}>
+          <b>{phraseNow.current?.label ?? "—"}</b>{phraseBars !== null && phraseNow.next ? <i className="dj-num">{phraseBars} BARS</i> : null}</span>}
         <span className="dj-chip dj-chip--state" data-state={stateKind}>{leading ? "MASTER" : deck?.syncEnabled ? `→ ${syncLeader && syncLeader !== id ? syncLeader : "—"}` : status}</span>
         {/* rekordbox のデッキヘッダ：左に KEY SYNC とキー表示、右に BEAT SYNC / MASTER。 */}
         <div className="dj-sync-block" role="group" aria-label={`Deck ${id} SYNC`}>
@@ -244,7 +252,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
       </div>
     </div>
     <div className="dj-overview">
-      <DeckWaveform assetId={deck?.track?.assetId} remoteWaveform={deck?.track?.waveform} trackId={trackId} positionMs={position} durationMs={duration} layout="horizontal" side={left ? "left" : "right"} color={left ? "cyan" : "fuchsia"} hotCues={deck?.hotCues} playing={deck?.status === "playing"} rate={deck?.rate ?? 1} bpm={deck?.track?.bpm} loopRegion={deck?.loopRegion} pendingLoopInMs={pendingLoopIn} onSeek={disabled ? undefined : onSeekAbsolute} />
+      <DeckWaveform assetId={deck?.track?.assetId} remoteWaveform={deck?.track?.waveform} trackId={trackId} positionMs={position} durationMs={duration} layout="horizontal" side={left ? "left" : "right"} color={left ? "cyan" : "fuchsia"} hotCues={deck?.hotCues} cueColors={cueColors} memoryCues={memoryPoints} phrases={phrases} phraseLabels={phraseLabels} playing={deck?.status === "playing"} rate={deck?.rate ?? 1} bpm={deck?.track?.bpm} loopRegion={deck?.loopRegion} pendingLoopInMs={pendingLoopIn} onSeek={disabled ? undefined : onSeekAbsolute} />
     </div>
     <div className="dj-deck-controls">
       <div className="dj-perf">

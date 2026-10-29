@@ -491,3 +491,14 @@
 .dj-wave-settings summary, .dj-engine-status span { white-space: nowrap; }
 .dj-engine-status { min-width: 0; overflow: hidden; }
 .dj-engine-status span { overflow: hidden; text-overflow: ellipsis; }
+
+/* Phrase chip in the deck header: current phrase and bars to the next one. */
+.dj-workspace .dj-chip--phrase { display: inline-flex; align-items: center; gap: 4px; max-width: 150px; min-width: 0; padding: 0 5px; border-color: color-mix(in srgb, var(--phrase-color) 60%, #111); background: color-mix(in srgb, var(--phrase-color) 18%, #141618); color: #e8ebef; font-size: 10px; white-space: nowrap; }
+.dj-workspace .dj-chip--phrase b { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--phrase-color); font-weight: 800; }
+.dj-workspace .dj-chip--phrase i { font-style: normal; font-weight: 700; color: #fff; }
+.dj-workspace--four .dj-chip--phrase b, .dj-workspace--compact .dj-chip--phrase b { display: none; }
+/* Common waveform zoom (− value + RST). */
+.dj-wave-zoom-group button { min-width: 22px; padding: 0 5px; font-size: 11px; font-weight: 700; }
+.dj-wave-zoom-group .dj-wave-zoom-value { min-width: 40px; font-size: 10px; }
+.dj-wave-source { position: absolute; top: 2px; right: 4px; padding: 0 3px; border-radius: 2px; background: #00000099; color: #9fb7e8; font-size: 10px; font-weight: 700; pointer-events: none; }
+.dj-wave-source:empty { display: none; }
