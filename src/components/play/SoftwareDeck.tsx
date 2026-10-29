@@ -279,7 +279,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
             {padError && <small role="alert">{padError}</small>}
             <div className="dj-pad-mode-row">
               <div className="dj-pad-pages" role="group" aria-label={`Deck ${id} ${padMode==="sampler"?"バンク":"ページ"}`}>
-                {Array.from({length:lastPage+1},(_,page)=><button key={page} type="button" aria-pressed={displayedPage===page} onClick={()=>movePage(page-displayedPage)}>{padMode==="sampler"?"BANK":"PAGE"} {page+1}</button>)}
+                <span className="dj-pad-pages-label" aria-hidden>{padMode==="sampler"?"BANK":"PAGE"}</span>{Array.from({length:lastPage+1},(_,page)=><button key={page} type="button" aria-label={`${padMode==="sampler"?"BANK":"PAGE"} ${page+1}`} aria-pressed={displayedPage===page} onClick={()=>movePage(page-displayedPage)}>{page+1}</button>)}
               </div>
               <PadModeSelect deckId={id} value={padMode} modes={availablePadModes(capabilities, padMode)} onChange={(mode) => { if (gridEditor) onGridClose?.(); setPadMode(mode); }} />
             </div>

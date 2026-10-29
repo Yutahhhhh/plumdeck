@@ -432,3 +432,62 @@
 .dj-workspace .dj-mixer-knobs { display: grid; grid-template-columns: 1fr 1fr; column-gap: 2px; }
 .dj-workspace .dj-mixer-knobs .dj-mixer-color { grid-column: 1 / -1; }
 .dj-workspace.dj-workspace .dj-mixer-channel { width: 64px; }
+
+/* ── Pad panel v3 (owner request): rekordbox-like slim list pads ─────────
+   2 columns × 4 rows of name + value rows, 22px tall, so the pad block is a
+   compact panel instead of the widest part of the deck. Applies to every
+   layout; nothing here goes below 10px text. */
+.dj-workspace .dj-pad-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(4, 22px); grid-auto-rows: 22px; gap: 2px; min-height: 0; flex: 0 0 auto; }
+.dj-workspace .dj-performance-pad { height: 22px; min-height: 22px; padding: 0 5px; flex-direction: row; justify-content: space-between; align-items: center; gap: 4px; }
+.dj-workspace .dj-performance-pad--cue { padding: 0; }
+.dj-workspace .dj-performance-pad b { font-size: 11px; }
+.dj-workspace .dj-performance-pad span { display: inline; overflow: hidden; color: #9aa0a8; font-size: 10px; text-overflow: ellipsis; }
+.dj-workspace .dj-performance-pad--fx { flex-direction: row-reverse; justify-content: space-between; }
+.dj-workspace .dj-performance-pad--fx .dj-fx-pad-beats { font-size: 11px; }
+.dj-workspace .dj-performance-pad--fx .dj-fx-pad-name { font-size: 11px; }
+.dj-workspace .dj-performance-pad--fx small { font-size: 10px; }
+.dj-workspace .dj-performance-pad--value, .dj-workspace .dj-performance-pad--jump { justify-content: center; }
+.dj-workspace .dj-perf-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; max-width: 300px; }
+.dj-workspace .dj-pad-mode-row { flex-wrap: nowrap; gap: 3px; min-width: 0; }
+.dj-workspace .dj-pad-pages { min-width: 0; overflow: hidden; }
+.dj-workspace .dj-pad-pages button { padding: 2px 5px; white-space: nowrap; }
+.dj-workspace .dj-memory-actions button { height: 20px; }
+/* The deck row no longer has to hold two tall pad rows. */
+.dj-workspace .dj-deck .dj-deck-controls { min-height: 122px; }
+.dj-workspace--compact .dj-deck .dj-deck-controls { min-height: 116px; }
+.dj-workspace--compact .dj-perf-main { gap: 1px; }
+
+/* ── Compact / 4-deck fit ──────────────────────────────────────────────── */
+/* CUE / PLAY rounds: the label must fit the circle. */
+.dj-workspace .dj-cue-button, .dj-workspace .dj-play-button { min-width: 26px; min-height: 26px; padding: 0; letter-spacing: 0; line-height: 1; }
+.dj-workspace--compact .dj-cue-button, .dj-workspace--four .dj-cue-button { font-size: 10px; }
+/* Platter face: percent and range stack when the ring is small. */
+.dj-workspace--compact .dj-platter-face, .dj-workspace--four .dj-platter-face { inset: 10px; }
+.dj-workspace--compact .dj-platter-tempo, .dj-workspace--four .dj-platter-tempo { flex-direction: column; align-items: center; gap: 0; }
+.dj-workspace--compact .dj-platter-bpm strong { font-size: 14px; }
+.dj-platter-bpm, .dj-platter-tempo { max-width: 100%; overflow: hidden; white-space: nowrap; }
+/* Header: compact keeps the current key, in one row of short chips. */
+.dj-workspace.dj-workspace--compact .dj-key-shift { display: flex; }
+.dj-workspace.dj-workspace--compact .dj-sync-block { grid-template-columns: auto auto auto auto; grid-template-rows: 1fr; }
+.dj-workspace.dj-workspace--compact .dj-sync-block .dj-chip--keysync { grid-area: auto; }
+.dj-workspace.dj-workspace--compact .dj-sync-block .dj-chip--beatsync { grid-area: auto; flex-direction: row; }
+.dj-workspace.dj-workspace--compact .dj-sync-block .dj-chip--master { grid-area: auto; }
+.dj-workspace .dj-track-name { min-width: 0; flex: 1 1 auto; }
+.dj-workspace .dj-track-name strong, .dj-workspace .dj-track-name span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dj-workspace .dj-deck-flags { min-width: 0; }
+.dj-workspace:not(.dj-workspace--compact) .dj-perf-caption { display: flex; justify-content: space-between; gap: 6px; min-width: 0; white-space: nowrap; }
+.dj-workspace .dj-perf-caption span { overflow: hidden; text-overflow: ellipsis; }
+.dj-workspace .dj-abl-value, .dj-workspace .dj-abl-step button, .dj-workspace .dj-abl-mode button, .dj-workspace .dj-abl-manual button, .dj-workspace .dj-loop-extra button { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding: 0 2px; }
+/* A vertical range has a 129px intrinsic length; with height:auto it set the
+   deck row height. The faders take whatever the row leaves instead. */
+.dj-workspace .dj-deck-tempo .dj-fader--vertical, .dj-workspace .dj-mixer-slider .dj-fader--vertical { flex: 1 1 0; height: 0; min-height: 40px; }
+.dj-workspace.dj-workspace--compact .dj-sync-block .dj-chip--keysync { order: 0; }
+.dj-workspace.dj-workspace--compact .dj-sync-block .dj-key-shift { order: 1; }
+.dj-workspace.dj-workspace--compact .dj-sync-block .dj-chip--beatsync { order: 2; }
+.dj-workspace.dj-workspace--compact .dj-sync-block .dj-chip--master { order: 3; }
+.dj-workspace .dj-pad-pages { align-items: center; flex-shrink: 0; }
+.dj-workspace .dj-pad-pages-label { color: #8f959d; font-size: 10px; font-weight: 700; letter-spacing: .04em; }
+.dj-workspace .dj-pad-pages button { min-width: 20px; padding: 2px 4px; }
+.dj-wave-settings summary, .dj-engine-status span { white-space: nowrap; }
+.dj-engine-status { min-width: 0; overflow: hidden; }
+.dj-engine-status span { overflow: hidden; text-overflow: ellipsis; }
