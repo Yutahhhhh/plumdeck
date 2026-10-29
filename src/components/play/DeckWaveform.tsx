@@ -152,11 +152,14 @@ export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform
       else { ctx.moveTo(0, axis); ctx.lineTo(width, axis); }
       ctx.stroke();
 
-      const tiles = wave ? [] : nativeWaveform.tiles;
+      // Below half a second the engine's sample-accurate PCM window shows more
+      // than 150 columns per second can; elsewhere the 3-band model wins.
+      const fine = mode === "scroll" && zoomSeconds < 0.5 && nativeWaveform.tiles.some((tile) => tile.framesPerBin === 1);
+      const tiles = wave && !fine ? [] : nativeWaveform.tiles;
       const rasterKey = [tiles, wave, width, height, ratio, layout, side, compact, durationMs];
       const cached = mode === "overview" && overviewRaster.current?.key.every((value, i) => value === rasterKey[i]);
       if (cached) ctx.drawImage(overviewRaster.current!.canvas, 0, 0, width, height);
-      else if (wave) {
+      else if (wave && !fine) {
         // Keep the ruler band of a zoomed lane and the phrase strip free.
         const reserve = compact ? 2 : (mode === "scroll" ? Math.min(24, breadth * 0.2) : 0) + (phrases.length ? 5 : 0);
         drawThreeBand(ctx, wave, { startMs, spanMs: span, width, height, vertical, side, style: mode === "scroll" ? "detail" : "overview", reserve, ratio });
