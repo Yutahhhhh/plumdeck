@@ -455,7 +455,9 @@ pub fn save_track(conn: &Connection, result: &Value, now: NaiveDateTime) -> Resu
         Some((id, ..)) => {
             let mut sets: Vec<String> = Vec::new();
             let mut params: Vec<Db> = Vec::new();
-            for key in ["title", "artist", "album", "genre", "key", "scale"] {
+            // Plan §2.4: the file-tag genre never reaches the genre column;
+            // genres come from people and the on-device classifier.
+            for key in ["title", "artist", "album", "key", "scale"] {
                 if let Some(value) = s(key).filter(|v| !v.is_empty() && v.to_lowercase() != "unknown") {
                     if settled.get(key).is_some() {
                         sets.push(format!("{key}=?"));
@@ -494,7 +496,8 @@ pub fn save_track(conn: &Connection, result: &Value, now: NaiveDateTime) -> Resu
                 text_or("title", "Unknown"),
                 text_or("artist", "Unknown"),
                 text_or("album", ""),
-                text_or("genre", ""),
+                // Plan §2.4: no tag genre; the track stays unclassified.
+                Db::Text(String::new()),
                 settled["year"].as_i64().map_or(Db::Null, Db::BigInt),
                 bpm,
                 text_or("key", ""),
