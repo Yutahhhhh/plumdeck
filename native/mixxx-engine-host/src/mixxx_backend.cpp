@@ -72,6 +72,16 @@ PaDeviceIndex defaultOutputDevice() {
 const QString groups[] = {QStringLiteral("[Channel1]"), QStringLiteral("[Channel2]"), QStringLiteral("[Channel3]"), QStringLiteral("[Channel4]")};
 const QString names[] = {"A", "B", "C", "D"};
 const QString kJunctionGroup = QStringLiteral("[Auxiliary1]");
+// EQ through the EqualizerRack's own keys. The legacy [ChannelN] filterLow/Mid/High
+// aliases still work but Mixxx logs a deprecation warning on every access, and
+// the mixer state reads them on every tick. Falls back to the alias only when
+// the rack slot does not exist for a group.
+ConfigKey eqKey(const QString& group, const QString& band) {
+    const QString parameter = band == "low" ? QStringLiteral("parameter1") : band == "mid" ? QStringLiteral("parameter2") : QStringLiteral("parameter3");
+    const ConfigKey rack(QStringLiteral("[EqualizerRack1_%1_Effect1]").arg(group), parameter);
+    if (ControlObject::exists(rack)) return rack;
+    return ConfigKey(group, band == "low" ? QStringLiteral("filterLow") : band == "mid" ? QStringLiteral("filterMid") : QStringLiteral("filterHigh"));
+}
 class MixxxBackend final : public QObject, public PlaybackBackend {
 public:
     MixxxBackend() = default;
@@ -472,9 +482,9 @@ public:
             channel["orientation"] = ControlObject::get(ConfigKey(groups[index], "orientation"));
             channel["crossfaderGain"] = channel["orientation"].toInt() == 0 ? left : channel["orientation"].toInt() == 2 ? right : 1;
             channel["gain"] = ControlObject::get(ConfigKey(groups[index], "volume")); channel["pfl"] = ControlObject::get(ConfigKey(groups[index], "pfl")) > 0;
-            channel["eqLow"] = ControlObject::get(ConfigKey(groups[index], "filterLow"));
-            channel["eqMid"] = ControlObject::get(ConfigKey(groups[index], "filterMid"));
-            channel["eqHigh"] = ControlObject::get(ConfigKey(groups[index], "filterHigh"));
+            channel["eqLow"] = ControlObject::get(eqKey(groups[index], "low"));
+            channel["eqMid"] = ControlObject::get(eqKey(groups[index], "mid"));
+            channel["eqHigh"] = ControlObject::get(eqKey(groups[index], "high"));
             channel["colorFx"] = QJsonObject{{"effect",colorNames_[index]},{"amount",colorAmounts_[index]},{"parameters",effectParameters(effects_->getQuickEffectChain(groups[index])->getEffectSlot(0))}};
             channel["trim"] = ControlObject::get(ConfigKey(groups[index], "pregain"));
             channel["filter"] = effects_->getQuickEffectChain(groups[index])->getSuperParameter() * 2.0 - 1.0;
@@ -824,7 +834,7 @@ public:
             {"slipReverse", ControlObject::get(ConfigKey(groups[index], "reverseroll")) > 0}};
     }
     void eq(int index, const QString& band, double gain) override {
-        ControlObject::set(ConfigKey(groups[index], band == "low" ? "filterLow" : band == "mid" ? "filterMid" : "filterHigh"), gain);
+        ControlObject::set(eqKey(groups[index], band), gain);
     }
     void filter(int index, double value) override { colorFx(index, "filter", value); }
     void trim(int index, double gain) override { ControlObject::set(ConfigKey(groups[index], "pregain"), gain); }
@@ -1045,7 +1055,7 @@ public:
         const bool faded = volume <= .001 || (side == 0 && crossfader >= .999) || (side == 2 && crossfader <= -.999);
         const auto peak = [](const std::atomic<float>& value) { return std::round(double(value.load(std::memory_order_relaxed)) * 10000) / 10000; };
         return {{"available", true}, {"volume", volume}, {"orientation", side}, {"pfl", get("pfl") > 0}, {"pflAvailable", pflAvailable_},
-                {"eqLow", get("filterLow")}, {"eqMid", get("filterMid")}, {"eqHigh", get("filterHigh")}, {"vu", get("vu_meter")}, {"audible", !faded},
+                {"eqLow", ControlObject::get(eqKey(kJunctionGroup, "low"))}, {"eqMid", ControlObject::get(eqKey(kJunctionGroup, "mid"))}, {"eqHigh", ControlObject::get(eqKey(kJunctionGroup, "high"))}, {"vu", get("vu_meter")}, {"audible", !faded},
                 {"mainMix", get("main_mix") > 0},
                 // Peaks of the last ~200 ms of what the engine actually rendered:
                 // Program Master before venue gating, the headphone bus, and the
@@ -1067,9 +1077,9 @@ public:
         if (params.contains("pfl") && (!params["pfl"].isBool() || (params["pfl"].toBool() && !pflAvailable_))) return "ヘッドホン出力のあるデバイスでCUEを使ってください";
         if (volume >= 0) ControlObject::set(ConfigKey(kJunctionGroup, "volume"), volume);
         if (orientation >= 0) ControlObject::set(ConfigKey(kJunctionGroup, "orientation"), orientation);
-        if (low >= 0) ControlObject::set(ConfigKey(kJunctionGroup, "filterLow"), low);
-        if (mid >= 0) ControlObject::set(ConfigKey(kJunctionGroup, "filterMid"), mid);
-        if (high >= 0) ControlObject::set(ConfigKey(kJunctionGroup, "filterHigh"), high);
+        if (low >= 0) ControlObject::set(eqKey(kJunctionGroup, "low"), low);
+        if (mid >= 0) ControlObject::set(eqKey(kJunctionGroup, "mid"), mid);
+        if (high >= 0) ControlObject::set(eqKey(kJunctionGroup, "high"), high);
         if (params.contains("pfl")) ControlObject::set(ConfigKey(kJunctionGroup, "pfl"), params["pfl"].toBool() ? 1 : 0);
         return {};
     }
@@ -1077,7 +1087,8 @@ public:
         // Program switches from the direct stream to this master, so the deck
         // must carry that stream unchanged. Headphone CUE is left as is.
         if (!available_ || !junctionAux_) return;
-        for (const char* key : {"volume", "pregain", "filterLow", "filterMid", "filterHigh"}) ControlObject::set(ConfigKey(kJunctionGroup, key), 1);
+        for (const char* key : {"volume", "pregain"}) ControlObject::set(ConfigKey(kJunctionGroup, key), 1);
+        for (const char* band : {"low", "mid", "high"}) ControlObject::set(eqKey(kJunctionGroup, band), 1);
         ControlObject::set(ConfigKey(kJunctionGroup, "orientation"), 1);
     }
     void junctionInputMainMix(bool enabled) override {
