@@ -21,7 +21,10 @@ export function McpAnalysisTab({ mode }: { mode: AnalysisMode }) {
         <div className="space-y-3 text-sm">
           <div className="flex gap-2">
             <CheckCircle2 className="h-4 w-4 mt-0.5 text-green-600 shrink-0" />
-            <span>The client calls <code>get_genre_analysis_context</code>.</span>
+            <span>
+              The client calls <code>get_genre_predictions</code> (low-confidence tracks from the
+              on-device classifier) or <code>get_genre_analysis_context</code>.
+            </span>
           </div>
           <div className="flex gap-2">
             <CheckCircle2 className="h-4 w-4 mt-0.5 text-green-600 shrink-0" />

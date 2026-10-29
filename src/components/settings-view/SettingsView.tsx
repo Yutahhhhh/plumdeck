@@ -15,7 +15,6 @@ import {
   Settings as SettingsIcon,
   AlertCircle,
   FileSpreadsheet,
-  Bot,
   Globe,
 } from "lucide-react";
 import {
@@ -37,6 +36,7 @@ import { useTheme } from "@/components/theme-provider";
 import { setKeyNotation, setTrafficLightLevel2, useKeyDisplay } from "@/lib/key-display";
 import type { KeyNotationId } from "@/lib/keys.generated";
 import { GridReanalysis } from "./GridReanalysis";
+import { AiSettingsSection } from "./AiSettingsSection";
 import { downloadFile } from "@/lib/download";
 import {
   normalizeAnalysisProfile,
@@ -381,22 +381,8 @@ export function SettingsView() {
 
           <Separator />
 
-          {/* MCP-owned AI runtime */}
-          <div className="space-y-4">
-            <h3 className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <Bot className="h-4 w-4" />
-              AI Runtime
-            </h3>
-            <div className="grid gap-2 p-4 border rounded-md bg-muted/20">
-              <p className="text-sm font-medium">Provided by the connected MCP client</p>
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                plumdeck does not store model names or API keys. Genre classification,
-                natural-language vibe interpretation, and lyric wordplay reasoning use
-                the model in Codex, Claude, or whichever MCP client is connected.
-                Connection details and available tools are shown on the MCP page.
-              </p>
-            </div>
-          </div>
+          {/* Optional in-app AI (keys in the OS keychain) */}
+          <AiSettingsSection />
 
           {importSections.map((section) => (
             <div key={section.id}>
