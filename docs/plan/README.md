@@ -139,7 +139,7 @@
 | S3 ライブラリの中核 | 完了（tracks / page / count / ids、info / genre の編集、歌詞の取得と検索、`PUT /api/tracks/{id}/lyrics` の復活（D-02）、genres の一覧・未判定・表記揺れ・一括更新・解析結果の適用、`/api/stream`、`/api/metadata`。`/api/fs/list` は移植しない（D-15）） | `plumdeck-domain`（キー表記、ジャンル規則、LRC）、`plumdeck-media`（lofty のタグ読み、Content-Type 表、NFC/NFD 解決）、`plumdeck-db/src/repos/{tracks,lyrics,genres}.rs`、`plumdeck-backend/src/{lax,query,models}.rs` と `routes/{tracks,lyrics,genres,media}.rs`、`contracts/parity/scenarios/s3-*.yaml` |
 | S4〜S12 バックエンドの主要スライス | 完了（全スライスにパリティシナリオ。D-17〜D-23、D-50、D-51） | `plumdeck-backend/src/routes/{setlists,recommendations,performance,assist,set_planner,play,waveform_detail,mcp,workflows,junction,metadata_jobs,file_tags,csv_io}.rs`、`tasks.rs`、`plumdeck-domain/src/assist.rs` |
 | W1-08 / S11 解析 | 完了（`plumdeck-analysis`：テンポ・拍・キー・音色・波形の v1、MusiCNN の埋め込み（同梱の TensorFlow グラフを tract で実行。TensorFlow と 1e-5 以内で一致）、`--analysis-worker` の V1 プロトコル。ingest、grid-jobs、選択解析、Play 取り込み、WS 2 本、MCP の analysis、埋め込みの自動キューと起動時のバックフィル。D-24 / D-25） | `src-tauri/crates/plumdeck-analysis`（`musicnn.rs`、`models/msd-musicnn-1.pb`）、`plumdeck-backend/src/analysis.rs`、`routes/ingest.rs` |
-| S13 Tauri 統合 | 完了・実機未確認（Rust バックエンドを既定で in-process 起動。サイドカーと feature は削除。FFmpeg は externalBin として同梱） | `plumdeck-backend/src/embed.rs`、`src-tauri/src/{lib,main}.rs`、`scripts/packaging-ffmpeg.mjs` |
+| S13 Tauri 統合 | 完了・実機未確認（Rust バックエンドを既定で in-process 起動。サイドカーと feature は削除。FFmpeg の同梱は廃止：録音の書き出しは WAV / FLAC を Rust（flacenc）で、詳細波形は plumdeck-decode で処理。D-04 / D-05） | `plumdeck-backend/src/embed.rs`、`src-tauri/src/{lib,main}.rs`、`plumdeck-backend/src/recording_export.rs` |
 | S14 Python 撤去 | 完了（`backend/`、`tools/parity/*.py`、Python のスクリプトと CI を削除。ビルド補助は Node に移植。保守コマンドは `plumdeck-maintenance`。パリティは記録済みの Python 応答（ゴールデン）と比較：32 シナリオ・1073 ステップで説明のつかない差分 0、db-diff 0。`rekordbox-mcp/` は独立したツールなので残す） | `contracts/parity/golden/`、`plumdeck-parity suite --golden`、`plumdeck-backend/src/bin/plumdeck-maintenance.rs`、`scripts/*.mjs` |
 | RB-03〜RB-06 キー表示 | 実装済み（表記の設定、Traffic Light、MASTER 基準の色、推薦のキー相性フィルタ。D-26） | `src/lib/key-display.ts`、各ビュー、`routes/mcp.rs` の `camelot` |
 | `plumdeck-rekordbox` | RB-10（master.db）と RB-11（ANLZ）完了 | `src-tauri/crates/plumdeck-rekordbox`（DuckDB 非依存） |
@@ -155,7 +155,6 @@
 - rekordbox 同等化：RB-01 の残り（HOT CUE マーカーの色の食い違いは要確認。Setlist 自動生成のキー変換の部分一致バグは修正済み）、RB-13（3 層モデル）、RB-20（PDW3）、RB-21（フレーズ表示）、RB-40、MEMORY CUE の DB 化など。
 - 解析：評価ハーネス RB-30 と精度の評価、フレーズ検出。
 - エンジンと Junction：W2-01 以降すべて、切替 W3-01〜W3-04。
-- 取り込み UX：Explorer 撤去、ドラッグ＆ドロップ、「曲を追加」、Dashboard の要対応と rekordbox コレクション取り込み。
 - ジャンル分類器、アプリ内 AI キー、STEMS の調査。
 - Play の残り：波形の統一（3 バンド、共通ズーム、キュー色の共通化）、ブラウザ（Traffic Light、ΔBPM、MASTER 基準のフィルタ、再生済みの色、キー相性フィルタ）、PAD FX のインライン編集ビュー、Rust エンジンでしか作れない項目（[engine-and-junction.md](engine-and-junction.md) §4）。
 
@@ -199,7 +198,7 @@
 
 - ~~**S13**~~ Tauri への統合と本番切替（完了。実機確認は §6 #11）。
 - ~~**S14**~~ Python 撤去（完了）。残り：台帳の差分の修正、フロントのデッドコード削除。
-- **RB-13**（3 層のデータモデルと解決器）、**RB-40**（自前パイプラインを既定に）、取り込み UX、~~キー表示系（RB-03〜RB-06）~~（実装済み）、フレーズ表示（RB-21）、PDW3（RB-20）。
+- **RB-13**（3 層のデータモデルと解決器）、**RB-40**（自前パイプラインを既定に）、~~取り込み UX~~（実装済み。D-52 / D-53）、~~キー表示系（RB-03〜RB-06）~~（実装済み）、フレーズ表示（RB-21）、PDW3（RB-20）。
 
 ### 段 5：エンジンと Junction（段 1 以降と並行）
 
@@ -284,10 +283,12 @@
 | 12 | Rust 解析（`rust-attacks-v1` / `rust-chroma-v1` / `rust-timbre-v1`）の BPM・キー・拍の精度を、手持ちの曲で Python 版の結果や rekordbox と比べる（合成音源では 124 BPM を 123.99 と検出） | W1-08 / S11 | Mac |
 | 13 | キー表記の切替、Traffic Light（レベル 2 を含む）、MASTER デッキ基準の色、推薦のキー相性フィルタの見た目と挙動（D-26） | RB-03〜06 | Mac |
 | 14 | MCP クライアント（Claude Desktop など）から Rust 版の `/mcp` に接続し、主要ツール（推薦、ルート、解析、Junction）が動くこと | S9 / S12 | Mac |
-| 15 | リリースビルドに同梱した FFmpeg で録音の書き出し（FLAC / MP3）ができること。macOS では Homebrew の無い環境で動くこと（dylib を `Contents/Resources/ffmpeg-libs` に同梱） | S14 | Mac / Win |
+| 15 | 録音の書き出し（WAV → FLAC、FLAC → WAV）が FFmpeg なしで動き、書き出した FLAC が rekordbox・ミュージック・Finder で再生できること。Play の詳細波形（3 バンド）が以前と同じ見た目で出ること（D-04 / D-05） | S14 | Mac / Win |
 | 16 | Rust の MusiCNN 埋め込みで、類似曲の並びが既存の埋め込み（Essentia / ONNX 版）と大きく変わらないこと。手順：DB コピーで数曲を再解析し、`/api/tracks/{id}/similar` の上位を比べる | S14 | Mac |
 | 17 | Windows のリリース CI：pip を使わなくなったので、Visual Studio 付属の CMake / Ninja で Mixxx ホストがビルドできること（`build-windows.mjs`） | S14 | Win |
 | 18 | `pnpm tauri`（開発起動）と `pnpm backend:dev`、保守コマンド（`pnpm backup:db` など）が Rust 版で動くこと | S14 | Mac |
+| 19 | 取り込み UX（D-52 / D-53）：解析・Assist 画面のどこにファイル / フォルダをドロップしても取り込みが始まり、Play の既存のドロップ（デッキ、プレイリスト、サンプラー）は変わらないこと。Dashboard / Library の「曲を追加」でファイル選択・フォルダ選択が開くこと。Dashboard の「要対応」の件数と各ボタン、「rekordbox にある未登録の曲」（rekordbox のある Mac で表示、無い環境で非表示、取り込んだ曲の BPM・グリッド・キーが rekordbox と同じ）。見た目が「洗練された音楽アプリ」に見えること | 取り込み UX | Mac / Win |
+| 20 | macOS のエンジン同梱物を `res/effects` と `schema.xml` だけにした `stage-macos.sh` で、PAD FX / BEAT FX を含む Play が従来どおり動くこと（smoke-bundle と手動確認） | 取り込み UX | Mac |
 
 ---
 
@@ -298,7 +299,7 @@
 1. Mirror の 4 ルートと UI の削除（D-08）。
 2. MCP で例外の理由を表示する（D-03）、Junction の廃止 5 ツールの削除（D-09）。
 3. USB の snapshot_hash をバイト互換にするか、serializer_version=2 にするか。
-4. 録音の書き出しを WAV / FLAC だけにする（D-04）。`/api/stream` の制限範囲。save / reveal の Tauri 移行。
+4. ~~録音の書き出しを WAV / FLAC だけにする（D-04）~~（決定・実装済み）。`/api/stream` の制限範囲。save / reveal の Tauri 移行。
 5. S11 の Analyzer を暫定の Python ワーカーにして、切替を Rust 解析の完了から切り離すか。
 6. 切替リリースに Python へのフォールバックを同梱するか。
 7. 時刻はローカルの naive のまま（既定・推奨）か、UTC に移すか。

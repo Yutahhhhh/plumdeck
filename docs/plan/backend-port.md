@@ -318,8 +318,8 @@ MCP：常に固定エラーを返す Junction の 5 ツール（`junction_reques
 | D-01 | genres/unknown と unknown-ids に ORDER BY id | 実装済み（proposed） |
 | D-02 | `PUT /api/tracks/{id}/lyrics` を復活 | 実装済み（proposed） |
 | D-03 | MCP で ToolError 以外の例外の理由も表示（Junction の秘密は出さない） | 案（オーナー判断） |
-| D-04 | 録音の書き出しは WAV / FLAC のみ | 案（オーナー判断） |
-| D-05 | 詳細波形はデコーダが変わるので許容誤差で比較し、キャッシュを v2 に | 案 |
+| D-04 | 録音の書き出しは WAV / FLAC のみ（Rust で書き出し、FFmpeg 同梱を廃止） | 実装済み（approved） |
+| D-05 | 詳細波形はデコーダが変わるので許容誤差で比較し、キャッシュを v2 に | 実装済み（proposed） |
 | D-06 | ループバック以外の Host / Origin を拒否（421 / 403） | 実装済み（proposed） |
 | D-07 | タグ書込みを lofty の出力に（rekordbox で読めるか実機確認） | 案 |
 | D-08 | Mirror の 4 ルートと UI を削除 | 案（オーナー判断） |
