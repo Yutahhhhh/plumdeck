@@ -189,7 +189,21 @@ fn locks() -> &'static Vec<Mutex<()>> {
     LOCKS.get_or_init(|| (0..32).map(|_| Mutex::new(())).collect())
 }
 
+/// The cached (or freshly decoded) rows `[full, low, mid, high]` at 300 per
+/// second and the decoded sample count. Shared with the 3-band waveform.
+pub(crate) fn decoded_values(filepath: &str) -> Result<(Vec<[u8; 4]>, usize), (u16, &'static str)> {
+    load_values(filepath).map_err(|Failure(status, detail)| (status, detail))
+}
+
+pub(crate) const DETAIL_BINS_PER_SECOND: usize = BINS_PER_SECOND;
+
 fn waveform_detail(filepath: &str, bins: Option<usize>) -> Result<PyValue, Failure> {
+    let (values, samples) = load_values(filepath)?;
+    Ok(payload(&values, samples, bins))
+}
+
+fn load_values(filepath: &str) -> Result<(Vec<[u8; 4]>, usize), Failure> {
+
     let missing = Failure(404, "音源ファイルが見つからないか、読み取れません。");
     let source = std::fs::canonicalize(filepath).map_err(|_| Failure(404, "音源ファイルが見つからないか、読み取れません。"))?;
     let stat = std::fs::metadata(&source).map_err(|_| Failure(404, "音源ファイルが見つからないか、読み取れません。"))?;
@@ -205,7 +219,7 @@ fn waveform_detail(filepath: &str, bins: Option<usize>) -> Result<PyValue, Failu
     let lock = &locks()[usize::from_str_radix(&digest[..2], 16).unwrap_or(0) % 32];
     let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((values, samples)) = read_cache(&target) {
-        return Ok(payload(&values, samples, bins));
+        return Ok((values, samples));
     }
     let (values, samples) = decode(&source)?;
     let updated = std::fs::metadata(&source).map_err(|_| Failure(409, "音源が変更されました。詳細波形を再読み込みしてください。"))?;
@@ -214,7 +228,7 @@ fn waveform_detail(filepath: &str, bins: Option<usize>) -> Result<PyValue, Failu
         return Err(Failure(409, "音源が変更されました。詳細波形を再読み込みしてください。"));
     }
     write_cache(&directory, &target, &values, samples);
-    Ok(payload(&values, samples, bins))
+    Ok((values, samples))
 }
 
 fn hex(bytes: &[u8]) -> String {

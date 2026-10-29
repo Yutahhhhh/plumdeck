@@ -300,3 +300,20 @@ deviations:
       "rekordbox". Those tracks take BPM, grid and key from rekordbox even
       when the rekordbox_key_source setting is off. master.db is only read.
     current: implemented.
+  - id: D-54
+    status: proposed
+    source: docs/plan/rekordbox-parity.md §2.7, §6, §7 (RB-14, RB-15, RB-20, RB-21); src-tauri/crates/plumdeck-backend/src/routes/rekordbox_view.rs
+    summary: >
+      Additions with no Python counterpart. GET /api/tracks/{id}/waveform3
+      (level=overview|detail) answers the one 3-band waveform model
+      (low/mid/high bytes per column, 0..127, base64) from rekordbox's PWV6 /
+      PWV7 shifted by the decoder timing offset, or from plumdeck's own decoded
+      bands. GET /api/tracks/{id}/rekordbox answers PSSI phrases and memory
+      cues on the playback timeline (PSSI beats read on the uncorrected PQTZ,
+      then shifted). GET/PUT /api/tracks/{id}/memory-cues and POST
+      .../memory-cues/rekordbox store MEMORY CUEs in a track_memory_cues table
+      created on the first write (outside the v5 schema, so libraries without
+      memory cues are unchanged). POST /api/tracks/{id}/cues-rekordbox and
+      /api/tracks/cues-rekordbox/import also add the track's rekordbox memory
+      cues (never removing any); their answers are unchanged.
+    current: proposed; no parity scenario touches these routes (no rekordbox in the fixtures).

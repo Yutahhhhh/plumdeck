@@ -596,7 +596,11 @@ pub async fn import_cues_route(State(state): State<AppState>, Path(track_id): Pa
             let cues = read_hot_cues(&track.filepath)?;
             let row = get_metadata(conn, track.id)?;
             let (loops, beat_grid) = current_parts(row.as_ref())?;
-            replace(conn, id, &MetadataWrite { revision, cue_points: cues, loops, beat_grid }, now)
+            let saved = replace(conn, id, &MetadataWrite { revision, cue_points: cues, loops, beat_grid }, now)?;
+            // MEMORY CUEs come along (added, never removed); a failure there
+            // does not undo the hot-cue import.
+            let _ = crate::routes::rekordbox_view::import_memory_cues(conn, track.id, &track.filepath, now);
+            Ok(saved)
         },
         true,
     )
@@ -619,12 +623,13 @@ pub async fn import_all_route(State(state): State<AppState>, headers: HeaderMap,
             let revisions: BTreeMap<i64, i64> = revisions.into_iter().collect();
             let db = open_library()?;
             let mut source: BTreeMap<String, Result<Vec<CuePoint>, String>> = BTreeMap::new();
+            let mut contents: BTreeMap<String, String> = BTreeMap::new();
             for (_, filepath) in &tracks {
                 if source.contains_key(filepath) {
                     continue;
                 }
                 let found = match db.content_at_path(filepath) {
-                    Ok(Some(content)) => Some(cue_rows(&db, &content.id).map_err(|_| "Could not read cues from the local rekordbox library".to_owned())
+                    Ok(Some(content)) => Some({ contents.insert(filepath.clone(), content.id.clone()); cue_rows(&db, &content.id) }.map_err(|_| "Could not read cues from the local rekordbox library".to_owned())
                         .and_then(|rows| cue_points(&rows, filepath))),
                     Ok(None) => None,
                     Err(RekordboxError::Ambiguous) => Some(Err("Multiple rekordbox tracks match this audio path".into())),
@@ -662,7 +667,12 @@ pub async fn import_all_route(State(state): State<AppState>, headers: HeaderMap,
                     replace(conn, i128::from(*track_id), &MetadataWrite { revision: expected.into(), cue_points: cues, loops, beat_grid }, now)
                 });
                 match outcome {
-                    Ok(_) => imported += 1,
+                    Ok(_) => {
+                        imported += 1;
+                        if let Some(content_id) = contents.get(filepath) {
+                            let _ = crate::routes::rekordbox_view::import_memory_cues_with(&db, conn, *track_id, content_id, filepath, now);
+                        }
+                    }
                     Err(Failure::Conflict(current)) => {
                         conflicts += 1;
                         errors.push(error(*track_id, format!("Performance metadata revision conflict; current revision is {current}")));

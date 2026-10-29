@@ -16,6 +16,7 @@ pub mod media;
 pub mod metadata_jobs;
 pub mod performance;
 pub mod play;
+pub mod rekordbox_view;
 pub mod set_planner;
 pub mod settings;
 pub mod setlists;
@@ -156,6 +157,10 @@ pub fn api() -> Router<AppState> {
         .route("/api/tracks/cues-rekordbox/import", post(performance::import_all_route))
         .route("/api/tracks/{track_id}/cues-rekordbox", post(performance::import_cues_route))
         .route("/api/tracks/{track_id}/grid-rekordbox", post(performance::grid_rekordbox_route))
+        .route("/api/tracks/{track_id}/waveform3", get(rekordbox_view::waveform3))
+        .route("/api/tracks/{track_id}/rekordbox", get(rekordbox_view::analysis))
+        .route("/api/tracks/{track_id}/memory-cues", get(rekordbox_view::get_memory_cues).put(rekordbox_view::put_memory_cues))
+        .route("/api/tracks/{track_id}/memory-cues/rekordbox", post(rekordbox_view::import_memory_cues_route))
         .route("/api/tracks/{track_id}/suggest-genre", get(suggestions::suggest_genre))
         .route("/api/genres/grouped-suggestions", get(suggestions::grouped_suggestions))
         .route("/api/genres/grouped-suggestions/{track_id}", get(suggestions::suggestions_for_track))

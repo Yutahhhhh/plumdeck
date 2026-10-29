@@ -74,7 +74,7 @@ export const playService = {
   nameRecording: (id: number, artist: string, title: string, format?: RecordingExportFormat) =>
     apiClient.patch<RecordingEntry>(`/play/recordings/${id}`, { artist, title, format }, 31 * 60_000),
   discardRecording: (id: number) => apiClient.delete(`/play/recordings/${id}`),
-  tracksPage: (params: { q?: string; limit?: number; offset?: number; genres?: string[]; subgenres?: string[]; sort?: string; order?: "asc" | "desc" }) => apiClient.get<Page<Track>>("/tracks/page", params),
+  tracksPage: (params: { q?: string; limit?: number; offset?: number; genres?: string[]; subgenres?: string[]; sort?: string; order?: "asc" | "desc"; bpm?: number; bpm_range?: number }) => apiClient.get<Page<Track>>("/tracks/page", params),
   recommendationsPage: (trackId: number, params: { q?: string; limit?: number; offset?: number; genres?: string[]; subgenres?: string[] } = {}) => apiClient.get<Page<Track>>("/recommendations/next/page", { track_id: trackId, ...params }),
   localPlaylists: (limit = 100, offset = 0) => apiClient.get<Page<LocalPlaylist>>("/play/playlists", { limit, offset }),
   createLocalPlaylist: (name: string) => apiClient.post<LocalPlaylist>("/play/playlists", { name }),

@@ -1,11 +1,12 @@
 import { assetIdentity, localTrackId } from '@/services/junction/asset-resolver';
 import { SamplerPads } from "./SamplerPads";
 import { djEngineClient } from "@/services/dj-engine/client";
-import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { getPadSelection, selectPads, subscribePads, PAD_MODE_NAMES } from "@/services/midi/pad-state";
 import { sampler } from "@/services/dj-engine/sampler";
 import { memoryCues, selectedMemoryCue } from "@/services/dj-engine/memory-cues";
-import { AlignJustify, Disc3, LayoutGrid, Pause, Play, Upload } from "lucide-react";
+import { AlignJustify, Disc3, LayoutGrid, Pause, Play, Settings2, Upload } from "lucide-react";
+import { PadFxEditor } from "./PadFxEditor";
 import type { ChannelState, DeckId, DeckState } from "@/types/dj-engine";
 import type { PerformanceLoop } from "@/types/performance-metadata";
 import { cn } from "@/lib/utils";
@@ -13,6 +14,7 @@ import { DJ_ENGINE_CAPABILITIES } from "@/types/dj-engine";
 import { currentKey, formatKeyDelta, formatLibraryKey, parseKey } from "@/services/dj-engine/musical-key";
 import { usePlayPreferences } from "./play-preferences";
 import { DeckWaveform } from "./DeckWaveform";
+import { barsToNextPhrase, phraseAt, PHRASE_COLORS, type Phrase } from "@/services/waveform/three-band";
 import { artworkUrl, useTrackVisuals } from "./useTrackVisuals";
 import { barNumbers, lowerBeat } from "./beat-grid-math";
 import { availablePadModes, PerformancePads, UNBACKED_PAD_MODES, type PadMode } from "./PerformancePads";
@@ -64,11 +66,15 @@ type Props = {
   savedLoops?: readonly PerformanceLoop[]; onRecallLoop?: (id: string) => void;
   trackKey?: string | null;
   cueColors?: (string|null)[];
+  /** Title of a load in flight (before the engine reports it). */
+  pendingLoad?: string;
+  /** rekordbox phrases of the loaded track (none without rekordbox data). */
+  phrases?: readonly Phrase[];
   /** 曲頭より前に置いた無音の助走。countdown は再生開始待ちの残り時間。 */
   onGridEdit: () => void; onGridClose?: () => void; gridEditor?: ReactNode;
 };
 
-export function SoftwareDeck({ id, deck, channel, active, connected, capability, capabilities, tailLock, onActivate, onToggle, onCue, onSeekAbsolute, onTempo, onKeylock, onSync, onMaster, onUnload, syncLeader, onHotCue, onLoop, onBeatJump, onBeatLoop, onLoopEnable, onQuantize, onPadFx, fxContext, onFxError, onSaveLoop, onLoopIn, onLoopOut, onReloop, onLoopSet, pendingLoopIn, onMemory, onMemoryCall, onKeyShift, onKeySync, onKeyReset, onSlip, onReverse, onBend, savedLoops, onRecallLoop, trackKey, cueColors, onGridEdit, onGridClose, gridEditor }: Props) {
+export function SoftwareDeck({ id, deck, channel, active, connected, capability, capabilities, tailLock, onActivate, onToggle, onCue, onSeekAbsolute, onTempo, onKeylock, onSync, onMaster, onUnload, syncLeader, onHotCue, onLoop, onBeatJump, onBeatLoop, onLoopEnable, onQuantize, onPadFx, fxContext, onFxError, onSaveLoop, onLoopIn, onLoopOut, onReloop, onLoopSet, pendingLoopIn, onMemory, onMemoryCall, onKeyShift, onKeySync, onKeyReset, onSlip, onReverse, onBend, savedLoops, onRecallLoop, trackKey, cueColors, pendingLoad, phrases, onGridEdit, onGridClose, gridEditor }: Props) {
   const deckDrop = usePlayDeckDrop(`play-deck-controls-${id}`, id);
   const left = id === "A" || id === "C";
   const [autoBeats, setAutoBeats] = useState(4);
@@ -79,6 +85,8 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
   const setPadPage = (update: number | ((page: number) => number)) => selectPads(id,selection.mode,typeof update === "function" ? update(padPage) : update,true);
   const [keyboardCue, setKeyboardCue] = useState(0);
   const [padError, setPadError] = useState("");
+  /** PAD FX inline edit view (gear), per deck. */
+  const [fxEditing, setFxEditing] = useState(false);
   const [extraMode, setExtraMode] = useState<PadMode | null>(null);
   // Modes the controller does not know page locally; paging the controller
   // selection would drop back to its mode.
@@ -141,7 +149,9 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
   const quantizeReason = unavailable("deck.quantize", "QUANTIZE", Boolean(onQuantize), false);
   const gridReason = unavailable("deck.beatgrid", "GRID EDIT", true);
   const memoryReason = unavailable("deck.transport", "MEMORY CUE", Boolean(onMemory && onMemoryCall));
-  const { keyNotation } = usePlayPreferences();
+  const { keyNotation, phraseLabels } = usePlayPreferences();
+  const phraseNow = phrases?.length ? phraseAt(phrases, position) : null;
+  const phraseBars = phrases?.length ? barsToNextPhrase(phrases, position, { beatTimesMs: deck?.track?.beatTimesMs, bpm: deck?.track?.bpm, beatgridOffsetMs: deck?.track?.beatgridOffsetMs, beatsPerBar: deck?.track?.beatsPerBar }) : null;
   const keyShift = Math.round(deck?.keyShift ?? 0);
   const key = currentKey(trackKey, keyShift, rate, Boolean(deck?.keylock), keyNotation);
   const originalKey = formatLibraryKey(trackKey, keyNotation);
@@ -198,7 +208,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
     return `BAR ${Math.floor(Math.round(beat) / beatsPerBar) + 1} · ${Math.round(beat) % beatsPerBar + 1}/${beatsPerBar}`;
   };
 
-  const status = !capability ? "N/A" : !connected ? "OFFLINE" : deck?.status === "error" ? "ERROR"
+  const status = pendingLoad !== undefined ? "LOADING" : !capability ? "N/A" : !connected ? "OFFLINE" : deck?.status === "error" ? "ERROR"
     : deck?.status === "playing" ? "PLAYING" : deck?.status === "loading" ? "LOADING"
     : deck?.track ? deck.status === "paused" ? "PAUSED" : "READY" : "EMPTY";
   // MASTER lights from the engine's leader only, never from local intent.
@@ -211,7 +221,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
       <button className="dj-deck-number" aria-label={`Select deck ${id}`} aria-pressed={active} onClick={onActivate}>{id}</button>
       <div className="dj-cover">{data?.artwork ? <img src={artworkUrl(data.artwork)} alt="" /> : <Disc3 />}</div>
       <div className="dj-track-name">
-        <strong title={deck?.track?.title || ""}>{deck?.track?.title || (deck?.track?.assetId ? "共有音源" : "曲をドラッグしてロード")}</strong>
+        <strong title={pendingLoad ?? deck?.track?.title ?? ""}>{pendingLoad !== undefined ? `読み込み中… ${pendingLoad}` : deck?.track?.title || (deck?.track?.assetId ? "共有音源" : "曲をドラッグしてロード")}</strong>
         <span>{deck?.track?.artist || (deck?.track?.assetId ? "" : "ライブラリで曲を選び、ダブルクリック")}</span>
       </div>
       <div className="dj-track-time">
@@ -220,6 +230,9 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
       </div>
       <div className="dj-deck-flags">
         {tailLock && <span className="dj-chip dj-chip--tail" title={tailLock}>残りの曲 · ループのみ</span>}
+        {phraseNow && (phraseNow.current || phraseNow.next) && <span className="dj-chip dj-chip--phrase" style={{ "--phrase-color": PHRASE_COLORS[(phraseNow.current ?? phraseNow.next)!.kind] } as CSSProperties}
+          title={`フレーズ（rekordbox）: ${phraseNow.current?.label ?? "—"}${phraseNow.next ? ` → 次は ${phraseNow.next.label}` : ""}`}>
+          <b>{phraseNow.current?.label ?? "—"}</b>{phraseBars !== null && phraseNow.next ? <i className="dj-num">{phraseBars} BARS</i> : null}</span>}
         <span className="dj-chip dj-chip--state" data-state={stateKind}>{leading ? "MASTER" : deck?.syncEnabled ? `→ ${syncLeader && syncLeader !== id ? syncLeader : "—"}` : status}</span>
         {/* rekordbox のデッキヘッダ：左に KEY SYNC とキー表示、右に BEAT SYNC / MASTER。 */}
         <div className="dj-sync-block" role="group" aria-label={`Deck ${id} SYNC`}>
@@ -242,7 +255,7 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
       </div>
     </div>
     <div className="dj-overview">
-      <DeckWaveform assetId={deck?.track?.assetId} remoteWaveform={deck?.track?.waveform} trackId={trackId} positionMs={position} durationMs={duration} layout="horizontal" side={left ? "left" : "right"} color={left ? "cyan" : "fuchsia"} hotCues={deck?.hotCues} playing={deck?.status === "playing"} rate={deck?.rate ?? 1} bpm={deck?.track?.bpm} loopRegion={deck?.loopRegion} pendingLoopInMs={pendingLoopIn} onSeek={disabled ? undefined : onSeekAbsolute} />
+      <DeckWaveform assetId={deck?.track?.assetId} remoteWaveform={deck?.track?.waveform} trackId={trackId} positionMs={position} durationMs={duration} layout="horizontal" side={left ? "left" : "right"} color={left ? "cyan" : "fuchsia"} hotCues={deck?.hotCues} cueColors={cueColors} memoryCues={memoryPoints} phrases={phrases} phraseLabels={phraseLabels} playing={deck?.status === "playing"} rate={deck?.rate ?? 1} bpm={deck?.track?.bpm} loopRegion={deck?.loopRegion} pendingLoopInMs={pendingLoopIn} onSeek={disabled ? undefined : onSeekAbsolute} />
     </div>
     <div className="dj-deck-controls">
       <div className="dj-perf">
@@ -258,7 +271,8 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
         <div className="dj-perf-main">
           <div className="dj-phase" aria-hidden style={{ gridTemplateColumns: `repeat(${phaseCells}, 1fr)` }}>{Array.from({ length: phaseCells }, (_, index) => <i key={index} className={cn(index % beatsPerBar === 0 && "is-bar", index === phase && "is-on")} />)}</div>
           {gridEditor ? <div className="dj-grid-editor-slot">{gridEditor}</div> : <>
-            {padMode === "sampler" ? <SamplerPads offset={left?8:0} enabled={Boolean(connected && capabilities.includes("sampler"))} cueAvailable={capabilities.includes("mixer.pfl")} /> : <PerformancePads page={displayedPage} cueColors={cueColors} onKey={(semitones, keyboard) => {
+            {(padMode === "padfx" || padMode === "padfx2") && fxEditing ? <PadFxEditor bank={padMode === "padfx2" ? 5 : 1} page={displayedPage} capabilities={capabilities} deckId={id} />
+            : padMode === "sampler" ? <SamplerPads offset={left?8:0} enabled={Boolean(connected && capabilities.includes("sampler"))} cueAvailable={capabilities.includes("mixer.pfl")} /> : <PerformancePads page={displayedPage} cueColors={cueColors} onKey={(semitones, keyboard) => {
               setPadError(""); const generation = djEngineClient.getDeckGeneration(id);
               void (async () => { await djEngineClient.keyShift(id, semitones);
                 if (keyboard && generation === djEngineClient.getDeckGeneration(id)) { const cue = deck?.hotCues[keyboardCue]; if (cue == null) throw new Error("KEYBOARDにはホットキューを設定してください"); await djEngineClient.seek(id,cue); if(generation === djEngineClient.getDeckGeneration(id)) await djEngineClient.play(id); }
@@ -277,8 +291,11 @@ export function SoftwareDeck({ id, deck, channel, active, connected, capability,
             {padError && <small role="alert">{padError}</small>}
             <div className="dj-pad-mode-row">
               <div className="dj-pad-pages" role="group" aria-label={`Deck ${id} ${padMode==="sampler"?"バンク":"ページ"}`}>
-                {Array.from({length:lastPage+1},(_,page)=><button key={page} type="button" aria-pressed={displayedPage===page} onClick={()=>movePage(page-displayedPage)}>{padMode==="sampler"?"BANK":"PAGE"} {page+1}</button>)}
+                <span className="dj-pad-pages-label" aria-hidden>{padMode==="sampler"?"BANK":"PAGE"}</span>{Array.from({length:lastPage+1},(_,page)=><button key={page} type="button" aria-label={`${padMode==="sampler"?"BANK":"PAGE"} ${page+1}`} aria-pressed={displayedPage===page} onClick={()=>movePage(page-displayedPage)}>{page+1}</button>)}
               </div>
+              {(padMode === "padfx" || padMode === "padfx2") && <button type="button" className={cn("dj-padfx-gear", fxEditing && "is-on")} aria-pressed={fxEditing}
+                title={fxEditing ? "編集を閉じてパッドに戻る" : "PAD FX を編集（FX の種類・拍・パラメータ。全デッキ共通で保存）"} aria-label={`Deck ${id} PAD FX の編集`}
+                onClick={() => setFxEditing((value) => !value)}><Settings2 /></button>}
               <PadModeSelect deckId={id} value={padMode} modes={availablePadModes(capabilities, padMode)} onChange={(mode) => { if (gridEditor) onGridClose?.(); setPadMode(mode); }} />
             </div>
           </>}

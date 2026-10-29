@@ -9,7 +9,10 @@ import { JunctionInputDeck } from "./JunctionInputDeck";
 import { JunctionTurnBar } from "./JunctionTurnBar";
 import { TAIL_LOCK_TEXT } from "@/services/junction/turn-state";
 import { BeatFxPanel } from "./BeatFxPanel";
-import { callMemoryCue, memoryAction } from "@/services/dj-engine/memory-cues";
+import { callMemoryCue, invalidateMemoryCues, memoryAction, memoryCues, migrateLegacyMemoryCues } from "@/services/dj-engine/memory-cues";
+import { assetIdentity } from "@/services/junction/asset-resolver";
+import { useRekordboxTrack } from "./useThreeBand";
+import { resetWaveformZoom, stepWaveformZoom, useWaveformZoom, ZOOM_LEVELS } from "./waveform-zoom";
 import { jogWeight } from "@/services/dj-engine/jog-weight";
 import { sampler } from "@/services/dj-engine/sampler";
 import "./sampler.css";
@@ -41,6 +44,7 @@ import { chooseSyncLeader } from "./sync-leader";
 import { deckKey, masterDeck } from "@/lib/key-display";
 import { manualLoopOut, snapToBeat } from "./loop-math";
 import { awaitPendingGrid } from "./pending-grid";
+import { DeckLoadError, runDeckLoad } from "./deck-load-flow";
 import { CROSSFADER_CURVE_OPTIONS, FADER_CURVES, FADER_CURVE_LABELS, nextDropouts, readCrossfaderCurve, readFaderCurve, type ColorFxEffect, type DropoutState } from "./mixer-math";
 import { readShortcutPreset, SHORTCUT_PRESETS, shortcutHelp } from "./keyboard-shortcuts";
 import { RotaryKnob } from "./RotaryKnob";
@@ -90,6 +94,15 @@ function restoredHistory(): [DeckId, HistoryRuntime][] {
 export function PlayWorkspace() {
   const { status, state, error, busy, client, start, stop, connect } = useDjEngine();
   const preferences = usePlayPreferences();
+  const zoomSeconds = useWaveformZoom();
+  // MEMORY CUEs live in the database; move what the old build kept locally once.
+  useEffect(() => { void migrateLegacyMemoryCues().catch(() => undefined); }, []);
+  const [memoryRevision, setMemoryRevision] = useState(0);
+  useEffect(() => {
+    const changed = () => setMemoryRevision((value) => value + 1);
+    window.addEventListener("plumdeck:memory-cues", changed);
+    return () => window.removeEventListener("plumdeck:memory-cues", changed);
+  }, []);
   useEffect(() => { const timer = setInterval(() => void sampler.poll(), 250); return () => { clearInterval(timer); }; }, []);
   const [deckCount, setDeckCount] = useState<2 | 4>(() => localStorage.getItem("plumdeck.deckCount") === "4" ? 4 : 2);
   const [expandedPair,setExpandedPair]=useState<'AB'|'CD'|null>(null);
@@ -122,6 +135,18 @@ export function PlayWorkspace() {
   const [gridEdit, setGridEdit] = useState<GridEditSession | null>(null);
   const [cueRevision, setCueRevision] = useState(0);
   const [trackMetadata, setTrackMetadata] = useState<Record<number, PerformanceMetadata>>({});
+  /** Loads in flight per deck (title), shown on the deck until the engine reports the track. */
+  const [pendingLoads, setPendingLoads] = useState<Partial<Record<DeckId, string>>>({});
+  /** Tracks that started playing in this Play session (browser colouring). */
+  const [playedIds, setPlayedIds] = useState<ReadonlySet<number>>(() => {
+    try { const value = JSON.parse(sessionStorage.getItem("plumdeck.playedInSession") ?? "[]"); return new Set(Array.isArray(value) ? value.filter(Number.isSafeInteger) : []); } catch { return new Set(); }
+  });
+  const markPlayed = useCallback((trackId: number) => setPlayedIds(old => {
+    if (old.has(trackId)) return old;
+    const next = new Set(old); next.add(trackId);
+    try { sessionStorage.setItem("plumdeck.playedInSession", JSON.stringify([...next])); } catch { /* memory only */ }
+    return next;
+  }), []);
   // エンジンはキーを持たないので、ロード時のライブラリ値をヘッダ表示用に控えておく。
   const [trackKeys, setTrackKeys] = useState<Record<number, string>>({});
   const [gridPreview, setGridPreview] = useState<PerformanceBeatGrid | null>(null);
@@ -264,6 +289,7 @@ export function PlayWorkspace() {
     exiting.current = true;
     if (junctionState.active()) return;
     sessionStorage.removeItem("plumdeck.playSession");
+    sessionStorage.removeItem("plumdeck.playedInSession");
     sessionStorage.removeItem("plumdeck.playHistoryRuntime");
     sessionStorage.removeItem("plumdeck.recordingKey");
     void (async () => {
@@ -277,11 +303,23 @@ export function PlayWorkspace() {
 
   // The deck was loaded without a grid while the backend analyzes it; take
   // the grid onto the deck when it lands, unless another track replaced it.
-  const applyLateGrid = useCallback(async (deck: DeckId, trackId: number, loadRequest: number) => {
+  const applyLateGrid = useCallback(async (deck: DeckId, trackId: number, loadRequest: number, withCues = false) => {
     const holdsTrack = () => loadRequest === deckLoadRequests.current[deck]
       && client.getState().snapshot?.decks[deck]?.track?.trackId === String(trackId);
-    const metadata = await awaitPendingGrid({ fetch: () => performanceMetadataService.get(trackId), current: holdsTrack });
+    // A load whose metadata GET was late asks once more at once, then polls.
+    const metadata = await awaitPendingGrid({ fetch: () => performanceMetadataService.get(trackId), current: holdsTrack, intervalMs: withCues ? 500 : undefined });
     if (!metadata) return;
+    if (withCues) {
+      setTrackMetadata(old => ({ ...old, [trackId]: metadata }));
+      const duration = client.getState().snapshot?.decks[deck]?.track?.durationMs ?? 0;
+      try {
+        const positions = cuePositions(metadata, duration);
+        for (let slot = 0; slot < positions.length; slot++) {
+          const position = positions[slot];
+          if (position !== null && holdsTrack()) await client.setHotCue(deck, slot, position, false);
+        }
+      } catch { /* the cues stay editable; a reload applies them */ }
+    }
     const grid = metadata.beat_grid;
     if (!grid) {
       if (metadata.grid_warning) setCommandError(`グリッド注意: ${metadata.grid_warning}`);
@@ -310,61 +348,78 @@ export function PlayWorkspace() {
     cuePoints.current[deck] = 0;
     setLoopIn(deck, null);
     const descriptor: TrackDescriptor = { musicalKey: track.key || undefined, localTrackId: track.id, trackId: String(track.id), path: track.filepath, durationMs: track.duration * 1000, title: track.title || undefined, artist: track.artist || undefined, bpm: track.bpm || undefined };
+    const session = client.getSessionId();
+    setPendingLoads(old => ({ ...old, [deck]: track.title || track.filepath }));
+    let loadLease = junctionLeaseKey(), loadGeneration = -1;
+    const current = () => loadRequest === deckLoadRequests.current[deck]
+      && (loadGeneration < 0 || loadLease === junctionLeaseKey() && loadGeneration === client.getDeckGeneration(deck));
     void run(() => deckLoadOperations.current.run(DECK_IDS.indexOf(deck), () => gridOperations.current.run(track.id, async () => {
-      if (loadRequest !== deckLoadRequests.current[deck]) return;
-      if (!client.getSessionId()) {
-        if (!status?.running) await start(outputDevice || undefined, recordingDir || undefined);
-        if (!client.getSessionId()) await connect();
-      }
+      let gridPending = false, lateMetadata = false;
       try {
-        const audio = await ensureAudioReady(client, outputDevice || undefined, recordingDir || undefined);
-        const saved = parseOutputRouting(localStorage.getItem(OUTPUT_ROUTING_KEY));
-        if (saved && saved.deviceId === audio.deviceId && (JSON.stringify(saved.routing.masterChannels) !== JSON.stringify(audio.masterChannels) || JSON.stringify(saved.routing.pflChannels) !== JSON.stringify(audio.pflChannels))) {
-          await client.setOutputRouting(saved.routing);
-        }
+        const outcome = await runDeckLoad<PerformanceMetadata>({
+          trackId: descriptor.trackId,
+          current,
+          ensureEngine: async () => {
+            if (client.getSessionId()) return;
+            if (!status?.running) await start(outputDevice || undefined, recordingDir || undefined);
+            if (!client.getSessionId()) await connect();
+            if (!client.getSessionId()) throw new Error("音声エンジンに接続できませんでした。エンジンを起動して再試行してください。");
+          },
+          ensureAudio: async () => {
+            try {
+              const audio = await ensureAudioReady(client, outputDevice || undefined, recordingDir || undefined);
+              const saved = parseOutputRouting(localStorage.getItem(OUTPUT_ROUTING_KEY));
+              if (saved && saved.deviceId === audio.deviceId && (JSON.stringify(saved.routing.masterChannels) !== JSON.stringify(audio.masterChannels) || JSON.stringify(saved.routing.pflChannels) !== JSON.stringify(audio.pflChannels))) {
+                await client.setOutputRouting(saved.routing);
+              }
+            } catch (cause) {
+              setAudioSettingsOpen(true);
+              throw cause;
+            }
+          },
+          fetchMetadata: () => performanceMetadataService.get(track.id),
+          prepare: (metadata) => {
+            if (!metadata) { lateMetadata = true; gridPending = true; return; }
+            gridPending = !metadata.beat_grid && Boolean(metadata.grid_pending);
+            setTrackMetadata(old => ({ ...old, [track.id]: metadata }));
+            try { descriptor.hotCues = cuePositions(metadata, descriptor.durationMs); } catch { descriptor.hotCues = undefined; }
+            descriptor.bpm = metadata.beat_grid?.bpm ?? descriptor.bpm;
+            descriptor.beatgridOffsetMs = metadata.beat_grid?.first_beat_ms;
+            descriptor.beatsPerBar = metadata.beat_grid?.beats_per_bar;
+            descriptor.beatTimesMs = metadata.beat_grid?.beat_times_ms ?? undefined;
+            descriptor.beatNumbers = metadata.beat_grid?.beat_numbers ?? undefined;
+            if (metadata.grid_warning) setCommandError(`グリッド注意: ${metadata.grid_warning}`);
+          },
+          load: async () => {
+            // History of the replaced track is written in the background; the
+            // engine load never waits for the backend.
+            void finalizeHistory(deck, "replaced");
+            loadLease = junctionLeaseKey();
+            await client.load(deck, descriptor);
+            loadGeneration = client.getDeckGeneration(deck);
+          },
+          poll: async () => {
+            const state = (await client.refreshSnapshot()).decks[deck];
+            return { status: state?.status ?? "empty", trackId: state?.track?.trackId, lastError: state?.lastError };
+          },
+        });
+        if (outcome.kind === "superseded") return;
+        if (outcome.metadataError) setCommandError(outcome.metadataError);
       } catch (cause) {
-        setAudioSettingsOpen(true);
+        if (cause instanceof DeckLoadError && cause.stage === "settle" && current() && session === client.getSessionId()) await client.unload(deck).catch(() => undefined);
         throw cause;
-      }
-      let gridPending = false;
-      try {
-        const metadata = await performanceMetadataService.get(track.id);
-        gridPending = !metadata.beat_grid && Boolean(metadata.grid_pending);
-        setTrackMetadata(old => ({ ...old, [track.id]: metadata }));
-        descriptor.hotCues = cuePositions(metadata, descriptor.durationMs);
-        descriptor.bpm = metadata.beat_grid?.bpm ?? descriptor.bpm;
-        descriptor.beatgridOffsetMs = metadata.beat_grid?.first_beat_ms;
-        descriptor.beatsPerBar = metadata.beat_grid?.beats_per_bar;
-        descriptor.beatTimesMs = metadata.beat_grid?.beat_times_ms ?? undefined;
-        descriptor.beatNumbers = metadata.beat_grid?.beat_numbers ?? undefined;
-        if (metadata.grid_warning) setCommandError(`グリッド注意: ${metadata.grid_warning}`);
-      } catch {
-        throw new Error("保存済みグリッドを確認できないため、ロードを中止しました。接続を確認して再試行してください。");
-      }
-      await finalizeHistory(deck, "replaced");
-      if (loadRequest !== deckLoadRequests.current[deck]) return;
-      const loadLease = junctionLeaseKey();
-      await client.load(deck, descriptor);
-      const loadGeneration = client.getDeckGeneration(deck);
-      const deadline = performance.now() + 15000;
-      while (true) {
-        if (loadRequest !== deckLoadRequests.current[deck]) return;
-        if (loadLease !== junctionLeaseKey() || loadGeneration !== client.getDeckGeneration(deck)) return;
-        const state = (await client.refreshSnapshot()).decks[deck];
-        if (state.status === "error") throw new Error(state.lastError ?? "曲のロードに失敗しました");
-        if (state.track?.trackId === descriptor.trackId && state.status !== "loading") break;
-        if (performance.now() >= deadline) { if (loadRequest === deckLoadRequests.current[deck] && loadLease === junctionLeaseKey() && loadGeneration === client.getDeckGeneration(deck)) await client.unload(deck); throw new Error("曲のロードがタイムアウトしました。再試行してください。"); }
-        await new Promise(resolve => window.setTimeout(resolve, 50));
+      } finally {
+        setPendingLoads(old => { if (old[deck] === undefined || loadRequest !== deckLoadRequests.current[deck]) return old; const next = { ...old }; delete next[deck]; return next; });
       }
       const loadedAt = new Date().toISOString();
       const key = `${playSession.current}:${deck}:${track.id}:${Date.now()}`;
       historyKeys.current.set(deck, { key, trackId: track.id, loadedAt, playedMs: 0 });
       saveRuntime();
-      await persist(() => playService.upsertHistory({ event_key: key, session_id: playSession.current, deck, track_id: track.id, loaded_at: loadedAt }));
+      void persist(() => playService.upsertHistory({ event_key: key, session_id: playSession.current, deck, track_id: track.id, loaded_at: loadedAt })).catch(() => undefined);
       setActiveDeck(deck);
-      if (gridPending) void applyLateGrid(deck, track.id, loadRequest);
+      if (gridPending) void applyLateGrid(deck, track.id, loadRequest, lateMetadata);
     })));
-  }, [applyLateGrid, client, connect, finalizeHistory, outputDevice, persist, run, saveRuntime, setLoopIn, start, status?.running]);
+  }, [applyLateGrid, client, connect, finalizeHistory, outputDevice, persist, recordingDir, run, saveRuntime, setLoopIn, start, status?.running]);
 
   const editHotCue = (deck: DeckId, slot: number, clear: boolean) => run(async () => {
     const trackId = client.getState().snapshot?.decks[deck].track?.trackId;
@@ -418,6 +473,7 @@ export function PlayWorkspace() {
 
   const importRekordboxCues = async () => {
     const result = await performanceMetadataService.importAllRekordboxCues();
+    invalidateMemoryCues();
     setTrackMetadata({});
     setCueRevision(value => value + 1);
     const ids = [...new Set(DECK_IDS.map(id => (localTrackId(client.getState().snapshot?.decks[id].track) ?? -1)).filter(id => Number.isSafeInteger(id) && id > 0))];
@@ -496,6 +552,7 @@ export function PlayWorkspace() {
         continue;
       }
       if (deckState.status === "playing" && !item.startedAt) {
+        markPlayed(item.trackId);
         item.startedAt = new Date().toISOString();
         item.playingSince = Date.now();
         saveRuntime();
@@ -715,6 +772,14 @@ export function PlayWorkspace() {
     if (command.phase === "begin") setCommandError(null);
     return client.scratch(deck, command.phase, command.positionMs, command.gestureId, command.capturedAt, command.keepalive);
   }, [client]);
+  const rekordboxDecks: Record<DeckId, ReturnType<typeof useRekordboxTrack>> = {
+    A: useRekordboxTrack(localTrackId(snapshot?.decks.A?.track)),
+    B: useRekordboxTrack(localTrackId(snapshot?.decks.B?.track)),
+    C: useRekordboxTrack(localTrackId(snapshot?.decks.C?.track)),
+    D: useRekordboxTrack(localTrackId(snapshot?.decks.D?.track)),
+  };
+  void memoryRevision;
+  const deckMemoryCues = (id: DeckId) => { const track = snapshot?.decks[id]?.track; return track ? memoryCues(assetIdentity(track), track.durationMs) : undefined; };
   const waveform = (id: DeckId, layout: WaveformLayout) => {
     const deck = displayedDeck(id);
     return <DeckWaveform key={id} label={id} assetId={deck?.track?.assetId} remoteWaveform={deck?.track?.waveform} trackId={localTrackId(deck?.track)}
@@ -723,7 +788,8 @@ export function PlayWorkspace() {
       beatTimesMs={deck?.track?.beatTimesMs} beatNumbers={deck?.track?.beatNumbers}
       gridAvailable={Boolean(deck?.track?.beatgridOffsetMs !== undefined || deck?.track?.beatTimesMs?.length)}
       onGridShift={gridEdit?.deck === id && !gridSaving.current ? (deltaMs) => setGridShift(old => ({ sequence: (old?.sequence ?? 0) + 1, deltaMs })) : undefined}
-      hotCues={deck?.hotCues} scratching={deck?.scratching} loopRegion={deck?.loopRegion} pendingLoopInMs={pendingLoopIn[id]}
+      hotCues={deck?.hotCues} cueColors={cueColorsFor(id)} memoryCues={deckMemoryCues(id)} phrases={rekordboxDecks[id].phrases} phraseLabels={preferences.phraseLabels}
+      scratching={deck?.scratching} loopRegion={deck?.loopRegion} pendingLoopInMs={pendingLoopIn[id]}
       onSeek={connected && !tailLock(id) ? (ms) => seekAbsolute(id, ms) : undefined}
       onScratch={connected && !tailLock(id) ? (command) => scratch(id, command) : undefined}
       onBackspin={connected && !tailLock(id) ? (release) => client.backspin(id, release.gestureId, release.positionMs, release.velocity, jogWeight(id),
@@ -891,6 +957,8 @@ export function PlayWorkspace() {
     return <SoftwareDeck key={id} id={id} deck={displayedDeck(id)} active={activeDeck === id} connected={connected}
     tailLock={tailLock(id)}
     cueColors={cueColorsFor(id)}
+    pendingLoad={pendingLoads[id]}
+    phrases={rekordboxDecks[id].phrases}
     onGridEdit={() => openGridEditor(id)}
     onGridClose={closeGridEditor}
     gridEditor={gridEdit?.deck === id && snapshot?.decks[id]?.track?.trackId === String(gridEdit.trackId) ? <BeatGridEditor key={`${id}:${gridEdit.trackId}`} trackId={gridEdit.trackId} durationMs={snapshot.decks[id].track!.durationMs} positionMs={snapshot.decks[id].positionMs} initialGrid={gridEdit.initialGrid} hasGrid={Boolean(gridEdit.metadata.beat_grid)} shiftRequest={gridShift} playing={snapshot.decks[id].status === "playing"} onTogglePlay={() => togglePlay(id)} onAnalyze={(force) => performanceMetadataService.analyzeGrid(gridEdit.trackId, force)} onRekordbox={() => performanceMetadataService.rekordboxGrid(gridEdit.trackId)} disabled={!connected} onPreview={setGridPreview} onSave={saveGrid} onClose={closeGridEditor} /> : undefined}
@@ -980,11 +1048,19 @@ export function PlayWorkspace() {
         <label>チャンネルフェーダーのカーブ <select aria-label="チャンネルフェーダーのカーブ" value={preferences.faderCurve} onChange={event => setPlayPreference("faderCurve", readFaderCurve(event.target.value))}>
           {FADER_CURVES.map(curve => <option key={curve} value={curve}>{FADER_CURVE_LABELS[curve]}</option>)}</select></label>
         <label>キー表記 <select aria-label="キー表記" value={preferences.keyNotation} onChange={event => setPlayPreference("keyNotation", readKeyNotation(event.target.value))}>
-          <option value="camelot">Camelot（8A）</option><option value="classic">Classic（Am）</option></select></label>
+          <option value="camelot">Alphanumeric（8A）</option><option value="classic">Classic（Am）</option></select></label>
         <label>キーボード配列 <select aria-label="キーボード配列" value={preferences.keyboard} onChange={event => setPlayPreference("keyboard", readShortcutPreset(event.target.value))}>
           {SHORTCUT_PRESETS.map(preset => <option key={preset.id} value={preset.id}>{preset.label}</option>)}</select></label>
+        <label title="rekordbox のフレーズ解析がある曲で、波形の下の帯に名前を出します">フレーズ名 <select aria-label="フレーズ名の表示" value={preferences.phraseLabels} onChange={event => setPlayPreference("phraseLabels", event.target.value === "always" ? "always" : "hover")}>
+          <option value="hover">波形にカーソルがあるとき</option><option value="always">常に表示</option></select></label>
         <label title="音より波形が先行する場合は増やします。">波形の表示遅延（ms） <input type="number" min="-50" max="500" step="1" value={waveDelay} onChange={event=>{const value=Math.max(-50,Math.min(500,Number(event.target.value)||0));setWaveDelay(value);localStorage.setItem('plumdeck.waveDelay',String(value));}} /></label>
       </div></details>
+      <div className="dj-segmented dj-wave-zoom-group" role="group" aria-label="波形ズーム（全デッキ共通）">
+        <button type="button" title="ズームアウト（全デッキ共通）" aria-label="ズームアウト" disabled={zoomSeconds >= ZOOM_LEVELS[ZOOM_LEVELS.length - 1]} onClick={() => stepWaveformZoom(-1)}>−</button>
+        <button type="button" className="dj-wave-zoom-value dj-num" title="表示範囲（実時間の秒数。テンポに合わせて伸縮）。クリックで既定に戻す" onClick={resetWaveformZoom}>{zoomSeconds < 1 ? `${zoomSeconds * 1000}ms` : `${zoomSeconds}s`}</button>
+        <button type="button" title="ズームイン（全デッキ共通）" aria-label="ズームイン" disabled={zoomSeconds <= ZOOM_LEVELS[0]} onClick={() => stepWaveformZoom(1)}>+</button>
+        <button type="button" title="ズームを既定（8 秒）に戻す" onClick={resetWaveformZoom}>RST</button>
+      </div>
       <div className="dj-segmented" aria-label="波形レイアウト">{(["horizontal", "vertical"] as const).map((layout) => <button key={layout} title={layout === "horizontal" ? "横波形（デッキ上部に重ねて表示）" : "縦波形（デッキ中央に並べて表示）"} aria-label={layout === "horizontal" ? "横波形" : "縦波形（デッキ中央）"} aria-pressed={waveformLayout === layout} className={waveformLayout === layout ? "is-on" : ""} onClick={() => { setWaveformLayout(layout); localStorage.setItem("plumdeck.waveformLayout", layout); }}>{layout === "horizontal" ? <Rows3 /> : <Columns3 />}</button>)}</div>
       <div className="dj-engine-status"><i className={connected && snapshot?.audio.applied ? "is-connected" : ""} /><span>{connected ? snapshot?.engine.simulated ? "SIMULATOR · 音声出力なし" : snapshot?.audio.applied ? "AUDIO CONNECTED" : "音声出力を確認中" : busy ? "音声エンジンを起動中…" : "AUDIO OFFLINE"}</span></div>
       {connected && metersSupported && <MasterMeter meter={state.meters?.master} />}
@@ -1112,7 +1188,9 @@ export function PlayWorkspace() {
       </div>}
       <span className={cn("dj-master-note", snapshot?.recording?.active && "is-recording")}>{snapshot?.recording?.active ? `● REC ${formatTime(snapshot.recording.elapsedMs)}` : `DECK ${activeDeck} SELECTED`}</span>
     </div>
-    <PlayLibrary masterKey={(() => { const decks = snapshot?.decks; const master = decks ? masterDeck(DECK_IDS, decks) : undefined; return master && decks ? deckKey(decks[master]) : null; })()} activeDeck={activeDeck} seedTrackId={Number.isFinite(seed) && seed > 0 ? seed : null} onLoad={loadTrack} cueOverrides={listCueOverrides} cueRevision={cueRevision} cueImportControl={<RekordboxCueImportButton onImport={importRekordboxCues} />} />
+    <PlayLibrary masterKey={(() => { const decks = snapshot?.decks; const master = decks ? masterDeck(DECK_IDS, decks) : undefined; return master && decks ? deckKey(decks[master]) : null; })()}
+      masterBpm={(() => { const decks = snapshot?.decks; const master = decks ? masterDeck(DECK_IDS, decks) : undefined; const deck = master ? decks?.[master] : undefined; const bpm = deck?.track?.bpm ? deck.track.bpm * (deck.rate ?? 1) : deck?.effectiveBpm ?? null; return bpm && bpm > 0 ? Math.round(bpm * 10) / 10 : null; })()}
+      playedIds={playedIds} activeDeck={activeDeck} seedTrackId={Number.isFinite(seed) && seed > 0 ? seed : null} onLoad={loadTrack} cueOverrides={listCueOverrides} cueRevision={cueRevision} cueImportControl={<RekordboxCueImportButton onImport={importRekordboxCues} />} />
     {audioSettingsOpen && <AudioSettings onClose={() => setAudioSettingsOpen(false)} onApply={applyAudioOutput} />}
     <RecordingSaveDialog recording={savingRecording} onClose={() => setSavingRecording(null)}
       onBeforePreview={prepareRecordingPreview}

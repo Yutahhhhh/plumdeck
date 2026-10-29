@@ -53,13 +53,13 @@ jobs:
       - name: Manual updater state and restart tests
         run: node --experimental-strip-types --test src/services/update-controller.test.mjs
       - name: Play drop routing and waveform manifest compatibility tests
-        run: node --experimental-strip-types --test src/services/deck-drop.test.mjs src/services/play-drag-routing.test.mjs src/services/waveform/repository.test.mjs
+        run: node --experimental-strip-types --test src/services/deck-drop.test.mjs src/services/play-drag-routing.test.mjs src/services/waveform/repository.test.mjs src/services/waveform/three-band.test.mjs
       - name: Edited tempo boundaries and cue persistence
         run: node --experimental-strip-types --test native/dj-engine-host/tests-node/beat-grid-math.test.ts native/dj-engine-host/tests-node/performance-cue-metadata.test.ts
       - name: Waveform backspin detection and JOG weight braking
         run: node --experimental-strip-types --test native/dj-engine-host/tests-node/scratch-release.test.ts
       - name: Play controls logic (loops, tempo, key notation, mixer, shortcuts, PAD FX, protocol)
-        run: node --experimental-strip-types --test src/components/play/play-logic.test.mjs src/components/play/pending-grid.test.mjs src/components/play/keyboard-runtime.test.mjs src/components/play/pad-fx-failures.test.mjs src/services/midi/loop-resize.test.mjs native/dj-engine-host/tests-node/protocol.test.ts native/dj-engine-host/tests-node/ddj1000-pad-pages.test.ts native/dj-engine-host/tests-node/ddj1000.test.ts native/dj-engine-host/tests-node/ddj1000-gesture-state.test.ts native/dj-engine-host/tests-node/ddj1000-display.test.ts
+        run: node --experimental-strip-types --test src/components/play/play-logic.test.mjs src/components/play/pending-grid.test.mjs src/components/play/deck-load-flow.test.mjs src/components/play/keyboard-runtime.test.mjs src/components/play/pad-fx-failures.test.mjs src/services/midi/pad-overrides.test.mjs src/services/midi/loop-resize.test.mjs native/dj-engine-host/tests-node/protocol.test.ts native/dj-engine-host/tests-node/ddj1000-pad-pages.test.ts native/dj-engine-host/tests-node/ddj1000.test.ts native/dj-engine-host/tests-node/ddj1000-gesture-state.test.ts native/dj-engine-host/tests-node/ddj1000-display.test.ts
       - name: Engine contract matches the host, simulator and client
         run: node --experimental-strip-types tools/engine-contract/contract.mjs
       - name: Junction specification baseline matches the sources

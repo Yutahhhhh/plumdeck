@@ -465,9 +465,12 @@ function parseMixerState(data: unknown): EngineSnapshot["mixer"] | null {
     if (!isRecord(channel)) continue;
     if (channel.trim !== undefined && (!isFiniteNumber(channel.trim) || channel.trim < 0 || channel.trim > 2)) return null;
     if (channel.filter !== undefined && (!isFiniteNumber(channel.filter) || channel.filter < -1 || channel.filter > 1)) return null;
+    // An empty or not-yet-loaded PAD FX slot (the host reports effect "" until
+    // the first press) is "no effect", never a reason to drop the whole mixer
+    // state: that rejected every snapshot and left the decks unusable.
     if (channel.fx !== undefined && (!isRecord(channel.fx) || !PAD_EFFECTS.includes(channel.fx.effect as PadEffect)
       || typeof channel.fx.enabled !== "boolean" || !isFiniteNumber(channel.fx.mix)
-      || channel.fx.mix < FX_MIX_RANGE.min || channel.fx.mix > FX_MIX_RANGE.max)) return null;
+      || channel.fx.mix < FX_MIX_RANGE.min || channel.fx.mix > FX_MIX_RANGE.max)) delete channel.fx;
   }
   return data as unknown as EngineSnapshot["mixer"];
 }
