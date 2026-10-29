@@ -170,6 +170,18 @@ release-integration で、UI の修正と Mixxx ホストで小さく直せる�
 
 ## 4. Junction の Rust 移植（J）
 
+> **2026-10-29 オーナー決定：Junction v2 に置き換え。** 旧 Junction（C++ の WebRTC ランタイム、W5/W6 ワイヤ、STANDBY/READY/ON AIR/OUTGOING とフェーダースタート、Lite ホスト）は忠実に移植しない。以下の §4.1〜§4.2（W2-30〜W2-47）は v2 で置き換えられた旧計画として残す。v2 の構成は §4.0。
+
+### 4.0 Junction v2（実装済み・実回線は未確認）
+
+- **用途**：離れた場所の約 5 人の DJ（B2B を含む）が 1 本の途切れないセットをつなぎ、ライブ配信に出す。主催者が plumdeck で**ホスト**になり、ホストの plumdeck が配信の音（Program）を音声デバイス（OBS へは BlackHole など）へ出す。数秒の配信遅延は許容。
+- **トポロジー**：ホスト中心の star。WebRTC は WebView／ブラウザの `RTCPeerConnection`（Opus ステレオ 192 kbps の sendrecv 1 本＋DataChannel `jlink`）。シグナリングは share-musics の `junction_*`（offer/answer、ICE 収集完了後の SDP を 1 往復）か、招待コード／応答コード（`JLINK2.`）の手渡し。旧プロトコルとの互換は無い。
+- **順番**：ホストが順番・ON AIR・NEXT（明示の指名か順番の次）・前のDJ を持ち、変更のたびに状態全体を配る。NEXT はホスト・ON AIR・次の DJ が押せる。デッキのロックは無い（`src/services/junction-v2/core/turns.ts`）。
+- **送出と J フィード**：ON AIR と次の DJ は J を含むミックス全体（full）、それ以外は自分のデッキだけ（local、J とマイクを含まない）を送る。J デッキには、ON AIR の DJ には前の DJ の残りの曲、前の DJ には何も、それ以外には ON AIR の DJ の音をホストが中継する。誰も自分の音を J で聴き返さない（テストで全状態を検査）。ON AIR の DJ が J を下げ切って 1.5 秒たつと前の DJ の中継を止める。
+- **Program とつなぎ目**：ホストは受信したすべての音を 1 つの AudioContext で同じクロックに載せ、ON AIR の音を固定遅延 D（3 秒）で読む。NEXT のとき、次の DJ のミックスに入っている「前の DJ の音」の遅れ L（ホスト→次の DJ→ホストの一巡）を、タイムスタンプ（RTT と各端末の報告するバッファ遅延）を事前分布にして、音声そのものの相互相関（GCC-PHAT＋正規化相関、サンプル精度）で測り、読み位置を L だけ進めて 30 ms の線形クロスフェードでつなぐ。前の DJ の音は繰り返しも欠けも無く続く。使った L は最大 0.2 % の再生速度調整で数分かけて D に戻す。詳細は `core/program.ts` の冒頭コメント。
+- **アプリ内の音声経路**：WebView（AudioWorklet）とエンジンの間はループバックの WebSocket（`junction::Link`、`jlink.*` op、トークン付き）。WebRTC の受信音→J デッキ（`[Auxiliary1]`、通常のチャンネルとしてレベル・EQ・クロスフェーダー・CUE）、エンジンのミックス（full＝マスターつまみ前のメイン、local＝J とマイクを除くローカルバス）→WebRTC。PCM は UI スレッドを通らず、AudioWorklet と I/O ワーカーの MessagePort で流れる。
+- **Lite**：ゲストとしてだけ参加。MixerEngine の JUNCTION チャンネルと送出（`setJunctionTail`）をそのまま使う。
+
 ### 4.1 要件（オーナー決定、[README.md](README.md) §2.10）
 
 - 操作する DJ は常に 1 人。出ていく DJ の音は、入ってくる DJ の JUNCTION デッキ（レベル、EQ、クロスフェーダー、CUE）で鳴り続け、入ってくる DJ がフェードアウトしたときに止まる。**操作者の交代と音の停止は別の手順。**
@@ -235,5 +247,5 @@ keylock が届かなければ、マルチ解像度の v2 を追加で作りま�
 - プレビュー版で、Rust エンジンに切り替えて実ライブラリの曲をロードし、2 デッキでミックス。rekordbox の CUE が Mixxx と Rust で同じ位置か、MP3 の種類と m4a で聴き比べる。内蔵出力と DDJ-1000（4ch、PFL）。
 - keylock の ABX（テンポ 0.94 / 1.06）、Beat FX、EQ kill、ジョグ、スクラッチ、バックスピン、着地、マイクのトークオーバー、サンプラー。
 - BlackHole 適合スイートを Rust エンジンで実行し、Mixxx のベースラインと比べる。
-- Junction の B2B：Mac 2 台で Rust⇄Rust と Rust⇄C++（配布済みの版）、スマホの Lite、DDJ での J チャンネルのフェーダースタート、第 2 デバイスへの Program 出力、長時間の運用、スリープ抑止、キーチェーンの許可ダイアログ。Windows でも WASAPI のスモークと Mac との B2B。
+- Junction v2（§4.0）の実回線：別々のネットワークの Mac 2〜3 台と Lite（Chrome／iPhone Safari）で接続（share-musics と招待コードの両方）、5 人での一周、NEXT のつなぎ目を配信出力（BlackHole→OBS）で聴いて二重・飛びが無いか、J を下げたときの自動解放、Program 遅延の回復（数分）、長時間の運用、ホストの WebView で RTCPeerConnection と AudioWorklet が動くこと、Windows（WebView2）でのスモーク。
 - timeline-v2 の移行後、rekordbox の CUE と手で打った CUE を抜き取りで確認。
