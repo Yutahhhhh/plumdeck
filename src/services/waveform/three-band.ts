@@ -147,10 +147,12 @@ export function drawThreeBand(ctx: CanvasRenderingContext2D, wave: ThreeBandWave
   };
   if (options.style === "overview") {
     // Stacked: the blue base is the sum, amber the mid + high part, cream the high part.
-    const total = (i: number) => Math.min(1, (low[i] + mid[i] + high[i]) / 1.8);
+    // rekordbox's overview reads mostly blue with an amber body and a thin
+    // cream core, so the upper bands are weighted down in the stack.
+    const total = (i: number) => Math.min(1, (low[i] + mid[i] + high[i]) / 2.2);
     fill(WAVE3_COLORS.overview, total);
-    fill(WAVE3_COLORS.mid, (i) => Math.min(total(i), (mid[i] + high[i]) / 1.8));
-    fill(WAVE3_COLORS.high, (i) => Math.min(total(i), high[i] / 1.8));
+    fill(WAVE3_COLORS.mid, (i) => Math.min(total(i), (mid[i] + high[i] * 0.5) / 2.2));
+    fill(WAVE3_COLORS.high, (i) => Math.min(total(i), high[i] * 0.35 / 2.2));
   } else {
     // Overlaid: low blue, mid amber over it (brown where they overlap), high cream last.
     fill(WAVE3_COLORS.low, (i) => low[i]);
