@@ -52,7 +52,8 @@ if(TARGET mixxx)
   target_link_libraries(mixxx PRIVATE plumdeck-junction-core)
 endif()
 
-target_sources(plumdeck-mixxx-engine-host PRIVATE "${PLUMDECK_ROOT}/src/junction/private_preview.cpp")
+target_sources(plumdeck-mixxx-engine-host PRIVATE "${PLUMDECK_ROOT}/src/junction/private_preview.cpp"
+  "${PLUMDECK_ROOT}/src/junction/link.cpp")
 
 target_include_directories(mixxx-lib PRIVATE "${CMAKE_SOURCE_DIR}/src/soundio")
 

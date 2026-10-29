@@ -7,7 +7,7 @@
 #include <memory>
 #include <optional>
 
-namespace junction { class Runtime; }
+namespace junction { class Runtime; class Link; }
 
 // Main-thread boundary. Implementations must marshal controls through Mixxx's
 // control machinery; JSON and these callbacks never run in an audio callback.
@@ -15,6 +15,8 @@ class PlaybackBackend {
 public:
     virtual ~PlaybackBackend() = default;
     virtual void attachJunction(junction::Runtime*) {}
+    /// Junction v2: while the link is active it feeds the JUNCTION deck and taps the uplink.
+    virtual void attachLink(junction::Link*) {}
     virtual QString privatePreviewCommand(const QString&,const QJsonObject&) { return "Private preview unavailable"; }
     virtual QJsonObject privatePreviewState() const { return {}; }
     /// The JUNCTION deck: another DJ's audio as a local mixer channel.

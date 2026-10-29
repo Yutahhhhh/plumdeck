@@ -2,10 +2,11 @@
 
 `tools/junction-spec/baseline.mjs --write` が TESTMAP.json から生成する。手で編集しない。状態を変えるときは TESTMAP.json の `port.status`（と `port.rust`、`port.note`）を書き換えてから `--write` する。
 
-テスト 198 件：kept 54、todo 144。
+テスト 221 件：kept 55、todo 166。
 
 | 項目 | 層 | ファイル | スイート | 方針 | 件数 | 状態 |
 |---|---|---|---|---|---|---|
+| — | junction-v2 | `native/mixxx-engine-host/tests/conformance/jlink.test.mjs` |  | keep | 1 | kept 1 |
 | — | signaling | `services/junction-signaling/test/config.test.ts` |  | keep | 1 | kept 1 |
 | — | signaling | `services/junction-signaling/test/protocol.test.ts` |  | keep | 13 | kept 13 |
 | — | signaling | `services/junction-signaling/test/rate-limit.test.ts` |  | keep | 8 | kept 8 |
@@ -36,6 +37,9 @@
 | W2-44 | runtime | `native/mixxx-engine-host/tests/junction/program_output_test.cpp` | `program-output-long-device` | port | 1 | todo 1 |
 | W2-44 | runtime | `native/mixxx-engine-host/tests/junction/program_output_test.cpp` | `program-output-splice-device` | port | 1 | todo 1 |
 | W2-45 | interop | `native/mixxx-engine-host/tests/junction/cross-platform-runtime.test.mjs` |  | port | 2 | todo 2 |
+| W2-47 | frontend | `src/services/junction-v2/core/program.test.mjs` |  | rerun | 12 | todo 12 |
+| W2-47 | frontend | `src/services/junction-v2/core/turns.test.mjs` |  | rerun | 9 | todo 9 |
+| W2-47 | frontend | `src/services/junction-v2/io-worker.test.mjs` |  | rerun | 1 | todo 1 |
 | W2-47 | frontend | `src/services/junction/control-boundary.test.mjs` |  | rerun | 5 | todo 5 |
 | W2-47 | frontend | `src/services/junction/exchange-actions.test.mjs` |  | rerun | 9 | todo 9 |
 | W2-47 | frontend | `src/services/junction/program-mixer.test.mjs` |  | rerun | 3 | todo 3 |

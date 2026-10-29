@@ -7,6 +7,7 @@ import { useJunction } from '@/hooks/useJunction';
 import { junctionCommand } from '@/services/junction/client';
 import { JunctionInputDeck } from "./JunctionInputDeck";
 import { JunctionTurnBar } from "./JunctionTurnBar";
+import { JunctionLinkDeck, JunctionLinkTurnBar } from "@/components/junction-v2/JunctionLinkStrip";
 import { TAIL_LOCK_TEXT } from "@/services/junction/turn-state";
 import { BeatFxPanel } from "./BeatFxPanel";
 import { callMemoryCue, invalidateMemoryCues, memoryAction, memoryCues, migrateLegacyMemoryCues } from "@/services/dj-engine/memory-cues";
@@ -1126,7 +1127,8 @@ export function PlayWorkspace() {
     <section className="dj-performance" aria-label="Software DJ controller">
       {waveformLayout === "horizontal" && <div className="dj-scrolling-waves">{visibleDecks.map((id) => lane(id, "horizontal"))}</div>}
       {junctionSession?.active && <JunctionTurnBar snapshot={junctionSession} />}
-      <div className="dj-deck-pairs">{junctionInput?.peerId && <div className="dj-deck-pair dj-deck-pair--junction">
+      <JunctionLinkTurnBar />
+      <div className="dj-deck-pairs"><JunctionLinkDeck />{junctionInput?.peerId && <div className="dj-deck-pair dj-deck-pair--junction">
         <JunctionInputDeck state={junctionInput}
           performerName={junctionSession?.participants.find((participant) => participant.peerId === junctionInput.peerId)?.djName}
           mixingTail={junctionSession?.turn?.signal === "onair"}

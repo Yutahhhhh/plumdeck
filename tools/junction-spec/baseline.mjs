@@ -115,6 +115,8 @@ const TARGETS = [
   [/tests\/junction\/.*_test\.cpp$/, /^program-output/, { layer: "runtime", item: "W2-44", action: "port" }],
   [/tests\/junction\/cross-platform-runtime\.test\.mjs$/, null, { layer: "interop", item: "W2-45", action: "port" }],
   [/tests\/junction\/(manual-)?runtime\.test\.mjs$/, null, { layer: "runtime", item: "W2-42", action: "port" }],
+  // Junction v2 (owner decision 2026-10-29): not a port of the C++ runtime.
+  [/tests\/conformance\/jlink\.test\.mjs$/, null, { layer: "junction-v2", item: null, action: "keep" }],
   [/^services\/junction-signaling\//, null, { layer: "signaling", item: null, action: "keep" }],
   [/^src\//, null, { layer: "frontend", item: "W2-47", action: "rerun" }],
   [/^backend\//, null, { layer: "mcp", item: "S12", action: "port" }],

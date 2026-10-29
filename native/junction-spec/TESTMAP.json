@@ -8,6 +8,20 @@
     "retired": "dropped on purpose (port.note says why)"
   },
   "tests": {
+    "native/mixxx-engine-host/tests/conformance/jlink.test.mjs::Junction v2 PCM bridge on BlackHole 2ch": {
+      "file": "native/mixxx-engine-host/tests/conformance/jlink.test.mjs",
+      "suite": null,
+      "name": "Junction v2 PCM bridge on BlackHole 2ch",
+      "hash": "f26f5b49bd4512e1",
+      "port": {
+        "layer": "junction-v2",
+        "item": null,
+        "action": "keep",
+        "status": "kept",
+        "rust": null,
+        "note": null
+      }
+    },
     "native/mixxx-engine-host/tests/junction/authority_test.cpp::authority > waiting DJ can query waveform and timing": {
       "file": "native/mixxx-engine-host/tests/junction/authority_test.cpp",
       "suite": "authority",
@@ -2075,6 +2089,314 @@
         "layer": "bridge",
         "item": "S12",
         "action": "port",
+        "status": "todo",
+        "rust": null,
+        "note": null
+      }
+    },
+    "src/services/junction-v2/core/program.test.mjs::estimateLag recovers the loop delay to the sample, with the next DJ's track equally loud": {
+      "file": "src/services/junction-v2/core/program.test.mjs",
+      "suite": null,
+      "name": "estimateLag recovers the loop delay to the sample, with the next DJ's track equally loud",
+      "hash": "0e40b5b443c5c618",
+      "port": {
+        "layer": "frontend",
+        "item": "W2-47",
+        "action": "rerun",
+        "status": "todo",
+        "rust": null,
+        "note": null
+      }
+    },
+    "src/services/junction-v2/core/program.test.mjs::estimateLag reports low confidence when the J deck is faded out": {
+      "file": "src/services/junction-v2/core/program.test.mjs",
+      "suite": null,
+      "name": "estimateLag reports low confidence when the J deck is faded out",
+      "hash": "5281e8076b564976",
+      "port": {
+        "layer": "frontend",
+        "item": "W2-47",
+        "action": "rerun",
+        "status": "todo",
+        "rust": null,
+        "note": null
+      }
+    },
+    "src/services/junction-v2/core/program.test.mjs::handoff splices A into B's mix with no repeat and no skip of A's audio": {
+      "file": "src/services/junction-v2/core/program.test.mjs",
+      "suite": null,
+      "name": "handoff splices A into B's mix with no repeat and no skip of A's audio",
+      "hash": "39ba5ffa539939f1",
+      "port": {
+        "layer": "frontend",
+        "item": "W2-47",
+        "action": "rerun",
+        "status": "todo",
+        "rust": null,
+        "note": null
+      }
+    },
+    "src/services/junction-v2/core/program.test.mjs::after the handoff the next DJ's own decks come in and A's tail is not doubled": {
+      "file": "src/services/junction-v2/core/program.test.mjs",
+      "suite": null,
+      "name": "after the handoff the next DJ's own decks come in and A's tail is not doubled",
+      "hash": "297aaade1436d31a",
+      "port": {
+        "layer": "frontend",
+        "item": "W2-47",
+        "action": "rerun",
+        "status": "todo",
+        "rust": null,
+        "note": null
+      }
+    },
+    "src/services/junction-v2/core/program.test.mjs::delay recovers to D after a handoff and the rate returns to exactly 1": {
+      "file": "src/services/junction-v2/core/program.test.mjs",
+      "suite": null,
+      "name": "delay recovers to D after a handoff and the rate returns to exactly 1",
+      "hash": "f14f687a54bbe2e2",
+      "port": {
+        "layer": "frontend",
+        "item": "W2-47",
+        "action": "rerun",
+        "status": "todo",
+        "rust": null,
+        "note": null
+      }
+    },
+    "src/services/junction-v2/core/program.test.mjs::estimateLag survives codec-like damage (lowpass, noise)": {
+      "file": "src/services/junction-v2/core/program.test.mjs",
+      "suite": null,
+      "name": "estimateLag survives codec-like damage (lowpass, noise)",
+      "hash": "311a07dbd8e7d4c3",
+      "port": {
+        "layer": "frontend",
+        "item": "W2-47",
+        "action": "rerun",
+        "status": "todo",
+        "rust": null,
+        "note": null
+      }
+    },
+    "src/services/junction-v2/core/program.test.mjs::rate never deviates more than 0.2 % and never steps": {
+      "file": "src/services/junction-v2/core/program.test.mjs",
+      "suite": null,
+      "name": "rate never deviates more than 0.2 % and never steps",
+      "hash": "916b8c9b59ddb7d1",
+      "port": {
+        "layer": "frontend",
+        "item": "W2-47",
+        "action": "rerun",
+        "status": "todo",
+        "rust": null,
+        "note": null
+      }
+    },
+    "src/services/junction-v2/core/program.test.mjs::faded J deck: splice is reported unaligned and uses the timestamp prior": {
+      "file": "src/services/junction-v2/core/program.test.mjs",
+      "suite": null,
+      "name": "faded J deck: splice is reported unaligned and uses the timestamp prior",
+      "hash": "0480c9fbefe94d65",
+      "port": {
+        "layer": "frontend",
+        "item": "W2-47",
+        "action": "rerun",
+        "status": "todo",
+        "rust": null,
+        "note": null
+      }
+    },
+    "src/services/junction-v2/core/program.test.mjs::a loop longer than the held delay is reported late and clamped": {
+      "file": "src/services/junction-v2/core/program.test.mjs",
+      "suite": null,
+      "name": "a loop longer than the held delay is reported late and clamped",
+      "hash": "950e34b47d4c4ff1",
+      "port": {
+        "layer": "frontend",
+        "item": "W2-47",
+        "action": "rerun",
+        "status": "todo",
+        "rust": null,
+        "note": null
+      }
+    },
+    "src/services/junction-v2/core/program.test.mjs::prior narrows the search but the audio decides": {
+      "file": "src/services/junction-v2/core/program.test.mjs",
+      "suite": null,
+      "name": "prior narrows the search but the audio decides",
+      "hash": "aaab92e243112f54",
+      "port": {
+        "layer": "frontend",
+        "item": "W2-47",
+        "action": "rerun",
+        "status": "todo",
+        "rust": null,
+        "note": null
+      }
+    },
+    "src/services/junction-v2/core/program.test.mjs::several handoffs in a row keep the A→B→C content continuous": {
+      "file": "src/services/junction-v2/core/program.test.mjs",
+      "suite": null,
+      "name": "several handoffs in a row keep the A→B→C content continuous",
+      "hash": "c4da670fc7b6823a",
+      "port": {
+        "layer": "frontend",
+        "item": "W2-47",
+        "action": "rerun",
+        "status": "todo",
+        "rust": null,
+        "note": null
+      }
+    },
+    "src/services/junction-v2/core/program.test.mjs::elastic buffer tracks a drifting producer without under- or overruns": {
+      "file": "src/services/junction-v2/core/program.test.mjs",
+      "suite": null,
+      "name": "elastic buffer tracks a drifting producer without under- or overruns",
+      "hash": "86c6a66ec7aa0475",
+      "port": {
+        "layer": "frontend",
+        "item": "W2-47",
+        "action": "rerun",
+        "status": "todo",
+        "rust": null,
+        "note": null
+      }
+    },
+    "src/services/junction-v2/core/turns.test.mjs::order starts with the host and NEXT walks it cyclically": {
+      "file": "src/services/junction-v2/core/turns.test.mjs",
+      "suite": null,
+      "name": "order starts with the host and NEXT walks it cyclically",
+      "hash": "4569edb4fe4dfb93",
+      "port": {
+        "layer": "frontend",
+        "item": "W2-47",
+        "action": "rerun",
+        "status": "todo",
+        "rust": null,
+        "note": null
+      }
+    },
+    "src/services/junction-v2/core/turns.test.mjs::disconnected DJs are skipped, explicit next pick wins": {
+      "file": "src/services/junction-v2/core/turns.test.mjs",
+      "suite": null,
+      "name": "disconnected DJs are skipped, explicit next pick wins",
+      "hash": "63af4cec49b3dc7e",
+      "port": {
+        "layer": "frontend",
+        "item": "W2-47",
+        "action": "rerun",
+        "status": "todo",
+        "rust": null,
+        "note": null
+      }
+    },
+    "src/services/junction-v2/core/turns.test.mjs::only host, on-air and next may press NEXT": {
+      "file": "src/services/junction-v2/core/turns.test.mjs",
+      "suite": null,
+      "name": "only host, on-air and next may press NEXT",
+      "hash": "53d86b3ccefd6f53",
+      "port": {
+        "layer": "frontend",
+        "item": "W2-47",
+        "action": "rerun",
+        "status": "todo",
+        "rust": null,
+        "note": null
+      }
+    },
+    "src/services/junction-v2/core/turns.test.mjs::routes: on air hears previous, others hear on air, full uplink only for on air and next": {
+      "file": "src/services/junction-v2/core/turns.test.mjs",
+      "suite": null,
+      "name": "routes: on air hears previous, others hear on air, full uplink only for on air and next",
+      "hash": "e9431be64ab9c20f",
+      "port": {
+        "layer": "frontend",
+        "item": "W2-47",
+        "action": "rerun",
+        "status": "todo",
+        "rust": null,
+        "note": null
+      }
+    },
+    "src/services/junction-v2/core/turns.test.mjs::release watch fires after the on-air DJ fades a heard J deck out": {
+      "file": "src/services/junction-v2/core/turns.test.mjs",
+      "suite": null,
+      "name": "release watch fires after the on-air DJ fades a heard J deck out",
+      "hash": "82d791b9c2dbca33",
+      "port": {
+        "layer": "frontend",
+        "item": "W2-47",
+        "action": "rerun",
+        "status": "todo",
+        "rust": null,
+        "note": null
+      }
+    },
+    "src/services/junction-v2/core/turns.test.mjs::no participant ever receives a feed that contains its own uplink": {
+      "file": "src/services/junction-v2/core/turns.test.mjs",
+      "suite": null,
+      "name": "no participant ever receives a feed that contains its own uplink",
+      "hash": "53fbc2f6cd632cc9",
+      "port": {
+        "layer": "frontend",
+        "item": "W2-47",
+        "action": "rerun",
+        "status": "todo",
+        "rust": null,
+        "note": null
+      }
+    },
+    "src/services/junction-v2/core/turns.test.mjs::removing a participant drops them from the order; stop clears the air": {
+      "file": "src/services/junction-v2/core/turns.test.mjs",
+      "suite": null,
+      "name": "removing a participant drops them from the order; stop clears the air",
+      "hash": "a309cb2c953d7460",
+      "port": {
+        "layer": "frontend",
+        "item": "W2-47",
+        "action": "rerun",
+        "status": "todo",
+        "rust": null,
+        "note": null
+      }
+    },
+    "src/services/junction-v2/core/turns.test.mjs::guests keep the newest broadcast only": {
+      "file": "src/services/junction-v2/core/turns.test.mjs",
+      "suite": null,
+      "name": "guests keep the newest broadcast only",
+      "hash": "4bb3540e34faf536",
+      "port": {
+        "layer": "frontend",
+        "item": "W2-47",
+        "action": "rerun",
+        "status": "todo",
+        "rust": null,
+        "note": null
+      }
+    },
+    "src/services/junction-v2/core/turns.test.mjs::protocol messages validate and codes round-trip": {
+      "file": "src/services/junction-v2/core/turns.test.mjs",
+      "suite": null,
+      "name": "protocol messages validate and codes round-trip",
+      "hash": "6bce139d4001cea1",
+      "port": {
+        "layer": "frontend",
+        "item": "W2-47",
+        "action": "rerun",
+        "status": "todo",
+        "rust": null,
+        "note": null
+      }
+    },
+    "src/services/junction-v2/io-worker.test.mjs::capture slots become program and J input on the engine wire; uplink reaches the source port": {
+      "file": "src/services/junction-v2/io-worker.test.mjs",
+      "suite": null,
+      "name": "capture slots become program and J input on the engine wire; uplink reaches the source port",
+      "hash": "9a33cc11e513a919",
+      "port": {
+        "layer": "frontend",
+        "item": "W2-47",
+        "action": "rerun",
         "status": "todo",
         "rust": null,
         "note": null
