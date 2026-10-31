@@ -1,0 +1,53 @@
+/* Play RECOMMEND on the Assist engine: compact controls for the narrow right panel. */
+.dj-reco { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+.dj-reco .dj-recommend-subtitle { gap: 4px; }
+.dj-reco .dj-recommend-subtitle > span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dj-reco .dj-recommend-subtitle .dj-button { height: 16px; padding: 0 4px; font-size: 10px; }
+.dj-reco .dj-recommend-subtitle .dj-button.is-on { border-color: #4b77b8; background: #31558e; color: #fff; }
+.dj-reco-icon { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 2px; color: #7e8792; }
+.dj-reco-icon:not(:disabled):hover { background: #2c333d; color: #cfe0f5; }
+.dj-reco-icon:disabled { opacity: .3; }
+.dj-reco-icon svg { width: 11px; height: 11px; }
+
+.dj-reco-controls { flex-shrink: 0; padding: 4px 6px; border-bottom: 1px solid #000; background: #141517; font-size: 10px; }
+.dj-reco-presets { display: flex; flex-wrap: wrap; gap: 3px; }
+.dj-reco-presets button { height: 18px; padding: 0 5px; border: 1px solid #2f3339; border-radius: 2px; background: #1c1e21; color: #9aa0a8; font-size: 10px; white-space: nowrap; }
+.dj-reco-presets button:hover { background: #262a30; color: #d5d9de; }
+.dj-reco-presets button.is-on { border-color: #4b77b8; background: #31558e; color: #fff; }
+.dj-reco-line { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 4px; }
+.dj-reco-controls label { display: inline-flex; align-items: center; gap: 4px; color: #b4b9c0; white-space: nowrap; cursor: pointer; }
+.dj-reco-controls label.is-disabled { opacity: .4; cursor: default; }
+.dj-reco-controls input[type="checkbox"] { width: 11px; height: 11px; accent-color: #4b77b8; }
+.dj-reco-more { display: inline-flex; align-items: center; gap: 1px; color: #8d939c; }
+.dj-reco-more:hover { color: #d5d9de; }
+.dj-reco-more svg { width: 11px; height: 11px; }
+.dj-reco-options { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.dj-reco-options select { height: 20px; min-width: 0; border: 1px solid #30343a; border-radius: 2px; padding: 0 4px; background: #0d0e0f; color: #c8cbd0; font-size: 10px; }
+.dj-reco-options select:disabled { opacity: .4; }
+
+.dj-recommend-scroll.is-stale > .dj-reco-item { opacity: .45; }
+.dj-reco-item { border-bottom: 1px solid #131416; }
+.dj-reco-item .dj-recommend-row { gap: 5px; padding-left: 0; border-bottom: 0; }
+.dj-reco-item.is-open { background: #1b1e22; }
+.dj-recommend-row > button.dj-reco-toggle { width: 14px; display: grid; place-items: center; }
+.dj-reco-toggle svg { width: 11px; height: 11px; }
+.dj-reco-badge { margin-right: 4px; padding: 0 3px; border-radius: 2px; background: #2a3342; color: #9db3d3; font-size: 10px; font-style: normal; font-weight: 600; }
+.dj-recommend-track small em.dj-reco-delta { color: #8fd19e; font-style: normal; }
+.dj-recommend-track small em.dj-reco-delta.is-far { color: #e0a86a; }
+.dj-reco-score { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.dj-reco-score span { color: #cfe0f5; font-size: 11px; font-weight: 700; }
+.dj-reco-score small { display: inline-flex; align-items: center; gap: 2px; color: #8fd19e; font-size: 10px; white-space: nowrap; }
+.dj-reco-score small svg { width: 9px; height: 9px; }
+.dj-reco-score small.is-caution { color: #e0a86a; }
+.dj-reco-detail { padding: 2px 8px 6px 24px; color: #9aa0a8; font-size: 10px; line-height: 1.5; }
+.dj-reco-detail p + p { margin-top: 2px; }
+.dj-reco-detail .is-good { color: #8fd19e; }
+.dj-reco-detail .is-caution { color: #e0a86a; }
+.dj-reco-detail .is-agent { color: #9dc6f0; }
+.dj-reco-detail .is-wordplay { color: #c4a8f0; }
+.dj-reco-section { padding: 6px 8px 2px; color: var(--dj-faint); font-size: 10px; font-weight: 700; letter-spacing: .08em; }
+.dj-reco-about { padding: 6px 8px 10px; color: var(--dj-faint); font-size: 10px; line-height: 1.5; }
+.dj-reco-about summary { width: fit-content; cursor: pointer; }
+.dj-reco-about summary:hover { color: #c8cbd0; }
+.dj-reco-about p { margin-top: 3px; }
+.dj-reco-about .is-caution { color: #e0a86a; }

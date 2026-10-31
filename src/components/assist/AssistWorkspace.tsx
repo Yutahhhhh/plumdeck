@@ -18,31 +18,12 @@ import { useAudition } from "./useAudition";
 
 import { useLoadedHistory } from "./useLoadedHistory";
 import { MAX_EXCLUDED_TRACKS } from "./loaded-history";
-import { parseTempoTolerance, TEMPO_TOLERANCES, TEMPO_TOLERANCE_STORAGE_KEY, type TempoTolerance } from "./tempo-tolerance";
+import { loadTempoTolerance, parseTempoTolerance, saveTempoTolerance, TEMPO_TOLERANCES, type TempoTolerance } from "./tempo-tolerance";
+import { PRESETS } from "./presets";
 import { filterByKey, formatKey, parseKey, setKeyFilterEnabled, useKeyDisplay } from "@/lib/key-display";
 
-const presets: { value: AssistIntent; label: string; detail: string }[] = [
-  { value: "keep", label: "キープ", detail: "流れを保つ" },
-  { value: "hype", label: "盛り上げる", detail: "熱量を上げる" },
-  { value: "dance", label: "踊らせる", detail: "グルーヴへ" },
-  { value: "calm", label: "落ち着かせる", detail: "クールダウン" },
-  { value: "emotional", label: "エモく", detail: "切なく・深く" },
-  { value: "bright", label: "明るく", detail: "開放感へ" },
-  { value: "throwback", label: "時代を戻す", detail: "懐かしい曲" },
-  { value: "wordplay", label: "ワードプレイ", detail: "言葉でつなぐ" },
-];
+const presets = PRESETS;
 const limits = [5, 8, 12, 20, 30, 50];
-
-const loadTempoTolerance = (): TempoTolerance => {
-  try { return parseTempoTolerance(localStorage.getItem(TEMPO_TOLERANCE_STORAGE_KEY)); }
-  catch { return null; }
-};
-const saveTempoTolerance = (value: TempoTolerance) => {
-  try {
-    if (value === null) localStorage.removeItem(TEMPO_TOLERANCE_STORAGE_KEY);
-    else localStorage.setItem(TEMPO_TOLERANCE_STORAGE_KEY, String(value));
-  } catch { /* the setting still applies for this window */ }
-};
 
 type Result =
   | { kind: "recommend"; key: string; value: AssistRecommendations }

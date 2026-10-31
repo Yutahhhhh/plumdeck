@@ -313,6 +313,8 @@ export const assistService = {
     excludeTrackIds?: number[];
     filters?: AssistFilters;
     tempoTolerance?: number | null;
+    /** "file": Play loads picks itself, so only the file must exist (no rekordbox registration). */
+    availability?: "rekordbox" | "file";
   }) =>
     apiClient.post<AssistRecommendations>("/assist/recommendations", {
       source_track_id: params.sourceTrackId,
@@ -323,6 +325,7 @@ export const assistService = {
       exclude_track_ids: params.excludeTrackIds ?? [],
       filters: params.filters ?? EMPTY_FILTERS,
       tempo_tolerance: params.tempoTolerance ?? null,
+      ...(params.availability ? { availability: params.availability } : {}),
     }, 60_000),
 
   routes: (params: {

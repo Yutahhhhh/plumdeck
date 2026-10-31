@@ -12,7 +12,7 @@ import { artworkUrl, useTrackVisuals } from "./useTrackVisuals";
 import { formatTime } from "./SoftwareDeck";
 import { usePagedResource } from "./usePagedResource";
 import { VirtualTrackList, keyCellStyle, type BrowserTrack } from "./VirtualTrackList";
-import { RELATION_LABELS, filterByKey, formatKey, relationOf, setKeyFilterEnabled, trafficLevel, useKeyDisplay } from "@/lib/key-display";
+import { RELATION_LABELS, filterByKey, formatKey, relationOf, trafficLevel, useKeyDisplay } from "@/lib/key-display";
 import { nextSort, sortTracks, type SortState } from "./track-sort";
 import { ResizeHandle } from "./ResizeHandle";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -22,6 +22,7 @@ import { SamplerCollection } from "./SamplerCollection";
 import { samplerLibrary, sampleDrag } from "@/services/sampler-library";
 import { sampler } from "@/services/dj-engine/sampler";
 import { usePlayActionDrop, usePlayTrackDrag } from "./PlayDragDrop";
+import { PlayRecommend } from "./PlayRecommend";
 
 type Source = "collection" | "sampler" | "local" | "mirror" | "history" | "recordings";
 type MirrorPageState = { items: MirrorPlaylist[]; total: number; hasMore: boolean; loading: boolean; error?: string };
@@ -69,7 +70,6 @@ export const PlayLibrary = memo(function PlayLibrary({ activeDeck, seedTrackId, 
   const playlists = usePagedResource({ key: "local-playlists", fetchPage: (offset, limit) => playService.localPlaylists(limit, offset), itemKey: (item: LocalPlaylist) => item.id });
   const localTracks = usePagedResource({ key: `local:${localPlaylistId ?? "none"}`, enabled: source === "local" && localPlaylistId !== null, fetchPage: (offset, limit) => playService.localPlaylistTracks(localPlaylistId!, limit, offset), itemKey: (track) => track.setlist_track_id });
   const mirrorTracks = usePagedResource({ key: `mirror:${mirrorSource}:${mirrorPlaylist?.external_id ?? "none"}`, enabled: source === "mirror" && Boolean(mirrorSource && mirrorPlaylist), fetchPage: (offset, limit) => playService.mirrorPlaylistTracksPage(mirrorSource!, mirrorPlaylist!.external_id, limit, offset), itemKey: (track) => `${track.position}:${track.local_track_id ?? track.source_filepath}` });
-  const rightRecommend = usePagedResource({ key: `right-recommend:${seedTrackId ?? "none"}`, enabled: rightOpen && rightMode === "recommend" && Boolean(seedTrackId), pageSize: 50, fetchPage: (offset, limit) => playService.recommendationsPage(seedTrackId!, { offset, limit }), itemKey: (track: Track) => track.id });
   const rightSearch = usePagedResource({ key: `right-search:${debouncedRightQuery}`, enabled: rightOpen && rightMode === "search" && Boolean(debouncedRightQuery), pageSize: 50, fetchPage: (offset, limit) => playService.tracksPage({ q: debouncedRightQuery, offset, limit }), itemKey: (track: Track) => track.id });
 
   useEffect(() => { let live = true; void playService.sources().then((rows) => { if (live) { setSources(rows); setMirrorSource((old) => old ?? rows[0]?.id ?? null); } }).catch(() => undefined); return () => { live = false; }; }, []);
@@ -222,9 +222,7 @@ export const PlayLibrary = memo(function PlayLibrary({ activeDeck, seedTrackId, 
     window.addEventListener("plumdeck:controller-library", receive);
     return () => window.removeEventListener("plumdeck:controller-library", receive);
   }, []);
-  const keyDisplay = useKeyDisplay();
-  const rightBase = rightMode === "recommend" ? rightRecommend : rightSearch;
-  const rightPage = rightMode === "recommend" && keyDisplay.filter ? { ...rightBase, items: filterByKey(rightBase.items, masterKey) } : rightBase;
+  const rightPage = rightSearch;
   return <section className="dj-browser" aria-label="Play library">
     <aside className="dj-library-tree"><div className="dj-tree-heading"><Library /><strong>ブラウザ</strong></div><div className="dj-tree-scroll">
       <SamplerTreeButton selected={source === "sampler"} onSelect={() => switchSource("sampler")} onDrop={(track) => {
@@ -252,7 +250,7 @@ export const PlayLibrary = memo(function PlayLibrary({ activeDeck, seedTrackId, 
       {source === "sampler" ? <SamplerCollection /> : source === "recordings" ? <RecordingRows rows={recordings} /> : <VirtualTrackList resourceKey={`${source}:${debouncedQuery}:${localPlaylistId}:${mirrorSource}:${mirrorPlaylist?.external_id}`} tracks={sortedTracks} total={centerTotal} sort={sort} sortScope={source === "collection" ? "server" : "loaded"} onSort={(field) => setSort((current) => nextSort(current, field))} hasMore={source === "history" ? false : center.hasMore} loading={source === "history" ? false : center.loading} error={source === "history" ? null : center.error} baseKey={masterKey} masterBpm={masterBpm} playedIds={playedIds} activeDeck={activeDeck} selected={selected} empty={source === "mirror" && !mirrorPlaylist ? "左のRekordboxツリーからプレイリストを選択" : source === "local" && !localPlaylistId ? "左のplumdeckプレイリストを選択" : "曲がありません"} onSelect={setSelected} onLoad={(track) => onLoad(activeDeck, track)} onLoadMore={center.loadMore} onRetry={center.retry} cueOverrides={cueOverrides} cueRevision={cueRevision} onDropTrack={source === "local" && localPlaylistId ? (track) => addTrack(track, localPlaylistId) : undefined} onRemove={source === "local" && localPlaylistId ? (track) => track.setlist_track_id && void mutate(() => playService.removeLocalPlaylistTrack(localPlaylistId, track.setlist_track_id!), () => { localTracks.reload(); playlists.reload(); }) : undefined} />}
     </div>
     {rightOpen && <ResizeHandle variable="--d-recommend" storageKey="plumdeck.width.recommend" label="レコメンド幅" min={160} max={480} invert />}
-    {rightOpen && <aside className="dj-recommend"><div className="dj-right-tabs"><button className={rightMode === "recommend" ? "is-on" : ""} onClick={() => setRightMode("recommend")}><Sparkles />RECOMMEND</button><button className={rightMode === "search" ? "is-on" : ""} onClick={() => setRightMode("search")}><Search />SEARCH</button></div>{rightMode === "search" && <div className="dj-right-search"><Search /><input aria-label="右パネル検索" value={rightQuery} onChange={(event) => setRightQuery(event.target.value)} placeholder="Title, artist…" /></div>}<div className="dj-recommend-subtitle"><span>{rightMode === "recommend" ? "NEXT TRACK" : "SEARCH RESULTS"}</span>{rightMode === "recommend" && <button className={cn("dj-button", keyDisplay.filter && "is-on")} title="キー相性で絞り込む（同じキー・±1・平行調）" onClick={() => setKeyFilterEnabled(!keyDisplay.filter)}>KEY</button>}<b>{rightPage.total.toLocaleString()}</b></div><RecommendationList resourceKey={`${rightMode}:${seedTrackId}:${debouncedRightQuery}`} tracks={rightPage.items} loading={rightPage.loading} error={rightPage.error} hasMore={rightPage.hasMore} empty={rightMode === "recommend" ? seedTrackId ? "この曲の候補はありません" : "デッキに曲をロードしてください" : debouncedRightQuery ? "一致する曲はありません" : "検索語を入力してください"} onLoadMore={rightPage.loadMore} onRetry={rightPage.retry} onLoad={(track) => onLoad(activeDeck, track)} baseKey={masterKey} /></aside>}
+    {rightOpen && <aside className="dj-recommend"><div className="dj-right-tabs"><button className={rightMode === "recommend" ? "is-on" : ""} onClick={() => setRightMode("recommend")}><Sparkles />RECOMMEND</button><button className={rightMode === "search" ? "is-on" : ""} onClick={() => setRightMode("search")}><Search />SEARCH</button></div>{rightMode === "recommend" ? <PlayRecommend seedTrackId={seedTrackId} masterKey={masterKey} masterBpm={masterBpm} playedIds={playedIds} onLoad={(track) => onLoad(activeDeck, track)} /> : <><div className="dj-right-search"><Search /><input aria-label="右パネル検索" value={rightQuery} onChange={(event) => setRightQuery(event.target.value)} placeholder="Title, artist…" /></div><div className="dj-recommend-subtitle"><span>SEARCH RESULTS</span><b>{rightPage.total.toLocaleString()}</b></div><RecommendationList resourceKey={`search:${debouncedRightQuery}`} tracks={rightPage.items} loading={rightPage.loading} error={rightPage.error} hasMore={rightPage.hasMore} empty={debouncedRightQuery ? "一致する曲はありません" : "検索語を入力してください"} onLoadMore={rightPage.loadMore} onRetry={rightPage.retry} onLoad={(track) => onLoad(activeDeck, track)} baseKey={masterKey} /></>}</aside>}
     <PlaylistMutationDialog state={playlistDialog} name={dialogName} pending={dialogPending} error={dialogError} onName={setDialogName} onClose={() => { if (!dialogPending) setPlaylistDialog(null); }} onSubmit={() => void submitPlaylistDialog()} />
   </section>;
 });

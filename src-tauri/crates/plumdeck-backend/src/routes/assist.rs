@@ -113,6 +113,18 @@ fn available(filepath: &str, registered: &RegisteredPaths) -> bool {
     !filepath.is_empty() && registered.contains(filepath) && exists(filepath)
 }
 
+/// Whether a pick can be offered: Assist drags into rekordbox, so it needs the
+/// rekordbox registration; Play loads files itself, so `None` asks only for the file.
+fn offerable(filepath: &str, registered: Option<&RegisteredPaths>) -> bool {
+    match registered {
+        Some(registered) => available(filepath, registered),
+        None => exists(filepath),
+    }
+}
+
+/// Where the picks are loaded: rekordbox (Assist, the default) or plumdeck's own Play decks.
+const AVAILABILITY: [&str; 2] = ["rekordbox", "file"];
+
 /// A track payload (`_track_payload`): the model dump plus `has_lyrics`.
 #[derive(Clone, Debug)]
 struct Payload {
@@ -291,10 +303,10 @@ fn evaluate_candidate(context: &Context, candidate: &Candidate, intent: &str, fi
 }
 
 /// `_score_pool`: (entries, unavailable, filtered).
-fn score_pool(pool: &[Candidate], intent: &str, registered: &RegisteredPaths, context: &Context) -> (Vec<Entry>, usize, usize) {
+fn score_pool(pool: &[Candidate], intent: &str, registered: Option<&RegisteredPaths>, context: &Context) -> (Vec<Entry>, usize, usize) {
     let (mut entries, mut unavailable, mut filtered) = (Vec::new(), 0, 0);
     for candidate in pool {
-        if !available(&candidate.row.filepath, registered) {
+        if !offerable(&candidate.row.filepath, registered) {
             unavailable += 1;
             continue;
         }
@@ -988,12 +1000,14 @@ struct RecommendRequest {
     genres: Option<Vec<String>>,
     filters: RawFilters,
     tolerance: Option<f64>,
+    /// "file": Play loads the pick itself, so rekordbox registration is not required.
+    file_only: bool,
 }
 
 /// `POST /api/assist/recommendations`.
 pub async fn recommendations(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
     let parsed = parse(&headers, &body, |b| {
-        b.check_keys(&["source_track_id", "intent", "transition", "limit", "exclude_track_ids", "genre_scope", "genres", "filters", "tempo_tolerance"])?;
+        b.check_keys(&["source_track_id", "intent", "transition", "limit", "exclude_track_ids", "genre_scope", "genres", "filters", "tempo_tolerance", "availability"])?;
         let genres = match get(b.0, "genres") {
             None | Some(PyValue::None) => None,
             Some(_) => Some(b.strings("genres", 32)?),
@@ -1008,6 +1022,7 @@ pub async fn recommendations(State(state): State<AppState>, headers: HeaderMap, 
             genres,
             filters: b.filters()?,
             tolerance: b.float("tempo_tolerance", 0.0, 12.0)?,
+            file_only: b.choice("availability", "rekordbox", &AVAILABILITY)? == "file",
         })
     });
     let request = match parsed {
@@ -1099,10 +1114,16 @@ fn recommend(conn: &Connection, request: RecommendRequest, now: chrono::NaiveDat
         }
     }
     let library = Rekordbox::open();
-    let registered = match library.registered() {
-        Ok(registered) => registered,
-        Err(error) => return Ok(response(Vec::new(), vec![format!("{error}。登録済みの原本を確認できないため、提案を停止しました")], 0, Vec::new())),
+    // Play needs only the file; rekordbox (when present) still lends its HISTORY.
+    let registered = if request.file_only {
+        None
+    } else {
+        match library.registered() {
+            Ok(registered) => Some(registered),
+            Err(error) => return Ok(response(Vec::new(), vec![format!("{error}。登録済みの原本を確認できないため、提案を停止しました")], 0, Vec::new())),
+        }
     };
+    let registered = registered.as_ref();
     let (history, identity_ids) = if intent != "wordplay" { history_from(&library, conn, now).map_err(db_error)? } else { (None, HashMap::new()) };
     let stored = embedding(conn, source.id).map_err(db_error)?;
     let context = Context {
@@ -1122,11 +1143,15 @@ fn recommend(conn: &Connection, request: RecommendRequest, now: chrono::NaiveDat
     )
     .map_err(db_error)?;
     let pool = with_related(conn, pool, &context, &eligible_ids, &identity_ids, now).map_err(db_error)?;
-    let (entries, unavailable, filtered) = score_pool(&pool, intent, &registered, &context);
+    let (entries, unavailable, filtered) = score_pool(&pool, intent, registered, &context);
     let had_entries = !entries.is_empty();
     let ranked: Vec<Entry> = rank(entries, |e| order_key(intent, e)).into_iter().take(request.limit.min(MAX_SUGGESTIONS)).collect();
     if unavailable > 0 {
-        notes.push(format!("rekordbox 未登録、またはファイルが見つからない {unavailable} 曲を除外しました"));
+        notes.push(if request.file_only {
+            format!("ファイルが見つからない {unavailable} 曲を除外しました")
+        } else {
+            format!("rekordbox 未登録、またはファイルが見つからない {unavailable} 曲を除外しました")
+        });
     }
     if !had_entries && filtered > 0 && !transition && intent != "wordplay" {
         let tempo = assist::tempo_rule(intent, request.tolerance);
@@ -1158,11 +1183,11 @@ fn recommend(conn: &Connection, request: RecommendRequest, now: chrono::NaiveDat
     } else {
         pool.clone()
     };
-    let alternatives = alternatives_for(intent, &ranked, &general, &registered, &context);
+    let alternatives = alternatives_for(intent, &ranked, &general, registered, &context);
     Ok(response(ranked.iter().map(|e| entry_payload(e, &context.pairs)).collect(), notes, unavailable, alternatives))
 }
 
-fn alternatives_for(intent: &str, ranked: &[Entry], pool: &[Candidate], registered: &RegisteredPaths, context: &Context) -> Vec<Value> {
+fn alternatives_for(intent: &str, ranked: &[Entry], pool: &[Candidate], registered: Option<&RegisteredPaths>, context: &Context) -> Vec<Value> {
     let mut taken: BTreeSet<i64> = ranked.iter().map(|e| e.payload.facts.id).collect();
     let mut taken_recordings: BTreeSet<Option<(String, String)>> =
         ranked.iter().map(|e| identity(e.payload.facts.title.as_deref(), e.payload.facts.artist.as_deref())).collect();
@@ -1412,7 +1437,7 @@ fn route(conn: &Connection, request: RouteRequest, now: chrono::NaiveDateTime) -
                 continue;
             }
             let blocked: BTreeSet<i64> = excluded.iter().chain(&state.ids).copied().chain([target.id]).collect();
-            let (entries, _, _) = score_pool(&route_pool, intent, &registered, &context);
+            let (entries, _, _) = score_pool(&route_pool, intent, Some(&registered), &context);
             for entry in entries {
                 let id = entry.payload.facts.id;
                 if blocked.contains(&id) {
@@ -1691,6 +1716,8 @@ pub fn mcp_recommend(conn: &Connection, body: &Value, now: chrono::NaiveDateTime
             genres: None,
             filters: b.filters()?,
             tolerance: b.float("tempo_tolerance", 0.0, 12.0)?,
+            // MCP picks go to rekordbox decks, as before.
+            file_only: false,
         })
     })()
     .map_err(|_| "invalid assist arguments".to_owned())?;
@@ -1729,4 +1756,21 @@ pub fn normalized_filters(filters: &Value) -> Result<Value, String> {
         "bpm_min": f.bpm_min, "bpm_max": f.bpm_max, "genres": f.genres, "subgenres": f.subgenres, "artists": f.artists,
         "keys": f.keys, "year_min": f.year_min, "year_max": f.year_max, "query": f.query,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_availability_needs_only_the_file() {
+        let file = std::env::temp_dir().join(format!("plumdeck-offerable-{}.mp3", std::process::id()));
+        std::fs::write(&file, b"x").expect("temp file");
+        let path = file.to_string_lossy().into_owned();
+        assert!(offerable(&path, None));
+        std::fs::remove_file(&file).expect("cleanup");
+        assert!(!offerable(&path, None));
+        assert!(!offerable("", None));
+        assert!(AVAILABILITY.contains(&"file") && AVAILABILITY[0] == "rekordbox");
+    }
 }

@@ -73,7 +73,7 @@
 .dj-virtual-tracks.is-drop { outline: 1px solid var(--dj-blue); outline-offset: -1px; background: #16202e; }
 .dj-vtrack-scroll:focus-visible { outline: 1px solid var(--dj-blue); outline-offset: -1px; }
 [data-native-drop-active="true"] { outline: 2px solid #4ea1ff !important; outline-offset: -2px; background-color: #173456 !important; }
-.dj-track-drag-overlay { display: flex; max-width: 360px; min-width: 220px; flex-direction: column; gap: 2px; overflow: hidden; border: 1px solid #4ea1ff; border-radius: 3px; padding: 7px 10px; background: #171b20ee; color: #edf4ff; box-shadow: 0 10px 30px #000a; cursor: grabbing; }
+.dj-track-drag-overlay { pointer-events: none; display: flex; max-width: 360px; min-width: 220px; flex-direction: column; gap: 2px; overflow: hidden; border: 1px solid #4ea1ff; border-radius: 3px; padding: 7px 10px; background: #171b20ee; color: #edf4ff; box-shadow: 0 10px 30px #000a; cursor: grabbing; }
 .dj-track-drag-overlay strong, .dj-track-drag-overlay span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dj-track-drag-overlay strong { font-size: 11px; }
 .dj-track-drag-overlay span { color: #98a8ba; font-size: 10px; }
@@ -91,3 +91,7 @@
 .dj-master-filters { display: flex; align-items: center; gap: 3px; flex-shrink: 0; }
 .dj-master-filters select { height: 18px; border: 1px solid #3a3f46; border-radius: 2px; padding: 0 2px; background: #1b1d20; color: #d0d4da; font-size: 10px; }
 .dj-master-filters .dj-button.is-on { border-color: #2f6fd0; background: #2f6fd0; color: #fff; }
+/* Library rows are dragged by dnd-kit. A native WebKit drag (of the artwork
+   image, the preview canvas or selected text) would swallow the mouseup and
+   leave the overlay stuck to the cursor until the next click. */
+[aria-roledescription="draggable"], [aria-roledescription="draggable"] * { -webkit-user-drag: none; user-select: none; -webkit-user-select: none; }

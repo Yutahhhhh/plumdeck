@@ -335,3 +335,15 @@ deviations:
       /api/tracks/cues-rekordbox/import also add the track's rekordbox memory
       cues (never removing any); their answers are unchanged.
     current: proposed; no parity scenario touches these routes (no rekordbox in the fixtures).
+  - id: D-55
+    status: proposed
+    source: src-tauri/crates/plumdeck-backend/src/routes/assist.rs; src/components/play/PlayRecommend.tsx
+    summary: >
+      Addition: POST /api/assist/recommendations accepts an optional
+      "availability" ("rekordbox" by default, or "file"). "file" is what the
+      Play RECOMMEND panel sends: plumdeck loads the pick onto its own decks,
+      so a candidate needs only an existing file, not a rekordbox
+      registration, and a missing master.db no longer stops the answer
+      (rekordbox HISTORY still weights the ranking when it can be read).
+      Without the key the answer is unchanged.
+    current: implemented; no parity scenario sends the key.
