@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { djEngineClient, DjEngineCommandError } from "@/services/dj-engine/client";
 import { DECK_IDS, type EngineClientState, type EngineStatus } from "@/types/dj-engine";
 import { frameNotification } from "@/services/dj-engine/frame-notification";
+import { startLiveDeckReport } from "@/services/dj-engine/live-report";
 
 /**
  * ネイティブ DJ エンジン（Phase 0 シミュレータ）に接続するためのフック。
@@ -61,6 +62,9 @@ export function useDjEngine() {
       unsubscribeStatus();
     };
   }, [refreshStatus]);
+
+  // Play のデッキをローカルの他ツール（cluster ショー演出など）へ知らせる。
+  useEffect(() => startLiveDeckReport(), []);
 
   // イベントを取りこぼした / セッションが失効したらスナップショットを取り直す。
   useEffect(() => {

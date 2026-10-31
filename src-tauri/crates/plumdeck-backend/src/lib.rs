@@ -90,6 +90,8 @@ pub struct AppState {
     pub metadata: routes::metadata_jobs::MetadataJobs,
     /// The Assist window and agent bridge (S6).
     pub assist: routes::assist::AssistBridge,
+    /// The Play screen's decks, as last reported by the UI.
+    pub live_decks: routes::live_decks::LiveDecks,
     /// Where the MCP Junction tools send their actions (S12).
     pub junction: Arc<dyn routes::junction::JunctionPort>,
     /// Import, analysis jobs and Play imports (S11).
@@ -111,6 +113,7 @@ impl AppState {
             clock: Arc::new(SystemClock),
             metadata: routes::metadata_jobs::MetadataJobs::new(library_dir),
             assist: Default::default(),
+            live_decks: Default::default(),
             junction: routes::junction::default_port(),
             analysis,
             genre_classifier,

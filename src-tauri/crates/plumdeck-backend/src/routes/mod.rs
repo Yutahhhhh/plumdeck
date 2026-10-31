@@ -12,6 +12,7 @@ pub mod genres;
 pub mod ingest;
 pub mod junction;
 pub mod library;
+pub mod live_decks;
 pub mod lyrics;
 pub mod mcp;
 pub mod media;
@@ -138,6 +139,7 @@ pub fn api() -> Router<AppState> {
         .route("/api/assist/artists", get(assist::artists))
         .route("/api/assist/search", post(assist::search))
         .route("/api/assist/window", put(assist::report_window))
+        .route("/api/play/live-decks", get(live_decks::read).put(live_decks::report))
         .route("/api/assist/agent", get(assist::agent_updates))
         .route("/api/assist/agent/list", delete(assist::dismiss_agent_list))
         .route("/api/setlists", get(setlists::get_setlists).post(setlists::post_setlist))
