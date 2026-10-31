@@ -7,7 +7,7 @@ import type { AssetWaveform } from '@/types/dj-engine';
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useThreeBand } from "./useThreeBand";
-import { drawThreeBand, fromBandPeaks, PHRASE_COLORS, type Phrase } from "@/services/waveform/three-band";
+import { drawThreeBand, fromBandPeaks, PHRASE_COLORS, ThreeBandTiles, type Phrase } from "@/services/waveform/three-band";
 import { laneSpanMs, stepWaveformZoom, useWaveformZoom } from "./waveform-zoom";
 import type { MemoryCue } from "@/services/dj-engine/memory-cues";
 import { createWaveformRenderLoop } from "./waveform-render-loop";
@@ -48,6 +48,10 @@ type Props = {
 const NO_CUES: (number | null)[] = [];
 const NO_MEMORY: readonly MemoryCue[] = [];
 const NO_PHRASES: readonly Phrase[] = [];
+/** Stable, so the overview raster cache key matches between frames. */
+const NO_TILES: never[] = [];
+/** Phrase strip thickness: 2px on compact lanes, up to 3px on tall ones. */
+const phraseStrip = (breadth: number) => Math.max(2, Math.min(3, Math.round(breadth / 28)));
 
 type DragGesture = {
   lastMotionAt: number; layout: WaveformLayout; pointer: number; coordinate: number; origin: number; moved: boolean;
@@ -63,6 +67,7 @@ export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform
   const sizeRef = useRef({ width: 0, height: 0 });
   const paintRef = useRef<() => void>(() => undefined);
   const continuousRef = useRef(false);
+  const detailTiles = useRef(new ThreeBandTiles());
   const visibleRef = useRef(true);
   const invalidateRef = useRef<() => void>(() => undefined);
   const overviewRaster = useRef<{ key: unknown[]; canvas: HTMLCanvasElement } | null>(null);
@@ -155,14 +160,15 @@ export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform
       // Below half a second the engine's sample-accurate PCM window shows more
       // than 150 columns per second can; elsewhere the 3-band model wins.
       const fine = mode === "scroll" && zoomSeconds < 0.5 && nativeWaveform.tiles.some((tile) => tile.framesPerBin === 1);
-      const tiles = wave && !fine ? [] : nativeWaveform.tiles;
+      const tiles = wave && !fine ? NO_TILES : nativeWaveform.tiles;
       const rasterKey = [tiles, wave, width, height, ratio, layout, side, compact, durationMs];
       const cached = mode === "overview" && overviewRaster.current?.key.every((value, i) => value === rasterKey[i]);
       if (cached) ctx.drawImage(overviewRaster.current!.canvas, 0, 0, width, height);
       else if (wave && !fine) {
         // Keep the ruler band of a zoomed lane and the phrase strip free.
-        const reserve = compact ? 2 : (mode === "scroll" ? Math.min(24, breadth * 0.2) : 0) + (phrases.length ? 5 : 0);
-        drawThreeBand(ctx, wave, { startMs, spanMs: span, width, height, vertical, side, style: mode === "scroll" ? "detail" : "overview", reserve, ratio });
+        const reserve = compact ? 2 : (mode === "scroll" ? Math.min(24, breadth * 0.2) : 0) + (phrases.length ? phraseStrip(breadth) + 1 : 0);
+        if (mode === "scroll") detailTiles.current.draw(ctx, wave, { startMs, spanMs: span, width, height, vertical, side, reserve, ratio });
+        else drawThreeBand(ctx, wave, { startMs, spanMs: span, width, height, vertical, side, style: "overview", reserve, ratio });
       } else if (tiles.length) waveformRenderer.draw(ctx, tiles, startMs, span, width, height, vertical, side);
       if (mode === "overview" && !cached) {
         const raster = document.createElement("canvas");
@@ -273,7 +279,9 @@ export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform
       }
       // Phrase bands under the waveform (rekordbox colours by family; Fill-in hatched).
       if (phrases.length && !compact) {
-        const strip = mode === "scroll" ? 5 : 4;
+        // A thin, translucent strip that scales with the lane, so it marks the
+        // structure without reading as a divider between stacked decks.
+        const strip = phraseStrip(breadth);
         const showNames = phraseLabels === "always" || hovering.current;
         const toOffset = (time: number) => (time - startMs) / span * length;
         let lastLabelEnd = -Infinity;
@@ -281,7 +289,7 @@ export const DeckWaveform = memo(function DeckWaveform({ assetId, remoteWaveform
           const from = toOffset(phrase.startMs), to = toOffset(phrase.endMs);
           if (to < 0 || from > length) continue;
           const a = Math.max(0, from), b = Math.min(length, to);
-          ctx.fillStyle = PHRASE_COLORS[phrase.kind];
+          ctx.fillStyle = `${PHRASE_COLORS[phrase.kind]}8c`;
           if (vertical) ctx.fillRect(side === "left" ? 0 : width - strip, a, strip, Math.max(1, b - a - 1));
           else ctx.fillRect(a, height - strip, Math.max(1, b - a - 1), strip);
           if (phrase.fillMs !== null) {

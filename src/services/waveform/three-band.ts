@@ -212,3 +212,59 @@ export function barsToNextPhrase(phrases: readonly Phrase[], positionMs: number,
   } else return null;
   return Math.max(0, Math.ceil(beats / meter));
 }
+
+// ------------------------------------------------------------- scrolling lanes
+
+const TILE_PIXELS = 2048;
+const MAX_TILES = 12;
+
+/**
+ * Detail lanes scroll every frame. Re-filling the three band paths per frame
+ * (tens of thousands of segments per lane) kept the WebView busy enough to
+ * delay pads and transport, so the lane is rasterised once into fixed time
+ * tiles and each frame only blits the one or two tiles in view.
+ */
+export class ThreeBandTiles {
+  private tiles = new Map<number, HTMLCanvasElement>();
+  private key = "";
+  private wave: ThreeBandWave | null = null;
+  private spanMs = 1;
+
+  draw(ctx: CanvasRenderingContext2D, wave: ThreeBandWave, options: Omit<DrawOptions, "style">): void {
+    const ratio = options.ratio ?? 1, vertical = Boolean(options.vertical);
+    const length = vertical ? options.height : options.width, breadth = vertical ? options.width : options.height;
+    if (length <= 0 || breadth <= 0 || options.spanMs <= 0) return;
+    const tileCss = TILE_PIXELS / ratio;
+    // The lane span follows the tempo, which drifts by tiny amounts while
+    // synced. Keep the tiles across such drift (they are stretched by under
+    // 2%) instead of re-rasterising every frame.
+    const key = [length, breadth, ratio, vertical, options.side, options.reserve].join("|");
+    if (key !== this.key || wave !== this.wave || Math.abs(options.spanMs / this.spanMs - 1) > 0.02) {
+      this.tiles.clear(); this.key = key; this.wave = wave; this.spanMs = options.spanMs;
+    }
+    const tileMs = this.spanMs / length * tileCss, drawn = tileMs / options.spanMs * length;
+    const first = Math.floor(options.startMs / tileMs), last = Math.floor((options.startMs + options.spanMs) / tileMs);
+    for (let index = first; index <= last; index++) {
+      const tile = this.tile(index, wave, tileMs, tileCss, breadth, ratio, options);
+      const at = (index * tileMs - options.startMs) / options.spanMs * length;
+      if (vertical) ctx.drawImage(tile, 0, at, breadth, drawn); else ctx.drawImage(tile, at, 0, drawn, breadth);
+    }
+  }
+
+  private tile(index: number, wave: ThreeBandWave, tileMs: number, tileCss: number, breadth: number, ratio: number, options: Omit<DrawOptions, "style">): HTMLCanvasElement {
+    const cached = this.tiles.get(index);
+    if (cached) { this.tiles.delete(index); this.tiles.set(index, cached); return cached; }
+    const vertical = Boolean(options.vertical), canvas = document.createElement("canvas");
+    const across = Math.max(1, Math.round(breadth * ratio));
+    canvas.width = vertical ? across : TILE_PIXELS; canvas.height = vertical ? TILE_PIXELS : across;
+    const tileCtx = canvas.getContext("2d");
+    if (tileCtx) {
+      tileCtx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      drawThreeBand(tileCtx, wave, { ...options, style: "detail", startMs: index * tileMs, spanMs: tileMs,
+        width: vertical ? breadth : tileCss, height: vertical ? tileCss : breadth });
+    }
+    this.tiles.set(index, canvas);
+    if (this.tiles.size > MAX_TILES) this.tiles.delete(this.tiles.keys().next().value!);
+    return canvas;
+  }
+}
