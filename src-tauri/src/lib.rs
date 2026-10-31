@@ -34,6 +34,11 @@ mod share_musics;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
+    // CrabNebula devtools claims the global tracing subscriber, which the
+    // embedded backend needs in release builds for its log file. The webview
+    // inspector (F12) comes from tauri's own `devtools` feature either way.
+    #[cfg(debug_assertions)]
+    let builder = builder.plugin(tauri_plugin_devtools::init());
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
         if let Some(window) = app.get_webview_window("main") {
@@ -44,8 +49,6 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .manage(startup::StartupState::default())
         .plugin(tauri_plugin_shell::init())
-        // 開発者ツールを有効化 (リリースビルドでもF12/右クリックで開けるようにする)
-        .plugin(tauri_plugin_devtools::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())

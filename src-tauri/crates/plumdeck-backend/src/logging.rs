@@ -212,7 +212,8 @@ pub fn init(log_dir: &Path) {
             None
         }
     };
-    tracing_subscriber::registry().with(filter).with(console).with(file).init();
+    // The embedding app may already own the global subscriber.
+    let _ = tracing_subscriber::registry().with(filter).with(console).with(file).try_init();
 }
 
 #[cfg(test)]

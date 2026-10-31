@@ -497,7 +497,12 @@ impl EngineSupervisor {
             }
         }
 
+        let started = std::time::Instant::now();
         let reply = self.dispatch(op, params, Some(session_id))?;
+        let elapsed = started.elapsed();
+        if elapsed.as_millis() >= 8 {
+            eprintln!("[dj-engine] slow op {op}: {} ms", elapsed.as_millis());
+        }
         let rev = reply.get("rev").and_then(Value::as_u64);
         match reply.get("kind").and_then(Value::as_str) {
             Some("result") => Ok(EngineReply {

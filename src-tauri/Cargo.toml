@@ -141,6 +141,16 @@ panic = "unwind"
 
 # MusiCNN inference is unusably slow unoptimized; debug builds (tests, the
 # parity side B) optimize the inference crates only.
+# Decoding, waveforms and DSP run on every track load; unoptimized they made
+# loads in the dev app far slower than the shipped build.
+[profile.dev.package."*"]
+opt-level = 2
+[profile.dev.package.plumdeck-decode]
+opt-level = 3
+[profile.dev.package.plumdeck-dsp]
+opt-level = 3
+[profile.dev.package.plumdeck-rekordbox]
+opt-level = 3
 [profile.dev.package.tract-linalg]
 opt-level = 3
 [profile.dev.package.tract-core]
