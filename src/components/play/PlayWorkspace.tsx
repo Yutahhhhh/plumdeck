@@ -55,6 +55,8 @@ import { PanelToolbar, PANEL_DEFAULTS, type PanelId, type PanelVisibility } from
 import "./play-workspace.css";
 import "./play-density.css";
 import { AudioSettings } from "./AudioSettings";
+import { PlayCompactView, useCompactTiers, usePlayCompactMode } from "./PlayCompactView";
+import { controllerLibraryEvent } from "./compact-play";
 import { RecordingSaveDialog } from "./RecordingSaveDialog";
 import { RecordingPanel } from "./RecordingPanel";
 import { SamplerPanel } from "./SamplerPanel";
@@ -132,6 +134,7 @@ export function PlayWorkspace() {
   const [commandError, setCommandError] = useState<string | null>(null);
   const [shortcuts, setShortcuts] = useState(false);
   const [audioSettingsOpen, setAudioSettingsOpen] = useState(false);
+  const compactView = usePlayCompactMode(audioSettingsOpen);
   const [savingRecording, setSavingRecording] = useState<RecordingEntry | null>(null);
   const [gridEdit, setGridEdit] = useState<GridEditSession | null>(null);
   const [cueRevision, setCueRevision] = useState(0);
@@ -184,6 +187,8 @@ export function PlayWorkspace() {
   const persistenceQueue = useRef<Promise<unknown>>(Promise.resolve());
   const exiting = useRef(false);
   const visibleDecks = useMemo(() => DECK_IDS.slice(0, deckCount), [deckCount]);
+  // A taller compact window shows the deck pads, then the library, under capped waveforms.
+  const compactTiers = useCompactTiers(compactView, visibleDecks.length);
   const connected = Boolean(status?.running && client.getSessionId() && snapshot && !state.sessionInvalidated);
   const autoConnectAttempted = useRef(false);
   const microphoneRestoredSession = useRef<string | null>(null);
@@ -785,7 +790,7 @@ export function PlayWorkspace() {
     const deck = displayedDeck(id);
     return <DeckWaveform key={id} label={id} assetId={deck?.track?.assetId} remoteWaveform={deck?.track?.waveform} trackId={localTrackId(deck?.track)}
       positionMs={deck?.positionMs ?? 0} durationMs={deck?.track?.durationMs ?? 0} layout={layout} side={id === "A" || id === "C" ? "left" : "right"}
-      color={id === "A" || id === "C" ? "cyan" : "fuchsia"} mode={expandedPair&&!expandedPair.includes(id)?"overview":"scroll"} playing={deck?.status === "playing"} rate={deck?.rate ?? 1} bpm={deck?.track?.bpm} beatgridOffsetMs={deck?.track?.beatgridOffsetMs} beatsPerBar={deck?.track?.beatsPerBar}
+      color={id === "A" || id === "C" ? "cyan" : "fuchsia"} mode={!compactView&&expandedPair&&!expandedPair.includes(id)?"overview":"scroll"} playing={deck?.status === "playing"} rate={deck?.rate ?? 1} bpm={deck?.track?.bpm} beatgridOffsetMs={deck?.track?.beatgridOffsetMs} beatsPerBar={deck?.track?.beatsPerBar}
       beatTimesMs={deck?.track?.beatTimesMs} beatNumbers={deck?.track?.beatNumbers}
       gridAvailable={Boolean(deck?.track?.beatgridOffsetMs !== undefined || deck?.track?.beatTimesMs?.length)}
       onGridShift={gridEdit?.deck === id && !gridSaving.current ? (deltaMs) => setGridShift(old => ({ sequence: (old?.sequence ?? 0) + 1, deltaMs, totalMs: (old?.totalMs ?? 0) + deltaMs })) : undefined}
@@ -1019,7 +1024,7 @@ export function PlayWorkspace() {
 
   const controllerActions: ControllerActions = {
     activate: (deck) => { setActiveDeck(deck); if (deck === "C" || deck === "D") changeDeckCount(4); },
-    library: (action) => { window.dispatchEvent(new CustomEvent("plumdeck:controller-library", { detail: action })); },
+    library: (action) => { window.dispatchEvent(new CustomEvent(controllerLibraryEvent(action.control, compactView && !compactTiers.library), { detail: action })); },
     hotcue: editHotCue,
     memory: memoryAction,
     cuePoints: cuePoints.current,
@@ -1037,7 +1042,7 @@ export function PlayWorkspace() {
     loop: { loopIn, loopOut: (id) => void loopOut(id), reloop: (id) => void reloop(id) },
   });
 
-  return <PlayDragDropProvider onLoad={loadTrack}><main style={{'--wave-contrast':waveContrast,'--wave-grayscale':waveMonochrome?1:0} as CSSProperties} className={cn("dj-workspace", expandedPair&&"dj-workspace--wave-expanded", compactDecks && "dj-workspace--compact", deckCount === 4 && "dj-workspace--four", waveformLayout === "vertical" && "dj-workspace--vertical")}>
+  return <PlayDragDropProvider onLoad={loadTrack}><main style={{'--wave-contrast':waveContrast,'--wave-grayscale':waveMonochrome?1:0} as CSSProperties} className={cn("dj-workspace", expandedPair&&"dj-workspace--wave-expanded", compactDecks && "dj-workspace--compact", compactView && "dj-workspace--narrow", compactTiers.pads && "dj-workspace--narrow-pads", compactTiers.library && "dj-workspace--narrow-library", deckCount === 4 && "dj-workspace--four", waveformLayout === "vertical" && "dj-workspace--vertical")}>
     <header className="dj-global-bar">
       <div className="dj-performance-label"><Disc3 /><strong>PERFORMANCE</strong></div>
       <PanelToolbar visible={panels} available={panelAvailable} onToggle={togglePanel} />
@@ -1125,7 +1130,7 @@ export function PlayWorkspace() {
     {panels.recording && panelAvailable.recording && <RecordingPanel recording={snapshot?.recording} directory={recordingDir}
       disabledReason={!connected ? "未接続" : undefined} onToggle={toggleRecording} />}
     <section className="dj-performance" aria-label="Software DJ controller">
-      {waveformLayout === "horizontal" && <div className="dj-scrolling-waves">{visibleDecks.map((id) => lane(id, "horizontal"))}</div>}
+      {waveformLayout === "horizontal" && !compactView && <div className="dj-scrolling-waves">{visibleDecks.map((id) => lane(id, "horizontal"))}</div>}
       {junctionSession?.active && <JunctionTurnBar snapshot={junctionSession} />}
       <JunctionLinkTurnBar />
       <div className="dj-deck-pairs"><JunctionLinkDeck />{junctionInput?.peerId && <div className="dj-deck-pair dj-deck-pair--junction">
@@ -1143,7 +1148,7 @@ export function PlayWorkspace() {
         const left = DECK_IDS[pair * 2]; const right = DECK_IDS[pair * 2 + 1];
         return <div className="dj-deck-pair" key={left}>
           {softwareDeck(left)}
-          {waveformLayout === "vertical" && <div className="dj-center-waves" aria-label="中央縦波形">{lane(left, "vertical")}{lane(right, "vertical")}</div>}
+          {waveformLayout === "vertical" && !compactView && <div className="dj-center-waves" aria-label="中央縦波形">{lane(left, "vertical")}{lane(right, "vertical")}</div>}
           {panels.mixer && <MixerPanel decks={[left, right]}
             channelState={(deck) => snapshot?.mixer.channels[deck]}
             colorFx={preferences.colorFx} colorFxSelectable={colorFxSelectable} faderCurve={preferences.faderCurve}
@@ -1193,6 +1198,8 @@ export function PlayWorkspace() {
     <PlayLibrary masterKey={(() => { const decks = snapshot?.decks; const master = decks ? masterDeck(DECK_IDS, decks) : undefined; return master && decks ? deckKey(decks[master]) : null; })()}
       masterBpm={(() => { const decks = snapshot?.decks; const master = decks ? masterDeck(DECK_IDS, decks) : undefined; const deck = master ? decks?.[master] : undefined; const bpm = deck?.track?.bpm ? deck.track.bpm * (deck.rate ?? 1) : deck?.effectiveBpm ?? null; return bpm && bpm > 0 ? Math.round(bpm * 10) / 10 : null; })()}
       playedIds={playedIds} activeDeck={activeDeck} seedTrackId={Number.isFinite(seed) && seed > 0 ? seed : null} onLoad={loadTrack} cueOverrides={listCueOverrides} cueRevision={cueRevision} cueImportControl={<RekordboxCueImportButton onImport={importRekordboxCues} />} />
+    {compactView && <PlayCompactView decks={visibleDecks} deckState={displayedDeck} trackKey={(id) => trackKeys[localTrackId(snapshot?.decks[id]?.track) ?? -1]}
+      pendingLoads={pendingLoads} renderLane={(id) => lane(id, "horizontal")} activeDeck={activeDeck} onLoad={loadTrack} onOpenAudioSettings={() => setAudioSettingsOpen(true)} browseMenu={!compactTiers.library} />}
     {audioSettingsOpen && <AudioSettings onClose={() => setAudioSettingsOpen(false)} onApply={applyAudioOutput} />}
     <RecordingSaveDialog recording={savingRecording} onClose={() => setSavingRecording(null)}
       onBeforePreview={prepareRecordingPreview}

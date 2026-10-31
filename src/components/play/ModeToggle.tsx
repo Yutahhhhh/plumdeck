@@ -17,12 +17,12 @@ const BUTTONS: { mode: AppMode; label: string; icon: typeof BarChart3; active: s
 
 export function ModeToggle({ mode, onChange, disabled = false }: { mode: AppMode; onChange: (mode: AppMode) => void; disabled?: boolean }) {
   return (
-    <div className="flex gap-px rounded border border-slate-700 bg-slate-950 p-px" role="group" aria-label="Application mode">
+    <div className="flex shrink-0 gap-px rounded border border-slate-700 bg-slate-950 p-px" role="group" aria-label="Application mode">
       {BUTTONS.map(({ mode: value, label, icon: Icon, active }) => (
         <button key={value} disabled={disabled} type="button" onClick={() => onChange(value)} aria-label={label} title={label} aria-pressed={mode === value}
-          className={cn("flex size-6 items-center justify-center rounded-sm text-[11px] font-semibold transition sm:w-auto sm:gap-1.5 sm:px-2.5",
+          className={cn("flex size-6 shrink-0 items-center justify-center whitespace-nowrap rounded-sm text-[11px] font-semibold transition lg:w-auto lg:gap-1.5 lg:px-2.5",
             mode === value ? active : "text-muted-foreground hover:bg-muted")}>
-          <Icon className="size-3" /><span className="hidden sm:inline">{label}</span>
+          <Icon className="size-3" /><span className="hidden lg:inline">{label}</span>
         </button>
       ))}
     </div>

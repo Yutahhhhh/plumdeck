@@ -1,0 +1,86 @@
+/* Compact Play view: below COMPACT_PLAY_MAX_WIDTH (compact-play.ts) only the
+   scrolling waveforms and a one-line status per deck stay on screen. The rest of
+   the workspace stays mounted (controller state, library selection) but hidden. */
+.dj-workspace.dj-workspace--narrow { min-width: 0; }
+.dj-workspace--narrow > :not(.dj-compact-view):not(.dj-error):not(.dj-performance):not(.dj-browser) { display: none !important; }
+.dj-workspace--narrow:not(.dj-workspace--narrow-pads) > .dj-performance,
+.dj-workspace--narrow:not(.dj-workspace--narrow-library) > .dj-browser { display: none !important; }
+.dj-workspace--narrow > .dj-error { flex-shrink: 0; }
+
+/* The waveforms stop growing at --compact-wave-max per deck (max-height is set
+   inline from compact-play.ts); a taller window shows the pads, then the library. */
+.dj-compact-view { position: relative; display: flex; flex: 1 1 auto; flex-direction: column; order: -1; min-height: 0; min-width: 0; background: #000; }
+.dj-workspace--narrow { background: #000; }
+.dj-compact-bar { display: flex; flex-shrink: 0; align-items: center; gap: 8px; height: 30px; padding: 0 8px; border-bottom: 1px solid #000; background: linear-gradient(#212326, #191a1c); }
+.dj-compact-title { display: flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 600; letter-spacing: .12em; color: #c3c6cb; }
+.dj-compact-title svg { color: var(--dj-blue); }
+.dj-compact-warning { overflow: hidden; color: #f2c46d; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.dj-compact-actions { display: flex; gap: 6px; margin-left: auto; }
+.dj-compact-actions .dj-button { display: inline-flex; align-items: center; gap: 4px; }
+
+.dj-compact-decks { display: grid; flex: 1; min-height: 0; }
+.dj-compact-deck { display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid #17191b; }
+.dj-compact-deck:last-child { border-bottom: 0; }
+.dj-compact-deck > .dj-lane { flex: 1; min-height: 0; border-bottom: 0; }
+.dj-compact-deck .dj-wave-expand { display: none; }
+.dj-compact-status { display: flex; flex-shrink: 0; align-items: center; gap: 8px; height: 22px; padding: 0 8px; background: #111214; box-shadow: inset 3px 0 0 var(--deck-accent); color: #d8dadd; white-space: nowrap; }
+.dj-compact-deck.is-active .dj-compact-status { background: #191b1f; }
+.dj-compact-letter { min-width: 12px; color: var(--deck-accent); font-size: 12px; font-weight: 700; }
+.dj-compact-state { display: inline-flex; color: #6f747c; font-style: normal; }
+.dj-compact-state.is-playing { color: #4fd17a; }
+.dj-compact-state svg { width: 11px; height: 11px; }
+.dj-compact-track { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.dj-compact-track small { margin-left: 6px; color: #8b8f96; font-weight: 400; }
+.dj-compact-track em { color: #6f747c; font-style: normal; font-weight: 400; }
+.dj-compact-time { color: #e8eaed; font-size: 12px; font-weight: 600; }
+.dj-compact-time.is-ending { color: #ff6b5c; }
+.dj-compact-bpm { color: #e8eaed; }
+.dj-compact-bpm small { margin-left: 2px; color: #7c8189; font-size: 10px; }
+.dj-compact-key { min-width: 28px; color: #9ec3ff; text-align: right; }
+
+/* Browse knob menu */
+.dj-compact-menu { position: absolute; top: 38px; left: 50%; z-index: 20; display: flex; flex-direction: column; width: min(520px, calc(100% - 24px)); max-height: calc(100% - 50px); transform: translateX(-50%); border: 1px solid #3a3d43; border-radius: 6px; background: #17181aee; box-shadow: 0 12px 32px #000a; }
+.dj-compact-menu-head { display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-bottom: 1px solid #2b2d31; color: #e8eaed; font-weight: 600; }
+.dj-compact-menu-head small { margin-left: auto; color: #8b8f96; font-weight: 400; }
+.dj-compact-menu-list { flex: 1; min-height: 0; max-height: 320px; overflow-y: auto; padding: 3px 0; }
+.dj-compact-menu-row { display: flex; align-items: center; gap: 8px; width: 100%; height: 30px; padding: 0 10px; color: #c9ccd1; text-align: left; }
+.dj-compact-menu-row > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dj-compact-menu-row small { margin-left: 8px; color: #7c8189; }
+.dj-compact-menu-row b { color: #9aa0a8; font-weight: 400; }
+.dj-compact-menu-row:hover { background: #22252a; }
+.dj-compact-menu-row.is-cursor { background: #2c4f86; color: #fff; }
+.dj-compact-menu-row.is-cursor small, .dj-compact-menu-row.is-cursor b { color: #d5e3ff; }
+.dj-compact-menu-note { display: flex; align-items: center; gap: 6px; padding: 8px 10px; color: #8b8f96; }
+.dj-compact-menu-foot { padding: 6px 10px; border-top: 1px solid #2b2d31; color: #8b8f96; font-size: 10px; }
+.dj-compact-menu-foot.is-notice { color: #f2c46d; font-size: 11px; }
+
+/* Fit the window: grid items default to min-content width, which let the
+   no-wrap status line push the deck wider than the window. */
+.dj-compact-decks { grid-template-columns: minmax(0, 1fr); }
+.dj-compact-deck, .dj-compact-status { min-width: 0; }
+.dj-compact-time, .dj-compact-bpm, .dj-compact-key { flex-shrink: 0; }
+/* The status line already names the deck and says when it is empty. */
+.dj-compact-deck .dj-wave-label, .dj-compact-deck .dj-wave-empty { display: none; }
+@media (max-width: 520px) {
+  .dj-compact-track small, .dj-compact-key { display: none; }
+  .dj-compact-actions .dj-button span { display: none; }
+}
+
+.dj-compact-pitch { min-width: 52px; color: #8b8f96; text-align: right; }
+.dj-compact-pitch.is-shifted { color: #f2c46d; }
+.dj-compact-range { flex-shrink: 0; min-width: 38px; height: 16px; padding: 0 5px; border: 1px solid #3a3d43; border-radius: 3px; background: #1b1d20; color: #c3c6cb; font-size: 10px; font-weight: 600; }
+.dj-compact-range:hover { border-color: #565a61; color: #fff; }
+@media (max-width: 520px) { .dj-compact-pitch { display: none; } }
+
+/* Tall compact window: only each deck's pad column of the normal deck. */
+.dj-workspace--narrow-pads > .dj-performance { flex: 0 0 auto; }
+.dj-workspace--narrow-pads .dj-performance > :not(.dj-deck-pairs) { display: none !important; }
+.dj-workspace--narrow-pads .dj-deck-pair { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important; }
+.dj-workspace--narrow-pads .dj-deck-pair > :not(.dj-deck),
+.dj-workspace--narrow-pads .dj-deck-pair--junction { display: none !important; }
+.dj-workspace--narrow-pads .dj-deck > :not(.dj-deck-controls):not(.dj-deck-error) { display: none !important; }
+.dj-workspace--narrow-pads .dj-deck-controls { height: 150px; min-height: 150px; grid-template-columns: minmax(0, 1fr) !important; grid-template-areas: "perf" !important; }
+.dj-workspace--narrow-pads .dj-deck-controls > :not(.dj-perf) { display: none !important; }
+.dj-workspace--narrow-pads .dj-deck-controls:has(.dj-grid-editor__status) { height: 150px; min-height: 150px; }
+.dj-workspace--narrow-pads .dj-deck-controls .dj-perf-main { overflow: auto; }
+.dj-workspace--narrow-library > .dj-browser { min-height: 0; }

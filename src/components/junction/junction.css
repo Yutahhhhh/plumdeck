@@ -481,3 +481,11 @@
 .junction-state-nextReady { color: #06140a; background: #55ad67; }
 .junction-state-playing { color: #fff; background: #cf4b44; }
 .junction-state-outgoing { color: #fff; background: #7b818a; }
+
+/* Header button: one line that fits the 40px app header at any width. */
+.junction-root { flex-wrap: nowrap; flex-shrink: 1; min-width: 0; max-height: none; height: 26px; gap: 8px; margin-left: 12px; padding: 0 8px; white-space: nowrap; font-size: 11px; }
+.junction-root b { font-size: 11px; }
+@media (max-width: 1000px) {
+  .junction-root { margin-left: 8px; }
+  .junction-root .junction-root-dim { display: none; }
+}

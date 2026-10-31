@@ -45,9 +45,9 @@ export function Updater() {
     if (state.phase === "available") setOpen(true);
   }, [state.phase]);
   return <>
-    <Button variant="ghost" size="sm" className="h-7 gap-1.5 px-2 text-xs text-slate-200 hover:bg-slate-700 hover:text-white" onClick={manual} title="バージョン・更新を確認">
+    <Button variant="ghost" size="sm" className="h-7 shrink-0 gap-1.5 whitespace-nowrap px-2 text-xs text-slate-200 hover:bg-slate-700 hover:text-white" onClick={manual} title="バージョン・更新を確認">
       {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : state.phase === "available" ? <Download className="h-3.5 w-3.5" /> : <RefreshCw className="h-3.5 w-3.5" />}
-      <span>{busy ? "更新状況" : state.phase === "available" ? "更新あり" : "更新確認"}</span>
+      <span className="hidden lg:inline">{busy ? "更新状況" : state.phase === "available" ? "更新あり" : "更新確認"}</span>
     </Button>
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent className="sm:max-w-md">

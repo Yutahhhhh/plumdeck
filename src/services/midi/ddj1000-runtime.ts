@@ -238,7 +238,7 @@ export class Ddj1000Runtime {
       }
       return;
     }
-    if (["browse", "back", "browseView", "related", "load", "previous", "next", "zoom"].includes(control)) {
+    if (["browse", "browsePress", "back", "browseView", "related", "load", "previous", "next", "zoom"].includes(control)) {
       if (pressed === false || ["browse", "zoom"].includes(control) && value === 0) return;
       if (deck) this.actions().activate(deck);
       if (control === "load" && deck && this.client.getState().snapshot?.decks[deck].status === "playing") {

@@ -47,7 +47,8 @@ export class Ddj1000Decoder {
         if (key <= 3) return { control: "colorSelect", value: key, pressed };
         if (key >= 0x10 && key <= 0x13) return { control: "colorState", value: key - 0x10, pressed };
         if (key >= 0x46 && key <= 0x49) return { control: "load", deck: DECKS[key - 0x46], value, pressed };
-        const global: Record<number, string> = { 0x65: "back", 0x66: "browseView", 0x7a: "browseView", 0x68: "related", 0x69: "samplerCue", 0x6e: "samplerCue", 0x63: "hardwareMasterCue", 0x62: "hardwareMasterCue" };
+        // 0x41 / 0x42: BROWSE knob push (without / with SHIFT).
+        const global: Record<number, string> = { 0x41: "browsePress", 0x42: "browsePress", 0x65: "back", 0x66: "browseView", 0x7a: "browseView", 0x68: "related", 0x69: "samplerCue", 0x6e: "samplerCue", 0x63: "hardwareMasterCue", 0x62: "hardwareMasterCue" };
         if (global[key]) return { control: global[key], value, pressed };
       }
       if (channel === 4) {
