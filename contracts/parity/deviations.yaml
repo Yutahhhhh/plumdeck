@@ -347,3 +347,15 @@ deviations:
       (rekordbox HISTORY still weights the ranking when it can be read).
       Without the key the answer is unchanged.
     current: implemented; no parity scenario sends the key.
+  - id: D-56
+    status: proposed
+    source: src-tauri/crates/plumdeck-media/src/timing.rs; src-tauri/crates/plumdeck-backend/src/routes/performance.rs
+    summary: >
+      The macOS rekordbox timing offsets for MP3 case B (13 -> 24 ms) and AAC
+      M4A (48 -> 6 ms) differ from Mixxx's table. Measured against CoreAudio
+      decodes (attack onsets in 150-2000 Hz and 2-10 kHz, both bands agreeing):
+      case B grids sat a median 11 ms late across 74 tracks, while cases A and
+      D and WAV landed within 2 ms; AAC needed a median 6 ms over 27 tracks.
+      TIMING_VERSION is now rekordbox-decoder-timing-v2 so cached grids are
+      re-read. Saved grids and already imported cues are not moved.
+    current: implemented.

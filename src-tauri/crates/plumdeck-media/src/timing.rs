@@ -130,6 +130,11 @@ pub fn m4a_is_aac(path: &Path) -> Result<bool, &'static str> {
 }
 
 /// `timing_offset_ms(filepath)` on this platform (0 except on macOS and Windows).
+///
+/// Mixxx's table, except two macOS values re-measured against CoreAudio
+/// decodes of a real library (D-56): case B is 24 ms, not 13 (its grids sat
+/// a steady ~11 ms late), and AAC is 6 ms, not 48 (the median; AAC files
+/// spread too widely for any constant to fit them all).
 pub fn timing_offset_ms(filepath: &str) -> Result<f64, &'static str> {
     let macos = cfg!(target_os = "macos");
     if !macos && !cfg!(windows) {
@@ -140,7 +145,7 @@ pub fn timing_offset_ms(filepath: &str) -> Result<f64, &'static str> {
         let case = mp3_timing_case(Path::new(filepath))?;
         return Ok(match (macos, case) {
             (true, 'A') => 12.0,
-            (true, 'B') => 13.0,
+            (true, 'B') => 24.0,
             (true, 'C') => 26.0,
             (true, _) => 50.0,
             (false, 'A') | (false, 'D') => 26.0,
@@ -148,7 +153,7 @@ pub fn timing_offset_ms(filepath: &str) -> Result<f64, &'static str> {
         });
     }
     if macos && extension == "m4a" {
-        return Ok(if m4a_is_aac(Path::new(filepath))? { 48.0 } else { 0.0 });
+        return Ok(if m4a_is_aac(Path::new(filepath))? { 6.0 } else { 0.0 });
     }
     Ok(0.0)
 }

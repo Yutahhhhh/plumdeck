@@ -40,7 +40,7 @@ use crate::response::{boolean, datetime, dict, float, int, opt, pydantic, text};
 use crate::{server_error, AppState, HttpError};
 
 /// `rekordbox_timing.VERSION`.
-const TIMING_VERSION: &str = "rekordbox-decoder-timing-v1";
+const TIMING_VERSION: &str = "rekordbox-decoder-timing-v2";
 /// rekordbox Kind → pad slot (Kind 4 is reserved; D–H are 5–9).
 const HOT_CUE_SLOTS: [(i64, i128); 8] = [(1, 0), (2, 1), (3, 2), (5, 3), (6, 4), (7, 5), (8, 6), (9, 7)];
 const MAX_BULK_IMPORT_ERRORS: usize = 100;
