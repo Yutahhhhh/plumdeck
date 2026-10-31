@@ -7,7 +7,9 @@ export type BeatGrid = PerformanceBeatGrid;
 export type BeatGridEditorProps = {
   trackId: number; durationMs: number; positionMs: number; initialGrid: BeatGrid;
   disabled?: boolean; playing?: boolean; hasGrid?: boolean;
-  shiftRequest?: { sequence: number; deltaMs: number } | null;
+  /** One drag step; several can be batched into one render, so the editor
+   * applies `totalMs` minus what it already consumed, never just `deltaMs`. */
+  shiftRequest?: { sequence: number; deltaMs: number; totalMs: number } | null;
   onPreview: (grid: BeatGrid | null) => void; onSave: (grid: BeatGrid) => Promise<void>; onClose: () => void;
   onAnalyze?: (force: boolean) => Promise<BeatGrid>; onRekordbox?: () => Promise<BeatGrid>;
   onTogglePlay?: () => void;
@@ -31,6 +33,7 @@ export function BeatGridEditor(props: BeatGridEditorProps) {
   const [future, setFuture] = useState<{ grid: BeatGrid; anchor: number }[]>([]);
   const alive = useRef(true);
   const consumedShift = useRef(props.shiftRequest?.sequence ?? 0);
+  const consumedTotal = useRef(props.shiftRequest?.totalMs ?? 0);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const locked = Boolean(disabled || busy || gridLocked);
   const publish = (grid: BeatGrid, record = true) => {
@@ -47,9 +50,12 @@ export function BeatGridEditor(props: BeatGridEditorProps) {
     const request = props.shiftRequest;
     if (!request || request.sequence === consumedShift.current) return;
     consumedShift.current = request.sequence;
+    const deltaMs = request.totalMs - consumedTotal.current;
+    consumedTotal.current = request.totalMs;
     if (locked) return;
-    if (request.deltaMs === 0) { const previous = draftRef.current; setHistory(old => [...old.slice(-49), { grid: previous, anchor }]); setFuture([]); return; }
-    try { const next = shiftGrid(draftRef.current, request.deltaMs, durationMs); publish(next, false); setAnchor(a => nearestBeat(next, a + request.deltaMs)); }
+    if (request.deltaMs === 0 && deltaMs === 0) { const previous = draftRef.current; setHistory(old => [...old.slice(-49), { grid: previous, anchor }]); setFuture([]); return; }
+    if (deltaMs === 0) return;
+    try { const next = shiftGrid(draftRef.current, deltaMs, durationMs); publish(next, false); setAnchor(a => nearestBeat(next, a + deltaMs)); }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   }, [props.shiftRequest]);
 

@@ -151,7 +151,7 @@ export function PlayWorkspace() {
   // エンジンはキーを持たないので、ロード時のライブラリ値をヘッダ表示用に控えておく。
   const [trackKeys, setTrackKeys] = useState<Record<number, string>>({});
   const [gridPreview, setGridPreview] = useState<PerformanceBeatGrid | null>(null);
-  const [gridShift, setGridShift] = useState<{ sequence: number; deltaMs: number } | null>(null);
+  const [gridShift, setGridShift] = useState<{ sequence: number; deltaMs: number; totalMs: number } | null>(null);
   const gridOpenRequest = useRef(0);
   const gridSaving = useRef(false);
   const gridOperations = useRef(new KeyedTaskQueue());
@@ -788,7 +788,7 @@ export function PlayWorkspace() {
       color={id === "A" || id === "C" ? "cyan" : "fuchsia"} mode={expandedPair&&!expandedPair.includes(id)?"overview":"scroll"} playing={deck?.status === "playing"} rate={deck?.rate ?? 1} bpm={deck?.track?.bpm} beatgridOffsetMs={deck?.track?.beatgridOffsetMs} beatsPerBar={deck?.track?.beatsPerBar}
       beatTimesMs={deck?.track?.beatTimesMs} beatNumbers={deck?.track?.beatNumbers}
       gridAvailable={Boolean(deck?.track?.beatgridOffsetMs !== undefined || deck?.track?.beatTimesMs?.length)}
-      onGridShift={gridEdit?.deck === id && !gridSaving.current ? (deltaMs) => setGridShift(old => ({ sequence: (old?.sequence ?? 0) + 1, deltaMs })) : undefined}
+      onGridShift={gridEdit?.deck === id && !gridSaving.current ? (deltaMs) => setGridShift(old => ({ sequence: (old?.sequence ?? 0) + 1, deltaMs, totalMs: (old?.totalMs ?? 0) + deltaMs })) : undefined}
       hotCues={deck?.hotCues} cueColors={cueColorsFor(id)} memoryCues={deckMemoryCues(id)} phrases={rekordboxDecks[id].phrases} phraseLabels={preferences.phraseLabels}
       scratching={deck?.scratching} loopRegion={deck?.loopRegion} pendingLoopInMs={pendingLoopIn[id]}
       onSeek={connected && !tailLock(id) ? (ms) => seekAbsolute(id, ms) : undefined}
