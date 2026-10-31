@@ -433,16 +433,15 @@
 .dj-workspace .dj-mixer-knobs .dj-mixer-color { grid-column: 1 / -1; }
 .dj-workspace.dj-workspace .dj-mixer-channel { width: 64px; }
 
-/* ── Pad panel v3 (owner request): rekordbox-like slim list pads ─────────
-   2 columns × 4 rows of name + value rows, 22px tall, so the pad block is a
-   compact panel instead of the widest part of the deck. Applies to every
-   layout; nothing here goes below 10px text. */
-.dj-workspace .dj-pad-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(4, 22px); grid-auto-rows: 22px; gap: 2px; min-height: 0; flex: 0 0 auto; }
-.dj-workspace .dj-performance-pad { height: 22px; min-height: 22px; padding: 0 5px; flex-direction: row; justify-content: space-between; align-items: center; gap: 4px; }
+/* ── Pad panel v4 (owner request): 4 columns × 2 rows like a controller's
+   pad block. Each pad stacks name over value so the narrower cells keep
+   readable text; nothing here goes below 10px. */
+.dj-workspace .dj-pad-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-rows: repeat(2, 28px); grid-auto-rows: 28px; gap: 2px; min-height: 0; flex: 0 0 auto; }
+.dj-workspace .dj-performance-pad { height: 28px; min-height: 28px; min-width: 0; padding: 0 3px; flex-direction: column; justify-content: center; align-items: center; gap: 0; line-height: 1.1; }
 .dj-workspace .dj-performance-pad--cue { padding: 0; }
-.dj-workspace .dj-performance-pad b { font-size: 11px; }
-.dj-workspace .dj-performance-pad span { display: inline; overflow: hidden; color: #9aa0a8; font-size: 10px; text-overflow: ellipsis; }
-.dj-workspace .dj-performance-pad--fx { flex-direction: row-reverse; justify-content: space-between; }
+.dj-workspace .dj-performance-pad b { max-width: 100%; font-size: 11px; }
+.dj-workspace .dj-performance-pad span { display: block; max-width: 100%; overflow: hidden; white-space: nowrap; color: #9aa0a8; font-size: 10px; text-overflow: ellipsis; }
+.dj-workspace .dj-performance-pad--fx { flex-direction: column; justify-content: center; }
 .dj-workspace .dj-performance-pad--fx .dj-fx-pad-beats { font-size: 11px; }
 .dj-workspace .dj-performance-pad--fx .dj-fx-pad-name { font-size: 11px; }
 .dj-workspace .dj-performance-pad--fx small { font-size: 10px; }
@@ -519,3 +518,62 @@
 .dj-padfx-gear { display: grid; place-items: center; flex-shrink: 0; width: 22px; height: 22px; padding: 0; border: 1px solid #424951; border-radius: 3px; background: #14181d; color: #a9aeb6; }
 .dj-padfx-gear.is-on { border-color: #a878ff; background: #3a2d52; color: #fff; }
 .dj-padfx-gear svg { width: 13px; height: 13px; }
+
+/* ── Calm pads (owner request): colour marks the pad, it does not fill it.
+   Neutral faces with a faint tint, a thin coloured top edge and lighter type,
+   so a full 4×2 block no longer dominates the deck. Lit pads still glow. */
+.dj-workspace .dj-pad-grid .dj-performance-pad:not(.dj-performance-pad--cue) {
+  border-color: #262a30;
+  background: color-mix(in srgb, var(--pad-color, #a878ff) 7%, #15181c);
+  box-shadow: inset 0 2px color-mix(in srgb, var(--pad-color, #a878ff) 55%, transparent);
+}
+.dj-workspace .dj-pad-grid .dj-performance-pad:not(.dj-performance-pad--cue):not(:disabled):hover { background: color-mix(in srgb, var(--pad-color, #a878ff) 13%, #1b1e23); }
+.dj-workspace .dj-pad-grid .dj-performance-pad:not(.dj-performance-pad--cue) b,
+.dj-workspace .dj-pad-grid .dj-performance-pad--fx strong { color: color-mix(in srgb, var(--pad-color, #a878ff) 75%, #e6e9ed); font-weight: 600; }
+.dj-workspace .dj-pad-grid .dj-performance-pad span,
+.dj-workspace .dj-pad-grid .dj-performance-pad--fx small { color: #8d949d; font-weight: 500; letter-spacing: .02em; }
+.dj-workspace .dj-performance-pad--fx .dj-fx-pad-beats, .dj-workspace .dj-performance-pad--fx .dj-fx-pad-name { font-size: 10.5px; }
+.dj-workspace .dj-pad-grid .dj-performance-pad--fx:not(:disabled) { border-color: #262a30; background: color-mix(in srgb, var(--pad-color, #a878ff) 7%, #15181c); }
+.dj-workspace .dj-pad-grid .dj-performance-pad--cue.is-set { border-color: #262a30; background: color-mix(in srgb, var(--cue-color) 9%, #15181c); box-shadow: inset 0 2px color-mix(in srgb, var(--cue-color) 65%, transparent); }
+.dj-workspace .dj-pad-grid .dj-performance-pad.is-on { box-shadow: inset 0 0 0 1px var(--pad-color, #a878ff); background: color-mix(in srgb, var(--pad-color, #a878ff) 24%, #15181c); }
+.dj-workspace .dj-pad-grid .dj-performance-pad--fx.is-on { border-color: var(--pad-color); background: color-mix(in srgb, var(--pad-color) 70%, #15181c); box-shadow: none; }
+
+/* ── Deck controls v5 (owner request): one size system for the control row.
+   Small toggles are 22px chips, CUE / PLAY are matching 40px rounds stacked
+   like a player, the loop block uses the same chip height, and every column
+   is centred vertically so nothing floats at a different baseline. */
+.dj-workspace.dj-workspace .dj-deck-controls { --d-btn: 96px; align-items: center; column-gap: 8px; }
+.dj-workspace .dj-deck-controls .dj-transport { display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 8px; height: 100%; }
+.dj-workspace .dj-deck--right .dj-deck-controls .dj-transport { flex-direction: row-reverse; }
+.dj-workspace .dj-deck-controls .dj-transport-buttons { display: flex; flex-direction: column; align-items: center; gap: 10px; width: auto; height: auto; }
+.dj-workspace .dj-deck-controls .dj-cue-button, .dj-workspace .dj-deck-controls .dj-play-button { width: 40px; height: 40px; min-width: 40px; min-height: 40px; border-width: 2px; font-size: 11px; font-weight: 700; letter-spacing: .04em; }
+.dj-workspace .dj-deck-controls .dj-play-button svg { width: 15px; height: 15px; }
+.dj-workspace .dj-deck-controls .dj-deck-rail { display: flex; flex-direction: column; align-items: stretch; justify-content: center; gap: 3px; width: 42px; height: auto; }
+.dj-workspace .dj-deck-controls .dj-deck-rail .dj-chip { height: 22px; min-height: 22px; padding: 0; border-radius: 3px; font-size: 10px; font-weight: 600; letter-spacing: .04em; }
+.dj-workspace .dj-deck-controls .dj-jog-weight { margin-top: 3px; transform: scale(.85); transform-origin: top center; }
+.dj-workspace .dj-deck-controls .dj-loop-controls { display: flex; flex-direction: column; justify-content: center; gap: 3px; height: 100%; }
+.dj-workspace .dj-deck-controls .dj-abl { gap: 3px; }
+.dj-workspace .dj-deck-controls .dj-abl-value { height: 26px; font-size: 13px; font-weight: 700; }
+.dj-workspace .dj-deck-controls .dj-abl-step button, .dj-workspace .dj-deck-controls .dj-abl-mode button, .dj-workspace .dj-deck-controls .dj-loop-extra button { height: 22px; font-size: 10px; font-weight: 600; }
+.dj-workspace .dj-deck-controls .dj-abl-step, .dj-workspace .dj-deck-controls .dj-abl-mode { gap: 3px; height: auto; }
+.dj-workspace .dj-deck-controls .dj-loop-extra button { width: 100%; }
+.dj-workspace .dj-deck-controls .dj-loop-extra button:disabled { opacity: .45; }
+/* Nudge and bend sit as quiet glyphs at the platter's edge, not boxed buttons. */
+.dj-workspace .dj-platter-nudge button, .dj-workspace .dj-platter-bend button { border-color: transparent; background: transparent; color: #8d949d; box-shadow: none; }
+.dj-workspace .dj-platter-nudge button:not(:disabled):hover, .dj-workspace .dj-platter-bend button:not(:disabled):hover { background: #ffffff10; color: #e6e9ed; }
+.dj-workspace .dj-deck-controls .dj-perf-main { justify-content: center; gap: 4px; }
+/* Wide decks: the pad block grows to a comfortable size and stays next to the
+   loop column; any spare width goes to the outer edge instead of a hole in
+   the middle of the deck. */
+.dj-workspace .dj-deck-controls .dj-perf { justify-content: flex-end; }
+.dj-workspace .dj-deck--right .dj-deck-controls .dj-perf { justify-content: flex-end; }
+.dj-workspace .dj-deck-controls .dj-perf-main { flex: 1 1 auto; max-width: 400px; }
+@container (min-width: 330px) {
+  .dj-workspace .dj-pad-grid { grid-template-rows: repeat(2, 32px); grid-auto-rows: 32px; gap: 3px; }
+  .dj-workspace .dj-performance-pad { height: 32px; min-height: 32px; }
+  .dj-workspace .dj-performance-pad b, .dj-workspace .dj-performance-pad--fx .dj-fx-pad-beats, .dj-workspace .dj-performance-pad--fx .dj-fx-pad-name { font-size: 11.5px; }
+}
+/* GRID EDIT is taller than the pad block: never centre it (that clipped its
+   title and last row); start at the top and scroll inside the panel. */
+.dj-workspace .dj-deck-controls:has(.dj-grid-editor) .dj-perf-main { justify-content: flex-start; max-width: none; overflow-y: auto; }
+.dj-workspace .dj-deck-controls:has(.dj-grid-editor) .dj-perf { justify-content: flex-start; }

@@ -104,8 +104,6 @@
 .dj-workspace--vertical.dj-workspace--compact { --d-controls: 96px; }
 .dj-workspace--vertical.dj-workspace--compact.dj-workspace--four { --d-controls: 78px; }
 .dj-workspace--vertical .dj-scrolling-waves { display: none; }
-/* Only the tall 2-deck vertical column has room for a 2×4 pad block. */
-.dj-workspace--vertical:not(.dj-workspace--four):not(.dj-workspace--compact) .dj-cue-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
 /* 1200×800 and narrower: give the browser its columns back before the decks. */
 @media (max-width: 1280px) {
